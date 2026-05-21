@@ -62,6 +62,8 @@ struct MAC_DMN_Thread
   U64 thread_id;
   Arch arch;
   B32 is_suspended_for_run;
+  B32 is_stepping_over_dyld_notification;
+  U64 dyld_notification_step_vaddr;
 };
 
 typedef struct MAC_DMN_Module MAC_DMN_Module;
@@ -168,6 +170,9 @@ internal B32 mac_dmn_thread_should_run(MAC_DMN_Entity *thread_entity, DMN_RunCtr
 internal B32 mac_dmn_process_should_run(MAC_DMN_Entity *process_entity, DMN_RunCtrls *ctrls);
 internal void mac_dmn_process_suspend_frozen_threads(MAC_DMN_Process *process, DMN_RunCtrls *ctrls);
 internal void mac_dmn_process_resume_suspended_threads(MAC_DMN_Process *process);
+internal B32 mac_dmn_process_is_stepping_over_dyld_notification(MAC_DMN_Process *process, U64 vaddr);
+internal MAC_DMN_Entity *mac_dmn_thread_entity_stepping_over_dyld_notification(MAC_DMN_Process *process);
+internal void mac_dmn_process_set_dyld_notification_single_step_flags(MAC_DMN_Process *process, B32 is_on);
 internal MAC_DMN_ActiveTrap *mac_dmn_set_trap(Arena *arena, DMN_Trap *trap, MAC_DMN_ActiveTrapKind kind);
 internal void mac_dmn_unset_trap(MAC_DMN_ActiveTrap *active_trap);
 internal U64 mac_dmn_thread_read_ip(MAC_DMN_Thread *thread);

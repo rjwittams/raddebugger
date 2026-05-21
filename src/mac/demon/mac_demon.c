@@ -815,7 +815,11 @@ mac_dmn_thread_should_run(MAC_DMN_Entity *thread_entity, DMN_RunCtrls *ctrls)
   {
     DMN_Handle thread_handle = mac_dmn_handle_from_entity(thread_entity);
     MAC_DMN_Process *process = thread_entity->thread.process;
-    if(!dmn_handle_match(ctrls->single_step_thread, dmn_handle_zero()))
+    if(thread_entity->thread.is_stepping_over_dyld_notification)
+    {
+      result = 1;
+    }
+    else if(!dmn_handle_match(ctrls->single_step_thread, dmn_handle_zero()))
     {
       result = dmn_handle_match(ctrls->single_step_thread, thread_handle);
     }
@@ -906,6 +910,61 @@ mac_dmn_process_resume_suspended_threads(MAC_DMN_Process *process)
       {
         thread_resume(thread_entity->thread.thread);
         thread_entity->thread.is_suspended_for_run = 0;
+      }
+    }
+  }
+}
+
+internal B32
+mac_dmn_process_is_stepping_over_dyld_notification(MAC_DMN_Process *process, U64 vaddr)
+{
+  B32 result = 0;
+  if(process != 0)
+  {
+    for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+    {
+      if(thread_entity->kind == MAC_DMN_EntityKind_Thread &&
+         thread_entity->thread.is_stepping_over_dyld_notification &&
+         thread_entity->thread.dyld_notification_step_vaddr == vaddr)
+      {
+        result = 1;
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+internal MAC_DMN_Entity *
+mac_dmn_thread_entity_stepping_over_dyld_notification(MAC_DMN_Process *process)
+{
+  MAC_DMN_Entity *result = 0;
+  if(process != 0)
+  {
+    for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+    {
+      if(thread_entity->kind == MAC_DMN_EntityKind_Thread &&
+         thread_entity->thread.is_stepping_over_dyld_notification)
+      {
+        result = thread_entity;
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+internal void
+mac_dmn_process_set_dyld_notification_single_step_flags(MAC_DMN_Process *process, B32 is_on)
+{
+  if(process != 0)
+  {
+    for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+    {
+      if(thread_entity->kind == MAC_DMN_EntityKind_Thread &&
+         thread_entity->thread.is_stepping_over_dyld_notification)
+      {
+        mac_dmn_set_single_step_flag(&thread_entity->thread, is_on);
       }
     }
   }
@@ -1564,6 +1623,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
         U64 notification_vaddr = mac_dmn_dyld_notification_vaddr_from_process(process);
         DMN_Handle process_handle = mac_dmn_handle_from_entity(entity);
         if(notification_vaddr != 0 &&
+           !mac_dmn_process_is_stepping_over_dyld_notification(process, notification_vaddr) &&
            mac_dmn_active_trap_from_process_vaddr(first_active_trap, process_handle, notification_vaddr) == 0)
         {
           DMN_Trap *trap = push_array(scratch.arena, DMN_Trap, 1);
@@ -1586,6 +1646,14 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       else
       {
         single_step_thread_entity = 0;
+      }
+    }
+
+    for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+    {
+      if(entity->kind == MAC_DMN_EntityKind_Process)
+      {
+        mac_dmn_process_set_dyld_notification_single_step_flags(&entity->process, 1);
       }
     }
 
@@ -1636,6 +1704,13 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       {
         mac_dmn_set_single_step_flag(&single_step_thread_entity->thread, 0);
       }
+      for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+      {
+        if(entity->kind == MAC_DMN_EntityKind_Process)
+        {
+          mac_dmn_process_set_dyld_notification_single_step_flags(&entity->process, 0);
+        }
+      }
 
       MAC_DMN_Entity *process_entity = mac_dmn_process_entity_from_pid(wait_id);
       if(process_entity != 0)
@@ -1672,6 +1747,10 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
             {
               thread_entity = mac_dmn_thread_entity_from_active_trap(process, first_active_trap, &hit_trap);
             }
+            if(thread_entity == 0 && signo == SIGTRAP)
+            {
+              thread_entity = mac_dmn_thread_entity_stepping_over_dyld_notification(process);
+            }
             if(thread_entity == 0 && single_step_thread_entity != 0 && single_step_thread_entity->thread.process == process)
             {
               thread_entity = single_step_thread_entity;
@@ -1687,12 +1766,19 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
                 mac_dmn_thread_write_ip(&thread_entity->thread, hit_trap->trap->vaddr);
                 if(hit_trap->kind == MAC_DMN_ActiveTrapKind_DyldNotification)
                 {
+                  thread_entity->thread.is_stepping_over_dyld_notification = 1;
+                  thread_entity->thread.dyld_notification_step_vaddr = hit_trap->trap->vaddr;
                   mac_dmn_refresh_module_events(arena, &result, process_entity);
                 }
                 else
                 {
                   mac_dmn_push_event_breakpoint(arena, &result, process_entity, thread_entity, hit_trap->trap->vaddr, hit_trap->trap->id);
                 }
+              }
+              else if(thread_entity->thread.is_stepping_over_dyld_notification)
+              {
+                thread_entity->thread.is_stepping_over_dyld_notification = 0;
+                thread_entity->thread.dyld_notification_step_vaddr = 0;
               }
               else if(single_step_thread_entity == thread_entity)
               {
@@ -1731,6 +1817,13 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       if(single_step_thread_entity != 0)
       {
         mac_dmn_set_single_step_flag(&single_step_thread_entity->thread, 0);
+      }
+      for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+      {
+        if(entity->kind == MAC_DMN_EntityKind_Process)
+        {
+          mac_dmn_process_set_dyld_notification_single_step_flags(&entity->process, 0);
+        }
       }
     }
     scratch_end(scratch);
