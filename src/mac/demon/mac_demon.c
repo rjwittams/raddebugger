@@ -638,6 +638,53 @@ mac_dmn_thread_read_ip(MAC_DMN_Thread *thread)
   return result;
 }
 
+internal U64
+mac_dmn_thread_read_sp(MAC_DMN_Thread *thread)
+{
+  U64 result = 0;
+  if(thread != 0)
+  {
+    switch(thread->arch)
+    {
+      default:{}break;
+#if ARCH_X64
+      case Arch_x64:
+      {
+        x86_thread_state64_t state = {0};
+        mach_msg_type_number_t count = x86_THREAD_STATE64_COUNT;
+        if(thread_get_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+        {
+          result = state.__rsp;
+        }
+      }break;
+#endif
+    }
+  }
+  return result;
+}
+
+internal U64
+mac_dmn_stack_base_vaddr_from_thread(MAC_DMN_Thread *thread)
+{
+  U64 result = 0;
+  U64 sp = mac_dmn_thread_read_sp(thread);
+  MAC_DMN_Process *process = thread != 0 ? thread->process : 0;
+  if(process != 0 && process->task != MACH_PORT_NULL && sp != 0)
+  {
+    mach_vm_address_t address = (mach_vm_address_t)sp;
+    mach_vm_size_t size = 0;
+    natural_t depth = 0;
+    vm_region_submap_info_data_64_t info = {0};
+    mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+    if(mach_vm_region_recurse(process->task, &address, &size, &depth, (vm_region_recurse_info_t)&info, &count) == KERN_SUCCESS &&
+       address <= sp && sp < address + size)
+    {
+      result = address + size;
+    }
+  }
+  return result;
+}
+
 internal B32
 mac_dmn_thread_write_ip(MAC_DMN_Thread *thread, U64 ip)
 {
@@ -1323,7 +1370,8 @@ dmn_arch_from_thread(DMN_Handle handle)
 internal U64
 dmn_stack_base_vaddr_from_thread(DMN_Handle handle)
 {
-  return 0;
+  MAC_DMN_Thread *thread = mac_dmn_thread_from_handle(handle);
+  return mac_dmn_stack_base_vaddr_from_thread(thread);
 }
 
 internal U64
