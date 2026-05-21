@@ -1364,16 +1364,19 @@ dmn_access_close(void)
 internal U64
 dmn_process_memory_reserve(DMN_Handle handle, U64 vaddr, U64 size)
 {
-  MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
   U64 result = 0;
-  if(process != 0 && process->task != MACH_PORT_NULL)
+  DMN_AccessScope
   {
-    mach_vm_address_t address = (mach_vm_address_t)vaddr;
-    int flags = (vaddr == 0) ? VM_FLAGS_ANYWHERE : VM_FLAGS_FIXED;
-    if(mach_vm_allocate(process->task, &address, size, flags) == KERN_SUCCESS)
+    MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
+    if(process != 0 && process->task != MACH_PORT_NULL)
     {
-      mach_vm_protect(process->task, address, size, 0, VM_PROT_NONE);
-      result = address;
+      mach_vm_address_t address = (mach_vm_address_t)vaddr;
+      int flags = (vaddr == 0) ? VM_FLAGS_ANYWHERE : VM_FLAGS_FIXED;
+      if(mach_vm_allocate(process->task, &address, size, flags) == KERN_SUCCESS)
+      {
+        mach_vm_protect(process->task, address, size, 0, VM_PROT_NONE);
+        result = address;
+      }
     }
   }
   return result;
@@ -1382,56 +1385,71 @@ dmn_process_memory_reserve(DMN_Handle handle, U64 vaddr, U64 size)
 internal void
 dmn_process_memory_commit(DMN_Handle handle, U64 vaddr, U64 size)
 {
-  MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
-  if(process != 0 && process->task != MACH_PORT_NULL)
+  DMN_AccessScope
   {
-    mach_vm_protect(process->task, (mach_vm_address_t)vaddr, size, 0, VM_PROT_READ|VM_PROT_WRITE);
+    MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
+    if(process != 0 && process->task != MACH_PORT_NULL)
+    {
+      mach_vm_protect(process->task, (mach_vm_address_t)vaddr, size, 0, VM_PROT_READ|VM_PROT_WRITE);
+    }
   }
 }
 
 internal void
 dmn_process_memory_decommit(DMN_Handle handle, U64 vaddr, U64 size)
 {
-  MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
-  if(process != 0 && process->task != MACH_PORT_NULL)
+  DMN_AccessScope
   {
-    mach_vm_protect(process->task, (mach_vm_address_t)vaddr, size, 0, VM_PROT_NONE);
+    MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
+    if(process != 0 && process->task != MACH_PORT_NULL)
+    {
+      mach_vm_protect(process->task, (mach_vm_address_t)vaddr, size, 0, VM_PROT_NONE);
+    }
   }
 }
 
 internal void
 dmn_process_memory_release(DMN_Handle handle, U64 vaddr, U64 size)
 {
-  MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
-  if(process != 0 && process->task != MACH_PORT_NULL)
+  DMN_AccessScope
   {
-    mach_vm_deallocate(process->task, (mach_vm_address_t)vaddr, size);
+    MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
+    if(process != 0 && process->task != MACH_PORT_NULL)
+    {
+      mach_vm_deallocate(process->task, (mach_vm_address_t)vaddr, size);
+    }
   }
 }
 
 internal void
 dmn_process_memory_protect(DMN_Handle handle, U64 vaddr, U64 size, AccessFlags flags)
 {
-  MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
-  if(process != 0 && process->task != MACH_PORT_NULL)
+  DMN_AccessScope
   {
-    mach_vm_protect(process->task, (mach_vm_address_t)vaddr, size, 0, mac_dmn_vm_prot_from_access_flags(flags));
+    MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
+    if(process != 0 && process->task != MACH_PORT_NULL)
+    {
+      mach_vm_protect(process->task, (mach_vm_address_t)vaddr, size, 0, mac_dmn_vm_prot_from_access_flags(flags));
+    }
   }
 }
 
 internal U64
 dmn_process_read(DMN_Handle handle, Rng1U64 range, void *dst)
 {
-  MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
   U64 result = 0;
-  if(process != 0 && process->task != MACH_PORT_NULL)
+  DMN_AccessScope
   {
-    mach_vm_size_t size = dim_1u64(range);
-    mach_vm_size_t bytes_read = 0;
-    kern_return_t code = mach_vm_read_overwrite(process->task, range.min, size, (mach_vm_address_t)dst, &bytes_read);
-    if(code == KERN_SUCCESS)
+    MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
+    if(process != 0 && process->task != MACH_PORT_NULL)
     {
-      result = bytes_read;
+      mach_vm_size_t size = dim_1u64(range);
+      mach_vm_size_t bytes_read = 0;
+      kern_return_t code = mach_vm_read_overwrite(process->task, range.min, size, (mach_vm_address_t)dst, &bytes_read);
+      if(code == KERN_SUCCESS)
+      {
+        result = bytes_read;
+      }
     }
   }
   return result;
@@ -1440,11 +1458,14 @@ dmn_process_read(DMN_Handle handle, Rng1U64 range, void *dst)
 internal B32
 dmn_process_write(DMN_Handle handle, Rng1U64 range, void *src)
 {
-  MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
   B32 result = 0;
-  if(process != 0 && process->task != MACH_PORT_NULL)
+  DMN_AccessScope
   {
-    result = mac_dmn_process_write_with_protect(process, range, src);
+    MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
+    if(process != 0 && process->task != MACH_PORT_NULL)
+    {
+      result = mac_dmn_process_write_with_protect(process, range, src);
+    }
   }
   return result;
 }
@@ -1452,11 +1473,14 @@ dmn_process_write(DMN_Handle handle, Rng1U64 range, void *src)
 internal Arch
 dmn_arch_from_thread(DMN_Handle handle)
 {
-  MAC_DMN_Thread *thread = mac_dmn_thread_from_handle(handle);
   Arch result = Arch_Null;
-  if(thread != 0)
+  DMN_AccessScope
   {
-    result = thread->arch;
+    MAC_DMN_Thread *thread = mac_dmn_thread_from_handle(handle);
+    if(thread != 0)
+    {
+      result = thread->arch;
+    }
   }
   return result;
 }
@@ -1464,8 +1488,13 @@ dmn_arch_from_thread(DMN_Handle handle)
 internal U64
 dmn_stack_base_vaddr_from_thread(DMN_Handle handle)
 {
-  MAC_DMN_Thread *thread = mac_dmn_thread_from_handle(handle);
-  return mac_dmn_stack_base_vaddr_from_thread(thread);
+  U64 result = 0;
+  DMN_AccessScope
+  {
+    MAC_DMN_Thread *thread = mac_dmn_thread_from_handle(handle);
+    result = mac_dmn_stack_base_vaddr_from_thread(thread);
+  }
+  return result;
 }
 
 internal U64
@@ -1477,25 +1506,28 @@ dmn_tls_root_vaddr_from_thread(DMN_Handle handle)
 internal B32
 dmn_thread_read_reg_block(DMN_Handle handle, void *reg_block)
 {
-  MAC_DMN_Thread *thread = mac_dmn_thread_from_handle(handle);
   B32 result = 0;
-  if(thread != 0)
+  DMN_AccessScope
   {
-    switch(thread->arch)
+    MAC_DMN_Thread *thread = mac_dmn_thread_from_handle(handle);
+    if(thread != 0)
     {
-      default:{}break;
-#if ARCH_X64
-      case Arch_x64:
+      switch(thread->arch)
       {
-        x86_thread_state64_t state = {0};
-        mach_msg_type_number_t count = x86_THREAD_STATE64_COUNT;
-        if(thread_get_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+        default:{}break;
+#if ARCH_X64
+        case Arch_x64:
         {
-          mac_dmn_x64_reg_block_from_thread_state((X64_RegBlock *)reg_block, &state);
-          result = 1;
-        }
-      }break;
+          x86_thread_state64_t state = {0};
+          mach_msg_type_number_t count = x86_THREAD_STATE64_COUNT;
+          if(thread_get_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+          {
+            mac_dmn_x64_reg_block_from_thread_state((X64_RegBlock *)reg_block, &state);
+            result = 1;
+          }
+        }break;
 #endif
+      }
     }
   }
   return result;
@@ -1504,21 +1536,24 @@ dmn_thread_read_reg_block(DMN_Handle handle, void *reg_block)
 internal B32
 dmn_thread_write_reg_block(DMN_Handle handle, void *reg_block)
 {
-  MAC_DMN_Thread *thread = mac_dmn_thread_from_handle(handle);
   B32 result = 0;
-  if(thread != 0)
+  DMN_AccessScope
   {
-    switch(thread->arch)
+    MAC_DMN_Thread *thread = mac_dmn_thread_from_handle(handle);
+    if(thread != 0)
     {
-      default:{}break;
-#if ARCH_X64
-      case Arch_x64:
+      switch(thread->arch)
       {
-        x86_thread_state64_t state = {0};
-        mac_dmn_x64_thread_state_from_reg_block(&state, (X64_RegBlock *)reg_block);
-        result = (thread_set_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, x86_THREAD_STATE64_COUNT) == KERN_SUCCESS);
-      }break;
+        default:{}break;
+#if ARCH_X64
+        case Arch_x64:
+        {
+          x86_thread_state64_t state = {0};
+          mac_dmn_x64_thread_state_from_reg_block(&state, (X64_RegBlock *)reg_block);
+          result = (thread_set_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, x86_THREAD_STATE64_COUNT) == KERN_SUCCESS);
+        }break;
 #endif
+      }
     }
   }
   return result;
