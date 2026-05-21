@@ -136,6 +136,19 @@ mac_dmn_thread_id_from_port(mach_port_t thread)
 }
 
 internal MAC_DMN_Entity *
+mac_dmn_process_entity_alloc(pid_t pid, mach_port_t task, B32 is_attached, B32 needs_attach_events)
+{
+  MAC_DMN_Entity *entity = mac_dmn_entity_alloc(MAC_DMN_EntityKind_Process);
+  entity->process.pid = pid;
+  entity->process.task = task;
+  entity->process.arch = mac_dmn_host_arch();
+  entity->process.is_attached = is_attached;
+  entity->process.needs_attach_events = needs_attach_events;
+  SLLQueuePush(mac_dmn_state->first_process_entity, mac_dmn_state->last_process_entity, entity);
+  return entity;
+}
+
+internal MAC_DMN_Entity *
 mac_dmn_thread_entity_alloc(MAC_DMN_Process *process, mach_port_t thread, Arch arch)
 {
   MAC_DMN_Entity *entity = mac_dmn_entity_alloc(MAC_DMN_EntityKind_Thread);
@@ -296,6 +309,11 @@ dmn_ctrl_launch(DMN_CtrlCtx *ctx, ProcessLaunchParams *params)
 {
   Process process = process_launch(params);
   U32 result = (U32)process.u64[0];
+  if(result != 0 && !dmn_ctrl_attach(ctx, result))
+  {
+    process_kill(process);
+    result = 0;
+  }
   return result;
 }
 
@@ -309,13 +327,7 @@ dmn_ctrl_attach(DMN_CtrlCtx *ctx, U32 pid)
     int ptrace_result = ptrace(PT_ATTACHEXC, (pid_t)pid, 0, 0);
     if(ptrace_result == 0 || errno == EBUSY)
     {
-      MAC_DMN_Entity *entity = mac_dmn_entity_alloc(MAC_DMN_EntityKind_Process);
-      entity->process.pid = (pid_t)pid;
-      entity->process.task = task;
-      entity->process.arch = mac_dmn_host_arch();
-      entity->process.is_attached = (ptrace_result == 0);
-      entity->process.needs_attach_events = 1;
-      SLLQueuePush(mac_dmn_state->first_process_entity, mac_dmn_state->last_process_entity, entity);
+      mac_dmn_process_entity_alloc((pid_t)pid, task, ptrace_result == 0, 1);
       result = 1;
     }
     else

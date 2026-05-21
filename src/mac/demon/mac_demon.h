@@ -97,6 +97,7 @@ internal MAC_DMN_Thread *mac_dmn_thread_from_handle(DMN_Handle handle);
 internal vm_prot_t mac_dmn_vm_prot_from_access_flags(AccessFlags flags);
 internal Arch mac_dmn_host_arch(void);
 internal U64 mac_dmn_thread_id_from_port(mach_port_t thread);
+internal MAC_DMN_Entity *mac_dmn_process_entity_alloc(pid_t pid, mach_port_t task, B32 is_attached, B32 needs_attach_events);
 internal MAC_DMN_Entity *mac_dmn_thread_entity_alloc(MAC_DMN_Process *process, mach_port_t thread, Arch arch);
 internal void mac_dmn_refresh_threads(MAC_DMN_Process *process);
 internal void mac_dmn_push_event_create_process(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity);
