@@ -26,6 +26,7 @@
 #include <sys/sysctl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 typedef enum MAC_DMN_EntityKind
 {
@@ -115,6 +116,10 @@ internal MAC_DMN_Process *mac_dmn_process_from_handle(DMN_Handle handle);
 internal MAC_DMN_Thread *mac_dmn_thread_from_handle(DMN_Handle handle);
 internal MAC_DMN_Module *mac_dmn_module_from_handle(DMN_Handle handle);
 internal MAC_DMN_Entity *mac_dmn_process_entity_from_pid(pid_t pid);
+internal char **mac_dmn_argv_from_launch_params(Arena *arena, ProcessLaunchParams *params);
+internal char **mac_dmn_envp_from_launch_params(Arena *arena, ProcessLaunchParams *params);
+internal void mac_dmn_apply_child_stdio(ProcessLaunchParams *params);
+internal pid_t mac_dmn_launch_traced_process(ProcessLaunchParams *params);
 internal vm_prot_t mac_dmn_vm_prot_from_access_flags(AccessFlags flags);
 internal Arch mac_dmn_host_arch(void);
 internal U64 mac_dmn_thread_id_from_port(mach_port_t thread);

@@ -142,6 +142,105 @@ mac_dmn_process_entity_from_pid(pid_t pid)
   return result;
 }
 
+internal char **
+mac_dmn_argv_from_launch_params(Arena *arena, ProcessLaunchParams *params)
+{
+  char **argv = push_array(arena, char *, params->cmd_line.node_count + 1);
+  if(params->cmd_line.first != 0)
+  {
+    String8List path_parts = str8_split_path(arena, params->path);
+    str8_list_push(arena, &path_parts, params->cmd_line.first->string);
+    String8 path_to_exe = str8_path_list_join_by_style(arena, &path_parts, PathStyle_SystemAbsolute);
+    argv[0] = (char *)path_to_exe.str;
+    U64 arg_idx = 1;
+    for EachNode(n, String8Node, params->cmd_line.first->next)
+    {
+      argv[arg_idx] = (char *)str8_copy(arena, n->string).str;
+      arg_idx += 1;
+    }
+  }
+  return argv;
+}
+
+internal char **
+mac_dmn_envp_from_launch_params(Arena *arena, ProcessLaunchParams *params)
+{
+  char **envp = 0;
+  if(params->inherit_env)
+  {
+    envp = mac_state.default_env;
+  }
+  else
+  {
+    envp = push_array(arena, char *, params->env.node_count + 1);
+    U64 env_idx = 0;
+    for EachNode(n, String8Node, params->env.first)
+    {
+      envp[env_idx] = (char *)str8_copy(arena, n->string).str;
+      env_idx += 1;
+    }
+  }
+  return envp;
+}
+
+internal void
+mac_dmn_apply_child_stdio(ProcessLaunchParams *params)
+{
+  if(!file_match(params->stdout_file, file_zero()))
+  {
+    dup2((int)params->stdout_file.u64[0], STDOUT_FILENO);
+  }
+  if(!file_match(params->stderr_file, file_zero()))
+  {
+    dup2((int)params->stderr_file.u64[0], STDERR_FILENO);
+  }
+  if(!file_match(params->stdin_file, file_zero()))
+  {
+    dup2((int)params->stdin_file.u64[0], STDIN_FILENO);
+  }
+}
+
+internal pid_t
+mac_dmn_launch_traced_process(ProcessLaunchParams *params)
+{
+  Temp scratch = scratch_begin(0, 0);
+  char **argv = mac_dmn_argv_from_launch_params(scratch.arena, params);
+  char **envp = mac_dmn_envp_from_launch_params(scratch.arena, params);
+  char *work_dir_path = (char *)str8_copy(scratch.arena, params->path).str;
+  pid_t pid = fork();
+  if(pid == 0)
+  {
+    if(ptrace(PT_TRACE_ME, 0, 0, 0) != 0) { _exit(1); }
+    ptrace(PT_SIGEXC, 0, 0, 0);
+    mac_dmn_apply_child_stdio(params);
+    if(chdir(work_dir_path) != 0) { _exit(1); }
+    execve(argv[0], argv, envp);
+    _exit(1);
+  }
+  else if(pid > 0)
+  {
+    int status = 0;
+    pid_t wait_id = 0;
+    do
+    {
+      wait_id = waitpid(pid, &status, 0);
+    }
+    while(wait_id < 0 && errno == EINTR);
+    if(wait_id != pid || !WIFSTOPPED(status))
+    {
+      kill(pid, SIGKILL);
+      waitpid(pid, 0, WNOHANG);
+      pid = 0;
+    }
+  }
+  else
+  {
+    pid = 0;
+  }
+  scratch_end(scratch);
+  return pid;
+}
+
 internal Arch
 mac_dmn_host_arch(void)
 {
@@ -560,12 +659,21 @@ dmn_ctrl_exclusive_access_end(void)
 internal U32
 dmn_ctrl_launch(DMN_CtrlCtx *ctx, ProcessLaunchParams *params)
 {
-  Process process = process_launch(params);
-  U32 result = (U32)process.u64[0];
-  if(result != 0 && !dmn_ctrl_attach(ctx, result))
+  pid_t pid = mac_dmn_launch_traced_process(params);
+  U32 result = 0;
+  if(pid != 0)
   {
-    process_kill(process);
-    result = 0;
+    mach_port_t task = MACH_PORT_NULL;
+    if(task_for_pid(mach_task_self(), (int)pid, &task) == KERN_SUCCESS && task != MACH_PORT_NULL)
+    {
+      mac_dmn_process_entity_alloc(pid, task, 1, 1);
+      result = (U32)pid;
+    }
+    else
+    {
+      kill(pid, SIGKILL);
+      waitpid(pid, 0, WNOHANG);
+    }
   }
   return result;
 }
