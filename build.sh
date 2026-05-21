@@ -4,12 +4,12 @@ cd "$(dirname "$0")"
 
 # --- Unpack Arguments --------------------------------------------------------
 for arg in "$@"; do declare $arg='1'; done
-if [ ! -v gcc ];     then clang=1; fi
-if [ ! -v release ]; then debug=1; fi
-if [ -v debug ];     then echo "[debug mode]"; fi
-if [ -v release ];   then echo "[release mode]"; fi
-if [ -v clang ];     then compiler="${CC:-clang}"; echo "[clang compile]"; fi
-if [ -v gcc ];       then compiler="${CC:-gcc}"; echo "[gcc compile]"; fi
+if [ -z "${gcc+x}" ];     then clang=1; fi
+if [ -z "${release+x}" ]; then debug=1; fi
+if [ -n "${debug+x}" ];   then echo "[debug mode]"; fi
+if [ -n "${release+x}" ]; then echo "[release mode]"; fi
+if [ -n "${clang+x}" ];   then compiler="${CC:-clang}"; echo "[clang compile]"; fi
+if [ -n "${gcc+x}" ];     then compiler="${CC:-gcc}"; echo "[gcc compile]"; fi
 
 # --- Unpack Command Line Build Arguments -------------------------------------
 auto_compile_flags=''
@@ -52,23 +52,23 @@ if [ "$host_os" = "Darwin" ]; then
 fi
 
 # --- Choose Compile/Link Lines -----------------------------------------------
-if [ -v gcc ];     then compile_debug="$gcc_debug"; fi
-if [ -v gcc ];     then compile_release="$gcc_release"; fi
-if [ -v gcc ];     then compile_link="$gcc_link"; fi
-if [ -v gcc ];     then out="$gcc_out"; fi
-if [ -v clang ];   then compile_debug="$clang_debug"; fi
-if [ -v clang ];   then compile_release="$clang_release"; fi
-if [ -v clang ];   then compile_link="$clang_link"; fi
-if [ -v clang ];   then out="$clang_out"; fi
-if [ -v debug ];   then compile="$compile_debug"; fi
-if [ -v release ]; then compile="$compile_release"; fi
+if [ -n "${gcc+x}" ];     then compile_debug="$gcc_debug"; fi
+if [ -n "${gcc+x}" ];     then compile_release="$gcc_release"; fi
+if [ -n "${gcc+x}" ];     then compile_link="$gcc_link"; fi
+if [ -n "${gcc+x}" ];     then out="$gcc_out"; fi
+if [ -n "${clang+x}" ];   then compile_debug="$clang_debug"; fi
+if [ -n "${clang+x}" ];   then compile_release="$clang_release"; fi
+if [ -n "${clang+x}" ];   then compile_link="$clang_link"; fi
+if [ -n "${clang+x}" ];   then out="$clang_out"; fi
+if [ -n "${debug+x}" ];   then compile="$compile_debug"; fi
+if [ -n "${release+x}" ]; then compile="$compile_release"; fi
 
 # --- Prep Directories --------------------------------------------------------
 mkdir -p build
 mkdir -p local
 
 # --- Build & Run Metaprogram -------------------------------------------------
-if [ -v meta ]
+if [ -n "${meta+x}" ]
 then
   echo "[doing metagen]"
   cd build
@@ -79,13 +79,13 @@ fi
 
 # --- Build Everything (@build_targets) ---------------------------------------
 cd build
-if [ -v raddbg ];                then didbuild=1 && $compile ../src/raddbg/raddbg_main.c                                    $compile_link $link_os_gfx $link_render $link_font_provider $out raddbg; fi
-if [ -v radbin ];                then didbuild=1 && $compile ../src/radbin/radbin_main.c                                    $compile_link $out radbin; fi
-if [ -v radlink ];               then didbuild=1 && $compile ../src/linker/lnk.c                                            $compile_link $out radlink; fi
+if [ -n "${raddbg+x}" ];              then didbuild=1 && $compile ../src/raddbg/raddbg_main.c                                    $compile_link $link_os_gfx $link_render $link_font_provider $out raddbg; fi
+if [ -n "${radbin+x}" ];              then didbuild=1 && $compile ../src/radbin/radbin_main.c                                    $compile_link $out radbin; fi
+if [ -n "${radlink+x}" ];             then didbuild=1 && $compile ../src/linker/lnk.c                                            $compile_link $out radlink; fi
 cd ..
 
 # --- Warn On No Builds -------------------------------------------------------
-if [ ! -v didbuild ]
+if [ -z "${didbuild+x}" ]
 then
   echo "[WARNING] no valid build target specified; must use build target names as arguments to this script, like \`./build.sh raddbg\` or \`./build.sh rdi_from_pdb\`."
   exit 1
