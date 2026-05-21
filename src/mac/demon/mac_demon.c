@@ -755,6 +755,42 @@ mac_dmn_active_trap_from_process_vaddr(MAC_DMN_ActiveTrap *first, DMN_Handle pro
   return result;
 }
 
+internal B32
+mac_dmn_process_write_with_protect(MAC_DMN_Process *process, Rng1U64 range, void *src)
+{
+  B32 result = 0;
+  if(process != 0 && process->task != MACH_PORT_NULL)
+  {
+    mach_vm_address_t address = range.min;
+    mach_vm_size_t size = dim_1u64(range);
+    mach_msg_type_number_t write_size = (mach_msg_type_number_t)size;
+    if(mach_vm_write(process->task, address, (vm_offset_t)src, write_size) == KERN_SUCCESS)
+    {
+      result = 1;
+    }
+    else
+    {
+      mach_vm_address_t region_address = address;
+      mach_vm_size_t region_size = 0;
+      natural_t depth = 0;
+      vm_region_submap_info_data_64_t info = {0};
+      mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+      if(mach_vm_region_recurse(process->task, &region_address, &region_size, &depth, (vm_region_recurse_info_t)&info, &count) == KERN_SUCCESS &&
+         region_address <= address && address + size <= region_address + region_size)
+      {
+        vm_prot_t old_protection = info.protection;
+        vm_prot_t write_protection = old_protection|VM_PROT_WRITE|VM_PROT_COPY;
+        if(mach_vm_protect(process->task, address, size, 0, write_protection) == KERN_SUCCESS)
+        {
+          result = (mach_vm_write(process->task, address, (vm_offset_t)src, write_size) == KERN_SUCCESS);
+          mach_vm_protect(process->task, address, size, 0, old_protection);
+        }
+      }
+    }
+  }
+  return result;
+}
+
 internal void
 mac_dmn_push_event_create_process(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity)
 {
@@ -1353,8 +1389,7 @@ dmn_process_write(DMN_Handle handle, Rng1U64 range, void *src)
   B32 result = 0;
   if(process != 0 && process->task != MACH_PORT_NULL)
   {
-    mach_msg_type_number_t size = (mach_msg_type_number_t)dim_1u64(range);
-    result = (mach_vm_write(process->task, range.min, (vm_offset_t)src, size) == KERN_SUCCESS);
+    result = mac_dmn_process_write_with_protect(process, range, src);
   }
   return result;
 }
