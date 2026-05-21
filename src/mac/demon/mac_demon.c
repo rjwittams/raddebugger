@@ -827,6 +827,7 @@ mac_dmn_push_event_breakpoint(Arena *arena, DMN_EventList *events, MAC_DMN_Entit
   e->thread = mac_dmn_handle_from_entity(thread_entity);
   e->arch = thread_entity->thread.arch;
   e->instruction_pointer = instruction_pointer;
+  e->stack_pointer = mac_dmn_thread_read_sp(&thread_entity->thread);
   e->user_data = user_data;
 }
 
@@ -839,10 +840,11 @@ mac_dmn_push_event_single_step(Arena *arena, DMN_EventList *events, MAC_DMN_Enti
   e->thread = mac_dmn_handle_from_entity(thread_entity);
   e->arch = thread_entity->thread.arch;
   e->instruction_pointer = mac_dmn_thread_read_ip(&thread_entity->thread);
+  e->stack_pointer = mac_dmn_thread_read_sp(&thread_entity->thread);
 }
 
 internal void
-mac_dmn_push_event_exception(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, S32 signo)
+mac_dmn_push_event_exception(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, S32 signo)
 {
   MAC_DMN_Process *process = &process_entity->process;
   DMN_Event *e = dmn_event_list_push(arena, events);
@@ -851,9 +853,11 @@ mac_dmn_push_event_exception(Arena *arena, DMN_EventList *events, MAC_DMN_Entity
   e->arch = process->arch;
   e->signo = signo;
   e->exception_repeated = 1;
-  if(process->first_thread_entity != 0)
+  if(thread_entity != 0)
   {
-    e->thread = mac_dmn_handle_from_entity(process->first_thread_entity);
+    e->thread = mac_dmn_handle_from_entity(thread_entity);
+    e->instruction_pointer = mac_dmn_thread_read_ip(&thread_entity->thread);
+    e->stack_pointer = mac_dmn_thread_read_sp(&thread_entity->thread);
   }
 }
 
@@ -1207,12 +1211,12 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
               }
               else
               {
-                mac_dmn_push_event_exception(arena, &result, process_entity, signo);
+                mac_dmn_push_event_exception(arena, &result, process_entity, thread_entity, signo);
               }
             }
             else
             {
-              mac_dmn_push_event_exception(arena, &result, process_entity, signo);
+              mac_dmn_push_event_exception(arena, &result, process_entity, thread_entity, signo);
             }
           }
         }
