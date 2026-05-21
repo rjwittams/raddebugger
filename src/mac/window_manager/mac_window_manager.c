@@ -482,6 +482,19 @@ wm_window_bring_to_front(WM_Window handle)
 internal void
 wm_window_set_monitor(WM_Window handle, WM_Monitor monitor)
 {
+  MAC_WM_Window *window = mac_wm_window_from_handle(handle);
+  NSScreen *screen = (NSScreen *)monitor.u64[0];
+  if(window != 0 && screen != 0)
+  {
+    Rng2F32 existing_rect = wm_rect_from_window(handle);
+    Vec2F32 window_size = dim_2f32(existing_rect);
+    NSRect work_area = [screen visibleFrame];
+    NSRect frame = NSMakeRect(work_area.origin.x + work_area.size.width/2 - window_size.x/2,
+                              work_area.origin.y + work_area.size.height/2 - window_size.y/2,
+                              window_size.x,
+                              window_size.y);
+    [window->ns_window setFrame:frame display:YES];
+  }
 }
 
 internal void
