@@ -78,6 +78,11 @@ mac_dmn_process_entity_release(MAC_DMN_Entity *entity)
       }
       mac_dmn_entity_release(thread_entity);
     }
+    for(MAC_DMN_Entity *module_entity = process->first_module_entity, *next = 0; module_entity != 0; module_entity = next)
+    {
+      next = module_entity->next;
+      mac_dmn_entity_release(module_entity);
+    }
     if(process->task != MACH_PORT_NULL)
     {
       mach_port_deallocate(mach_task_self(), process->task);
@@ -106,6 +111,18 @@ mac_dmn_thread_from_handle(DMN_Handle handle)
   if(entity != 0 && entity->kind == MAC_DMN_EntityKind_Thread)
   {
     result = &entity->thread;
+  }
+  return result;
+}
+
+internal MAC_DMN_Module *
+mac_dmn_module_from_handle(DMN_Handle handle)
+{
+  MAC_DMN_Entity *entity = mac_dmn_entity_from_handle(handle);
+  MAC_DMN_Module *result = 0;
+  if(entity != 0 && entity->kind == MAC_DMN_EntityKind_Module)
+  {
+    result = &entity->module;
   }
   return result;
 }
@@ -160,6 +177,19 @@ mac_dmn_thread_entity_alloc(MAC_DMN_Process *process, mach_port_t thread, Arch a
   return entity;
 }
 
+internal MAC_DMN_Entity *
+mac_dmn_module_entity_alloc(MAC_DMN_Process *process, U64 base_vaddr, U64 size, String8 path, Arch arch)
+{
+  MAC_DMN_Entity *entity = mac_dmn_entity_alloc(MAC_DMN_EntityKind_Module);
+  entity->module.process = process;
+  entity->module.base_vaddr = base_vaddr;
+  entity->module.size = size;
+  entity->module.path = push_str8_copy(mac_dmn_state->arena, path);
+  entity->module.arch = arch;
+  SLLQueuePush(process->first_module_entity, process->last_module_entity, entity);
+  return entity;
+}
+
 internal void
 mac_dmn_refresh_threads(MAC_DMN_Process *process)
 {
@@ -175,6 +205,107 @@ mac_dmn_refresh_threads(MAC_DMN_Process *process)
       }
       vm_deallocate(mach_task_self(), (vm_address_t)threads, thread_count*sizeof(thread_t));
     }
+  }
+}
+
+internal String8
+mac_dmn_executable_path_from_pid(Arena *arena, pid_t pid)
+{
+  String8 result = {0};
+  char path[PROC_PIDPATHINFO_MAXSIZE] = {0};
+  int size = proc_pidpath(pid, path, sizeof(path));
+  if(size > 0)
+  {
+    result = push_str8_copy(arena, str8_cstring(path));
+  }
+  return result;
+}
+
+internal U64
+mac_dmn_main_module_base_vaddr_from_process(MAC_DMN_Process *process, MachO_UUID expected_uuid)
+{
+  U64 result = 0;
+  if(process != 0 && process->task != MACH_PORT_NULL)
+  {
+    mach_vm_address_t address = 0;
+    natural_t depth = 0;
+    for(;;)
+    {
+      mach_vm_size_t size = 0;
+      vm_region_submap_info_data_64_t info = {0};
+      mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+      kern_return_t code = mach_vm_region_recurse(process->task, &address, &size, &depth, (vm_region_recurse_info_t)&info, &count);
+      if(code != KERN_SUCCESS)
+      {
+        break;
+      }
+      if(info.is_submap)
+      {
+        depth += 1;
+        continue;
+      }
+
+      U32 magic = 0;
+      mach_vm_size_t bytes_read = 0;
+      if(mach_vm_read_overwrite(process->task, address, sizeof(magic), (mach_vm_address_t)&magic, &bytes_read) == KERN_SUCCESS &&
+         bytes_read == sizeof(magic) &&
+         macho_magic_is_supported(magic))
+      {
+        U64 header_size = macho_header_size_from_magic(magic);
+        MachO_Header64 header = {0};
+        if(header_size != 0 &&
+           mach_vm_read_overwrite(process->task, address, header_size, (mach_vm_address_t)&header, &bytes_read) == KERN_SUCCESS &&
+           bytes_read == header_size)
+        {
+          Temp scratch = scratch_begin(0, 0);
+          U64 data_size = header_size + header.load_commands_size;
+          U8 *data_bytes = push_array(scratch.arena, U8, data_size);
+          if(mach_vm_read_overwrite(process->task, address, data_size, (mach_vm_address_t)data_bytes, &bytes_read) == KERN_SUCCESS &&
+             bytes_read == data_size)
+          {
+            String8 data = str8(data_bytes, data_size);
+            MachO_Bin bin = macho_bin_from_data(scratch.arena, data);
+            MachO_UUID uuid = macho_uuid_from_bin(data, &bin);
+            if(MemoryMatch(uuid.v, expected_uuid.v, sizeof(uuid.v)))
+            {
+              result = address;
+            }
+          }
+          scratch_end(scratch);
+          if(result != 0)
+          {
+            break;
+          }
+        }
+      }
+      if(address + size <= address)
+      {
+        break;
+      }
+      address += size;
+    }
+  }
+  return result;
+}
+
+internal void
+mac_dmn_refresh_initial_module(MAC_DMN_Process *process)
+{
+  if(process != 0 && process->first_module_entity == 0)
+  {
+    Temp scratch = scratch_begin(0, 0);
+    String8 path = mac_dmn_executable_path_from_pid(scratch.arena, process->pid);
+    String8 data = data_from_file_path(scratch.arena, path);
+    MachO_Bin bin = macho_bin_from_data(scratch.arena, data);
+    MachO_UUID uuid = macho_uuid_from_bin(data, &bin);
+    U64 base_vaddr = mac_dmn_main_module_base_vaddr_from_process(process, uuid);
+    U64 image_size = macho_image_size_from_bin(data, &bin);
+    Arch arch = arch_from_macho_cpu_type(bin.header.cpu_type);
+    if(path.size != 0 && base_vaddr != 0 && image_size != 0)
+    {
+      mac_dmn_module_entity_alloc(process, base_vaddr, image_size, path, arch);
+    }
+    scratch_end(scratch);
   }
 }
 
@@ -199,6 +330,24 @@ mac_dmn_push_event_create_thread(Arena *arena, DMN_EventList *events, MAC_DMN_En
   e->thread = mac_dmn_handle_from_entity(thread_entity);
   e->arch = thread->arch;
   e->code = (U32)thread->thread_id;
+}
+
+internal void
+mac_dmn_push_event_load_module(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *module_entity)
+{
+  MAC_DMN_Module *module = &module_entity->module;
+  DMN_Event *e = dmn_event_list_push(arena, events);
+  e->kind = DMN_EventKind_LoadModule;
+  e->process = mac_dmn_handle_from_entity(process_entity);
+  e->module = mac_dmn_handle_from_entity(module_entity);
+  e->arch = module->arch;
+  e->address = module->base_vaddr;
+  e->size = module->size;
+  e->string = module->path;
+  if(module->process->first_thread_entity != 0)
+  {
+    e->thread = mac_dmn_handle_from_entity(module->process->first_thread_entity);
+  }
 }
 
 internal void
@@ -378,10 +527,15 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
     {
       MAC_DMN_Process *process = &entity->process;
       mac_dmn_refresh_threads(process);
+      mac_dmn_refresh_initial_module(process);
       mac_dmn_push_event_create_process(arena, &result, entity);
       for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
       {
         mac_dmn_push_event_create_thread(arena, &result, entity, thread_entity);
+      }
+      for(MAC_DMN_Entity *module_entity = process->first_module_entity; module_entity != 0; module_entity = module_entity->next)
+      {
+        mac_dmn_push_event_load_module(arena, &result, entity, module_entity);
       }
       mac_dmn_push_event_handshake_complete(arena, &result, entity);
       process->needs_attach_events = 0;
