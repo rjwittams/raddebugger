@@ -1230,6 +1230,7 @@ dmn_process_memory_reserve(DMN_Handle handle, U64 vaddr, U64 size)
     int flags = (vaddr == 0) ? VM_FLAGS_ANYWHERE : VM_FLAGS_FIXED;
     if(mach_vm_allocate(process->task, &address, size, flags) == KERN_SUCCESS)
     {
+      mach_vm_protect(process->task, address, size, 0, VM_PROT_NONE);
       result = address;
     }
   }
@@ -1237,13 +1238,23 @@ dmn_process_memory_reserve(DMN_Handle handle, U64 vaddr, U64 size)
 }
 
 internal void
-dmn_process_memory_commit(DMN_Handle process, U64 vaddr, U64 size)
+dmn_process_memory_commit(DMN_Handle handle, U64 vaddr, U64 size)
 {
+  MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
+  if(process != 0 && process->task != MACH_PORT_NULL)
+  {
+    mach_vm_protect(process->task, (mach_vm_address_t)vaddr, size, 0, VM_PROT_READ|VM_PROT_WRITE);
+  }
 }
 
 internal void
-dmn_process_memory_decommit(DMN_Handle process, U64 vaddr, U64 size)
+dmn_process_memory_decommit(DMN_Handle handle, U64 vaddr, U64 size)
 {
+  MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
+  if(process != 0 && process->task != MACH_PORT_NULL)
+  {
+    mach_vm_protect(process->task, (mach_vm_address_t)vaddr, size, 0, VM_PROT_NONE);
+  }
 }
 
 internal void
