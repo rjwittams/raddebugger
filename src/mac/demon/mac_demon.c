@@ -82,7 +82,7 @@ mac_dmn_process_entity_release(MAC_DMN_Entity *entity)
     for(MAC_DMN_Entity *module_entity = process->first_module_entity, *next = 0; module_entity != 0; module_entity = next)
     {
       next = module_entity->next;
-      mac_dmn_entity_release(module_entity);
+      mac_dmn_module_entity_release(module_entity);
     }
     if(process->task != MACH_PORT_NULL)
     {
@@ -354,8 +354,56 @@ mac_dmn_module_entity_alloc(MAC_DMN_Process *process, U64 base_vaddr, U64 size, 
   entity->module.size = size;
   entity->module.path = push_str8_copy(mac_dmn_state->arena, path);
   entity->module.arch = arch;
+  entity->module.is_live = 1;
   SLLQueuePush(process->first_module_entity, process->last_module_entity, entity);
   return entity;
+}
+
+internal MAC_DMN_Entity *
+mac_dmn_module_entity_from_base_vaddr(MAC_DMN_Process *process, U64 base_vaddr)
+{
+  MAC_DMN_Entity *result = 0;
+  if(process != 0)
+  {
+    for(MAC_DMN_Entity *entity = process->first_module_entity; entity != 0; entity = entity->next)
+    {
+      if(entity->kind == MAC_DMN_EntityKind_Module && entity->module.base_vaddr == base_vaddr)
+      {
+        result = entity;
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+internal void
+mac_dmn_module_entity_release(MAC_DMN_Entity *entity)
+{
+  if(entity != 0 && entity->kind == MAC_DMN_EntityKind_Module)
+  {
+    MAC_DMN_Process *process = entity->module.process;
+    if(process != 0)
+    {
+      for(MAC_DMN_Entity **ptr = &process->first_module_entity; *ptr != 0; ptr = &(*ptr)->next)
+      {
+        if(*ptr == entity)
+        {
+          *ptr = entity->next;
+          if(process->last_module_entity == entity)
+          {
+            process->last_module_entity = 0;
+            for(MAC_DMN_Entity *n = process->first_module_entity; n != 0; n = n->next)
+            {
+              process->last_module_entity = n;
+            }
+          }
+          break;
+        }
+      }
+    }
+    mac_dmn_entity_release(entity);
+  }
 }
 
 internal void
@@ -526,6 +574,203 @@ mac_dmn_refresh_initial_module(MAC_DMN_Process *process)
     if(path.size != 0 && base_vaddr != 0 && image_size != 0)
     {
       mac_dmn_module_entity_alloc(process, base_vaddr, image_size, path, arch);
+    }
+    scratch_end(scratch);
+  }
+}
+
+internal String8
+mac_dmn_read_string(Arena *arena, MAC_DMN_Process *process, U64 vaddr, U64 max_size)
+{
+  Temp scratch = scratch_begin(&arena, 1);
+  String8 result = {0};
+  if(process != 0 && process->task != MACH_PORT_NULL && vaddr != 0 && max_size != 0)
+  {
+    U8 *buffer = push_array_no_zero(scratch.arena, U8, max_size);
+    U64 size = 0;
+    for(; size < max_size;)
+    {
+      U8 byte = 0;
+      mach_vm_size_t bytes_read = 0;
+      if(mach_vm_read_overwrite(process->task, (mach_vm_address_t)(vaddr + size), sizeof(byte), (mach_vm_address_t)&byte, &bytes_read) != KERN_SUCCESS ||
+         bytes_read != sizeof(byte) ||
+         byte == 0)
+      {
+        break;
+      }
+      buffer[size] = byte;
+      size += 1;
+    }
+    if(size != 0)
+    {
+      result = push_str8_copy(arena, str8(buffer, size));
+    }
+  }
+  scratch_end(scratch);
+  return result;
+}
+
+internal B32
+mac_dmn_macho_image_info_from_process(MAC_DMN_Process *process, U64 base_vaddr, U64 *size_out, Arch *arch_out)
+{
+  B32 result = 0;
+  if(size_out != 0) { *size_out = 0; }
+  if(arch_out != 0) { *arch_out = Arch_Null; }
+  if(process != 0 && process->task != MACH_PORT_NULL && base_vaddr != 0)
+  {
+    mach_vm_size_t bytes_read = 0;
+    U32 magic = 0;
+    if(mach_vm_read_overwrite(process->task, (mach_vm_address_t)base_vaddr, sizeof(magic), (mach_vm_address_t)&magic, &bytes_read) == KERN_SUCCESS &&
+       bytes_read == sizeof(magic) &&
+       macho_magic_is_supported(magic))
+    {
+      U64 header_size = macho_header_size_from_magic(magic);
+      MachO_Header64 header = {0};
+      if(header_size != 0 &&
+         mach_vm_read_overwrite(process->task, (mach_vm_address_t)base_vaddr, header_size, (mach_vm_address_t)&header, &bytes_read) == KERN_SUCCESS &&
+         bytes_read == header_size &&
+         header.load_commands_size < MB(16))
+      {
+        Temp scratch = scratch_begin(0, 0);
+        U64 data_size = header_size + header.load_commands_size;
+        U8 *data_bytes = push_array(scratch.arena, U8, data_size);
+        if(mach_vm_read_overwrite(process->task, (mach_vm_address_t)base_vaddr, data_size, (mach_vm_address_t)data_bytes, &bytes_read) == KERN_SUCCESS &&
+           bytes_read == data_size)
+        {
+          String8 data = str8(data_bytes, data_size);
+          MachO_Bin bin = macho_bin_from_data(scratch.arena, data);
+          U64 min_vaddr = max_U64;
+          U64 max_vaddr = 0;
+          for EachIndex(idx, bin.load_commands.count)
+          {
+            MachO_LoadCommandInfo *info = &bin.load_commands.v[idx];
+            if(info->cmd == MACHO_LC_SEGMENT_64 && info->offset + sizeof(MachO_SegmentCommand64) <= data.size)
+            {
+              MachO_SegmentCommand64 segment = {0};
+              str8_deserial_read_struct(data, info->offset, &segment);
+              if(segment.vmsize != 0)
+              {
+                min_vaddr = Min(min_vaddr, segment.vmaddr);
+                max_vaddr = Max(max_vaddr, segment.vmaddr + segment.vmsize);
+              }
+            }
+          }
+          if(min_vaddr < max_vaddr)
+          {
+            if(size_out != 0) { *size_out = max_vaddr - min_vaddr; }
+            if(arch_out != 0) { *arch_out = arch_from_macho_cpu_type(bin.header.cpu_type); }
+            result = 1;
+          }
+        }
+        scratch_end(scratch);
+      }
+    }
+  }
+  return result;
+}
+
+internal B32
+mac_dmn_read_dyld_image_infos(Arena *arena, MAC_DMN_Process *process, struct dyld_image_info **images_out, U32 *count_out)
+{
+  B32 result = 0;
+  if(images_out != 0) { *images_out = 0; }
+  if(count_out != 0) { *count_out = 0; }
+  if(process != 0 && process->task != MACH_PORT_NULL && images_out != 0 && count_out != 0)
+  {
+    task_dyld_info_data_t dyld_info = {0};
+    mach_msg_type_number_t count = TASK_DYLD_INFO_COUNT;
+    if(task_info(process->task, TASK_DYLD_INFO, (task_info_t)&dyld_info, &count) == KERN_SUCCESS &&
+       dyld_info.all_image_info_addr != 0 &&
+       dyld_info.all_image_info_format == TASK_DYLD_ALL_IMAGE_INFO_64)
+    {
+      struct dyld_all_image_infos all_images = {0};
+      mach_vm_size_t bytes_to_read = Min((mach_vm_size_t)sizeof(all_images), dyld_info.all_image_info_size);
+      mach_vm_size_t bytes_read = 0;
+      if(bytes_to_read >= OffsetOf(struct dyld_all_image_infos, infoArray) + sizeof(all_images.infoArray) &&
+         mach_vm_read_overwrite(process->task, dyld_info.all_image_info_addr, bytes_to_read, (mach_vm_address_t)&all_images, &bytes_read) == KERN_SUCCESS &&
+         bytes_read == bytes_to_read &&
+         all_images.infoArray != 0 &&
+         all_images.infoArrayCount != 0 &&
+         all_images.infoArrayCount < 16384)
+      {
+        U64 images_size = (U64)all_images.infoArrayCount*sizeof(struct dyld_image_info);
+        struct dyld_image_info *images = push_array_no_zero(arena, struct dyld_image_info, all_images.infoArrayCount);
+        if(mach_vm_read_overwrite(process->task, (mach_vm_address_t)all_images.infoArray, images_size, (mach_vm_address_t)images, &bytes_read) == KERN_SUCCESS &&
+           bytes_read == images_size)
+        {
+          *images_out = images;
+          *count_out = all_images.infoArrayCount;
+          result = 1;
+        }
+      }
+    }
+  }
+  return result;
+}
+
+internal void
+mac_dmn_refresh_module_events(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity)
+{
+  if(process_entity != 0 && process_entity->kind == MAC_DMN_EntityKind_Process)
+  {
+    Temp scratch = scratch_begin(&arena, 1);
+    MAC_DMN_Process *process = &process_entity->process;
+    for(MAC_DMN_Entity *module_entity = process->first_module_entity; module_entity != 0; module_entity = module_entity->next)
+    {
+      module_entity->module.is_live = 0;
+    }
+
+    struct dyld_image_info *images = 0;
+    U32 image_count = 0;
+    if(mac_dmn_read_dyld_image_infos(scratch.arena, process, &images, &image_count))
+    {
+      for(U32 idx = 0; idx < image_count; idx += 1)
+      {
+        U64 base_vaddr = (U64)images[idx].imageLoadAddress;
+        if(base_vaddr == 0)
+        {
+          continue;
+        }
+
+        U64 image_size = 0;
+        Arch arch = Arch_Null;
+        if(!mac_dmn_macho_image_info_from_process(process, base_vaddr, &image_size, &arch))
+        {
+          continue;
+        }
+
+        MAC_DMN_Entity *module_entity = mac_dmn_module_entity_from_base_vaddr(process, base_vaddr);
+        if(module_entity != 0)
+        {
+          module_entity->module.is_live = 1;
+        }
+        else
+        {
+          String8 path = mac_dmn_read_string(scratch.arena, process, (U64)images[idx].imageFilePath, KB(16));
+          module_entity = mac_dmn_module_entity_alloc(process, base_vaddr, image_size, path, arch);
+          if(events != 0)
+          {
+            mac_dmn_push_event_load_module(arena, events, process_entity, module_entity);
+          }
+        }
+      }
+
+      for(MAC_DMN_Entity *module_entity = process->first_module_entity, *next = 0; module_entity != 0; module_entity = next)
+      {
+        next = module_entity->next;
+        if(!module_entity->module.is_live)
+        {
+          if(events != 0)
+          {
+            mac_dmn_push_event_unload_module(arena, events, process_entity, module_entity);
+          }
+          mac_dmn_module_entity_release(module_entity);
+        }
+      }
+    }
+    else
+    {
+      mac_dmn_refresh_initial_module(process);
     }
     scratch_end(scratch);
   }
@@ -930,6 +1175,15 @@ mac_dmn_push_event_load_module(Arena *arena, DMN_EventList *events, MAC_DMN_Enti
 }
 
 internal void
+mac_dmn_push_event_unload_module(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *module_entity)
+{
+  DMN_Event *e = dmn_event_list_push(arena, events);
+  e->kind = DMN_EventKind_UnloadModule;
+  e->process = mac_dmn_handle_from_entity(process_entity);
+  e->module = mac_dmn_handle_from_entity(module_entity);
+}
+
+internal void
 mac_dmn_push_event_exit_process(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, U32 exit_code)
 {
   DMN_Event *e = dmn_event_list_push(arena, events);
@@ -1196,7 +1450,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
     {
       MAC_DMN_Process *process = &entity->process;
       mac_dmn_refresh_threads(process);
-      mac_dmn_refresh_initial_module(process);
+      mac_dmn_refresh_module_events(arena, 0, entity);
       mac_dmn_push_event_create_process(arena, &result, entity);
       for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
       {
@@ -1302,6 +1556,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
         process->is_running = 0;
         mac_dmn_process_resume_suspended_threads(process);
         mac_dmn_refresh_thread_events(arena, &result, process_entity);
+        mac_dmn_refresh_module_events(arena, &result, process_entity);
         if(WIFEXITED(status))
         {
           mac_dmn_push_event_exit_process(arena, &result, process_entity, (U32)WEXITSTATUS(status));
