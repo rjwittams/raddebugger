@@ -4,10 +4,6 @@
 #ifndef WINDOW_MANAGER_INC_H
 #define WINDOW_MANAGER_INC_H
 
-#if !defined(WM_STUB) && OS_MAC
-# define WM_STUB 1
-#endif
-
 #include "window_manager.h"
 #if WM_STUB
 # include "window_manager_stub.h"
@@ -15,6 +11,8 @@
 # include "win32/window_manager/win32_window_manager.h"
 #elif OS_LINUX
 # include "linux/window_manager/linux_window_manager.h"
+#elif OS_MAC
+# include "mac/window_manager/mac_window_manager.h"
 #else
 # error Window manager layer not implemented for this operating system.
 #endif
