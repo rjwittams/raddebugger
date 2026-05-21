@@ -127,6 +127,21 @@ mac_dmn_module_from_handle(DMN_Handle handle)
   return result;
 }
 
+internal MAC_DMN_Entity *
+mac_dmn_process_entity_from_pid(pid_t pid)
+{
+  MAC_DMN_Entity *result = 0;
+  for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+  {
+    if(entity->kind == MAC_DMN_EntityKind_Process && entity->process.pid == pid)
+    {
+      result = entity;
+      break;
+    }
+  }
+  return result;
+}
+
 internal Arch
 mac_dmn_host_arch(void)
 {
@@ -309,6 +324,52 @@ mac_dmn_refresh_initial_module(MAC_DMN_Process *process)
   }
 }
 
+internal B32
+mac_dmn_process_should_run(MAC_DMN_Entity *process_entity, DMN_RunCtrls *ctrls)
+{
+  B32 result = 1;
+  if(ctrls != 0 && process_entity != 0)
+  {
+    DMN_Handle process_handle = mac_dmn_handle_from_entity(process_entity);
+    if(ctrls->run_entities_are_processes)
+    {
+      B32 is_listed = 0;
+      for EachIndex(idx, ctrls->run_entity_count)
+      {
+        if(dmn_handle_match(ctrls->run_entities[idx], process_handle))
+        {
+          is_listed = 1;
+          break;
+        }
+      }
+      result = ctrls->run_entities_are_unfrozen ? is_listed : !is_listed;
+    }
+    else if(ctrls->run_entity_count != 0)
+    {
+      B32 has_listed_thread = 0;
+      MAC_DMN_Process *process = &process_entity->process;
+      for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+      {
+        DMN_Handle thread_handle = mac_dmn_handle_from_entity(thread_entity);
+        for EachIndex(idx, ctrls->run_entity_count)
+        {
+          if(dmn_handle_match(ctrls->run_entities[idx], thread_handle))
+          {
+            has_listed_thread = 1;
+            break;
+          }
+        }
+      }
+      result = ctrls->run_entities_are_unfrozen ? has_listed_thread : !has_listed_thread;
+    }
+    if(!dmn_handle_match(ctrls->single_step_thread, dmn_handle_zero()))
+    {
+      result = 0;
+    }
+  }
+  return result;
+}
+
 internal void
 mac_dmn_push_event_create_process(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity)
 {
@@ -348,6 +409,49 @@ mac_dmn_push_event_load_module(Arena *arena, DMN_EventList *events, MAC_DMN_Enti
   {
     e->thread = mac_dmn_handle_from_entity(module->process->first_thread_entity);
   }
+}
+
+internal void
+mac_dmn_push_event_exit_process(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, U32 exit_code)
+{
+  DMN_Event *e = dmn_event_list_push(arena, events);
+  e->kind = DMN_EventKind_ExitProcess;
+  e->process = mac_dmn_handle_from_entity(process_entity);
+  e->arch = process_entity->process.arch;
+  e->code = exit_code;
+}
+
+internal void
+mac_dmn_push_event_exception(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, S32 signo)
+{
+  MAC_DMN_Process *process = &process_entity->process;
+  DMN_Event *e = dmn_event_list_push(arena, events);
+  e->kind = DMN_EventKind_Exception;
+  e->process = mac_dmn_handle_from_entity(process_entity);
+  e->arch = process->arch;
+  e->signo = signo;
+  e->exception_repeated = 1;
+  if(process->first_thread_entity != 0)
+  {
+    e->thread = mac_dmn_handle_from_entity(process->first_thread_entity);
+  }
+}
+
+internal void
+mac_dmn_push_event_halt(Arena *arena, DMN_EventList *events)
+{
+  DMN_Event *e = dmn_event_list_push(arena, events);
+  e->kind = DMN_EventKind_Halt;
+  e->code = (U32)mac_dmn_state->halt_code;
+  e->user_data = mac_dmn_state->halt_user_data;
+}
+
+internal void
+mac_dmn_push_event_not_attached(Arena *arena, DMN_EventList *events)
+{
+  DMN_Event *e = dmn_event_list_push(arena, events);
+  e->kind = DMN_EventKind_Error;
+  e->error_kind = DMN_ErrorKind_NotAttached;
 }
 
 internal void
@@ -521,6 +625,7 @@ internal DMN_EventList
 dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
 {
   DMN_EventList result = {0};
+
   for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
   {
     if(entity->kind == MAC_DMN_EntityKind_Process && entity->process.needs_attach_events)
@@ -542,12 +647,100 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       break;
     }
   }
+
+  if(result.count == 0)
+  {
+    B32 any_processes = 0;
+    B32 any_running = 0;
+    for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+    {
+      if(entity->kind == MAC_DMN_EntityKind_Process)
+      {
+        any_processes = 1;
+        MAC_DMN_Process *process = &entity->process;
+        if(process->is_attached && mac_dmn_process_should_run(entity, ctrls))
+        {
+          errno = 0;
+          if(ptrace(PT_CONTINUE, process->pid, (caddr_t)1, 0) == 0 || errno == EBUSY)
+          {
+            process->is_running = 1;
+            any_running = 1;
+          }
+        }
+        else if(process->is_running)
+        {
+          any_running = 1;
+        }
+      }
+    }
+
+    if(!any_processes)
+    {
+      mac_dmn_push_event_not_attached(arena, &result);
+    }
+    else if(any_running)
+    {
+      int status = 0;
+      pid_t wait_id = 0;
+      do
+      {
+        wait_id = waitpid(-1, &status, 0);
+      }
+      while(wait_id < 0 && errno == EINTR);
+
+      MAC_DMN_Entity *process_entity = mac_dmn_process_entity_from_pid(wait_id);
+      if(process_entity != 0)
+      {
+        MAC_DMN_Process *process = &process_entity->process;
+        process->is_running = 0;
+        if(WIFEXITED(status))
+        {
+          mac_dmn_push_event_exit_process(arena, &result, process_entity, (U32)WEXITSTATUS(status));
+          mac_dmn_process_entity_release(process_entity);
+        }
+        else if(WIFSIGNALED(status))
+        {
+          mac_dmn_push_event_exit_process(arena, &result, process_entity, (U32)WTERMSIG(status));
+          mac_dmn_process_entity_release(process_entity);
+        }
+        else if(WIFSTOPPED(status))
+        {
+          S32 signo = WSTOPSIG(status);
+          if(mac_dmn_state->halt_requested && signo == SIGSTOP)
+          {
+            mac_dmn_push_event_halt(arena, &result);
+            mac_dmn_state->halt_requested = 0;
+          }
+          else
+          {
+            mac_dmn_push_event_exception(arena, &result, process_entity, signo);
+          }
+        }
+      }
+      else
+      {
+        mac_dmn_push_event_not_attached(arena, &result);
+      }
+    }
+  }
+
   return result;
 }
 
 internal void
 dmn_halt(U64 code, U64 user_data)
 {
+  mac_dmn_state->halt_requested = 1;
+  mac_dmn_state->halt_code = code;
+  mac_dmn_state->halt_user_data = user_data;
+  for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+  {
+    if(entity->kind == MAC_DMN_EntityKind_Process)
+    {
+      MAC_DMN_Process *process = &entity->process;
+      kill(process->pid, SIGSTOP);
+    }
+  }
 }
 
 internal B32
