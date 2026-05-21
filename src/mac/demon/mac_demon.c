@@ -670,12 +670,14 @@ mac_dmn_macho_image_info_from_process(MAC_DMN_Process *process, U64 base_vaddr, 
 }
 
 internal B32
-mac_dmn_read_dyld_image_infos(Arena *arena, MAC_DMN_Process *process, struct dyld_image_info **images_out, U32 *count_out)
+mac_dmn_read_dyld_all_image_infos(MAC_DMN_Process *process, struct dyld_all_image_infos *all_images_out)
 {
   B32 result = 0;
-  if(images_out != 0) { *images_out = 0; }
-  if(count_out != 0) { *count_out = 0; }
-  if(process != 0 && process->task != MACH_PORT_NULL && images_out != 0 && count_out != 0)
+  if(all_images_out != 0)
+  {
+    MemoryZeroStruct(all_images_out);
+  }
+  if(process != 0 && process->task != MACH_PORT_NULL && all_images_out != 0)
   {
     task_dyld_info_data_t dyld_info = {0};
     mach_msg_type_number_t count = TASK_DYLD_INFO_COUNT;
@@ -683,27 +685,56 @@ mac_dmn_read_dyld_image_infos(Arena *arena, MAC_DMN_Process *process, struct dyl
        dyld_info.all_image_info_addr != 0 &&
        dyld_info.all_image_info_format == TASK_DYLD_ALL_IMAGE_INFO_64)
     {
-      struct dyld_all_image_infos all_images = {0};
-      mach_vm_size_t bytes_to_read = Min((mach_vm_size_t)sizeof(all_images), dyld_info.all_image_info_size);
+      mach_vm_size_t bytes_to_read = Min((mach_vm_size_t)sizeof(*all_images_out), dyld_info.all_image_info_size);
       mach_vm_size_t bytes_read = 0;
-      if(bytes_to_read >= OffsetOf(struct dyld_all_image_infos, infoArray) + sizeof(all_images.infoArray) &&
-         mach_vm_read_overwrite(process->task, dyld_info.all_image_info_addr, bytes_to_read, (mach_vm_address_t)&all_images, &bytes_read) == KERN_SUCCESS &&
-         bytes_read == bytes_to_read &&
-         all_images.infoArray != 0 &&
-         all_images.infoArrayCount != 0 &&
-         all_images.infoArrayCount < 16384)
+      if(bytes_to_read >= OffsetOf(struct dyld_all_image_infos, notification) + sizeof(all_images_out->notification) &&
+         mach_vm_read_overwrite(process->task, dyld_info.all_image_info_addr, bytes_to_read, (mach_vm_address_t)all_images_out, &bytes_read) == KERN_SUCCESS &&
+         bytes_read == bytes_to_read)
       {
-        U64 images_size = (U64)all_images.infoArrayCount*sizeof(struct dyld_image_info);
-        struct dyld_image_info *images = push_array_no_zero(arena, struct dyld_image_info, all_images.infoArrayCount);
-        if(mach_vm_read_overwrite(process->task, (mach_vm_address_t)all_images.infoArray, images_size, (mach_vm_address_t)images, &bytes_read) == KERN_SUCCESS &&
-           bytes_read == images_size)
-        {
-          *images_out = images;
-          *count_out = all_images.infoArrayCount;
-          result = 1;
-        }
+        result = 1;
       }
     }
+  }
+  return result;
+}
+
+internal B32
+mac_dmn_read_dyld_image_infos(Arena *arena, MAC_DMN_Process *process, struct dyld_image_info **images_out, U32 *count_out)
+{
+  B32 result = 0;
+  if(images_out != 0) { *images_out = 0; }
+  if(count_out != 0) { *count_out = 0; }
+  if(process != 0 && process->task != MACH_PORT_NULL && images_out != 0 && count_out != 0)
+  {
+    struct dyld_all_image_infos all_images = {0};
+    if(mac_dmn_read_dyld_all_image_infos(process, &all_images) &&
+       all_images.infoArray != 0 &&
+       all_images.infoArrayCount != 0 &&
+       all_images.infoArrayCount < 16384)
+    {
+      mach_vm_size_t bytes_read = 0;
+      U64 images_size = (U64)all_images.infoArrayCount*sizeof(struct dyld_image_info);
+      struct dyld_image_info *images = push_array_no_zero(arena, struct dyld_image_info, all_images.infoArrayCount);
+      if(mach_vm_read_overwrite(process->task, (mach_vm_address_t)all_images.infoArray, images_size, (mach_vm_address_t)images, &bytes_read) == KERN_SUCCESS &&
+         bytes_read == images_size)
+      {
+        *images_out = images;
+        *count_out = all_images.infoArrayCount;
+        result = 1;
+      }
+    }
+  }
+  return result;
+}
+
+internal U64
+mac_dmn_dyld_notification_vaddr_from_process(MAC_DMN_Process *process)
+{
+  U64 result = 0;
+  struct dyld_all_image_infos all_images = {0};
+  if(mac_dmn_read_dyld_all_image_infos(process, &all_images))
+  {
+    result = (U64)all_images.notification;
   }
   return result;
 }
@@ -881,7 +912,7 @@ mac_dmn_process_resume_suspended_threads(MAC_DMN_Process *process)
 }
 
 internal MAC_DMN_ActiveTrap *
-mac_dmn_set_trap(Arena *arena, DMN_Trap *trap)
+mac_dmn_set_trap(Arena *arena, DMN_Trap *trap, MAC_DMN_ActiveTrapKind kind)
 {
   MAC_DMN_Process *process = mac_dmn_process_from_handle(trap->process);
   Arch arch = process != 0 ? process->arch : Arch_CURRENT;
@@ -895,6 +926,7 @@ mac_dmn_set_trap(Arena *arena, DMN_Trap *trap)
     good_write = dmn_process_write(trap->process, r1u64(trap->vaddr, trap->vaddr + trap_inst.size), trap_inst.str);
   }
   MAC_DMN_ActiveTrap *result = push_array(arena, MAC_DMN_ActiveTrap, 1);
+  result->kind = kind;
   result->good = good_read && good_write;
   result->trap = trap;
   result->swap_bytes = str8(swap_bytes, trap_inst.size);
@@ -1480,9 +1512,28 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
           DMN_Trap *trap = n->v + trap_idx;
           if(trap->flags == 0)
           {
-            MAC_DMN_ActiveTrap *active_trap = mac_dmn_set_trap(scratch.arena, trap);
+            MAC_DMN_ActiveTrap *active_trap = mac_dmn_set_trap(scratch.arena, trap, MAC_DMN_ActiveTrapKind_User);
             SLLQueuePush(first_active_trap, last_active_trap, active_trap);
           }
+        }
+      }
+    }
+
+    for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+    {
+      if(entity->kind == MAC_DMN_EntityKind_Process && entity->process.is_attached)
+      {
+        MAC_DMN_Process *process = &entity->process;
+        U64 notification_vaddr = mac_dmn_dyld_notification_vaddr_from_process(process);
+        DMN_Handle process_handle = mac_dmn_handle_from_entity(entity);
+        if(notification_vaddr != 0 &&
+           mac_dmn_active_trap_from_process_vaddr(first_active_trap, process_handle, notification_vaddr) == 0)
+        {
+          DMN_Trap *trap = push_array(scratch.arena, DMN_Trap, 1);
+          trap->process = process_handle;
+          trap->vaddr = notification_vaddr;
+          MAC_DMN_ActiveTrap *active_trap = mac_dmn_set_trap(scratch.arena, trap, MAC_DMN_ActiveTrapKind_DyldNotification);
+          SLLQueuePush(first_active_trap, last_active_trap, active_trap);
         }
       }
     }
@@ -1591,7 +1642,14 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
               if(hit_trap != 0)
               {
                 mac_dmn_thread_write_ip(&thread_entity->thread, hit_trap->trap->vaddr);
-                mac_dmn_push_event_breakpoint(arena, &result, process_entity, thread_entity, hit_trap->trap->vaddr, hit_trap->trap->id);
+                if(hit_trap->kind == MAC_DMN_ActiveTrapKind_DyldNotification)
+                {
+                  mac_dmn_refresh_module_events(arena, &result, process_entity);
+                }
+                else
+                {
+                  mac_dmn_push_event_breakpoint(arena, &result, process_entity, thread_entity, hit_trap->trap->vaddr, hit_trap->trap->id);
+                }
               }
               else if(single_step_thread_entity == thread_entity)
               {

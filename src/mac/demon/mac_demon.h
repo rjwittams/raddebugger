@@ -111,9 +111,17 @@ struct MAC_DMN_ProcessIterState
 };
 
 typedef struct MAC_DMN_ActiveTrap MAC_DMN_ActiveTrap;
+typedef enum MAC_DMN_ActiveTrapKind
+{
+  MAC_DMN_ActiveTrapKind_User,
+  MAC_DMN_ActiveTrapKind_DyldNotification,
+}
+MAC_DMN_ActiveTrapKind;
+
 struct MAC_DMN_ActiveTrap
 {
   MAC_DMN_ActiveTrap *next;
+  MAC_DMN_ActiveTrapKind kind;
   B32 good;
   DMN_Trap *trap;
   String8 swap_bytes;
@@ -152,13 +160,15 @@ internal U64 mac_dmn_main_module_base_vaddr_from_process(MAC_DMN_Process *proces
 internal void mac_dmn_refresh_initial_module(MAC_DMN_Process *process);
 internal String8 mac_dmn_read_string(Arena *arena, MAC_DMN_Process *process, U64 vaddr, U64 max_size);
 internal B32 mac_dmn_macho_image_info_from_process(MAC_DMN_Process *process, U64 base_vaddr, U64 *size_out, Arch *arch_out);
+internal B32 mac_dmn_read_dyld_all_image_infos(MAC_DMN_Process *process, struct dyld_all_image_infos *all_images_out);
 internal B32 mac_dmn_read_dyld_image_infos(Arena *arena, MAC_DMN_Process *process, struct dyld_image_info **images_out, U32 *count_out);
+internal U64 mac_dmn_dyld_notification_vaddr_from_process(MAC_DMN_Process *process);
 internal void mac_dmn_refresh_module_events(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity);
 internal B32 mac_dmn_thread_should_run(MAC_DMN_Entity *thread_entity, DMN_RunCtrls *ctrls);
 internal B32 mac_dmn_process_should_run(MAC_DMN_Entity *process_entity, DMN_RunCtrls *ctrls);
 internal void mac_dmn_process_suspend_frozen_threads(MAC_DMN_Process *process, DMN_RunCtrls *ctrls);
 internal void mac_dmn_process_resume_suspended_threads(MAC_DMN_Process *process);
-internal MAC_DMN_ActiveTrap *mac_dmn_set_trap(Arena *arena, DMN_Trap *trap);
+internal MAC_DMN_ActiveTrap *mac_dmn_set_trap(Arena *arena, DMN_Trap *trap, MAC_DMN_ActiveTrapKind kind);
 internal void mac_dmn_unset_trap(MAC_DMN_ActiveTrap *active_trap);
 internal U64 mac_dmn_thread_read_ip(MAC_DMN_Thread *thread);
 internal U64 mac_dmn_thread_read_sp(MAC_DMN_Thread *thread);
