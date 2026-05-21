@@ -60,6 +60,7 @@ struct MAC_DMN_Thread
   mach_port_t thread;
   U64 thread_id;
   Arch arch;
+  B32 is_suspended_for_run;
 };
 
 typedef struct MAC_DMN_Module MAC_DMN_Module;
@@ -145,7 +146,10 @@ internal void mac_dmn_refresh_thread_events(Arena *arena, DMN_EventList *events,
 internal String8 mac_dmn_executable_path_from_pid(Arena *arena, pid_t pid);
 internal U64 mac_dmn_main_module_base_vaddr_from_process(MAC_DMN_Process *process, MachO_UUID expected_uuid);
 internal void mac_dmn_refresh_initial_module(MAC_DMN_Process *process);
+internal B32 mac_dmn_thread_should_run(MAC_DMN_Entity *thread_entity, DMN_RunCtrls *ctrls);
 internal B32 mac_dmn_process_should_run(MAC_DMN_Entity *process_entity, DMN_RunCtrls *ctrls);
+internal void mac_dmn_process_suspend_frozen_threads(MAC_DMN_Process *process, DMN_RunCtrls *ctrls);
+internal void mac_dmn_process_resume_suspended_threads(MAC_DMN_Process *process);
 internal MAC_DMN_ActiveTrap *mac_dmn_set_trap(Arena *arena, DMN_Trap *trap);
 internal void mac_dmn_unset_trap(MAC_DMN_ActiveTrap *active_trap);
 internal U64 mac_dmn_thread_read_ip(MAC_DMN_Thread *thread);

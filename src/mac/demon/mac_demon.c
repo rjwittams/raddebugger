@@ -68,6 +68,7 @@ mac_dmn_process_entity_release(MAC_DMN_Entity *entity)
     }
 
     MAC_DMN_Process *process = &entity->process;
+    mac_dmn_process_resume_suspended_threads(process);
     for(MAC_DMN_Entity *thread_entity = process->first_thread_entity, *next = 0; thread_entity != 0; thread_entity = next)
     {
       next = thread_entity->next;
@@ -314,6 +315,11 @@ mac_dmn_thread_entity_release(MAC_DMN_Entity *entity)
 {
   if(entity != 0 && entity->kind == MAC_DMN_EntityKind_Thread)
   {
+    if(entity->thread.is_suspended_for_run)
+    {
+      thread_resume(entity->thread.thread);
+      entity->thread.is_suspended_for_run = 0;
+    }
     MAC_DMN_Process *process = entity->thread.process;
     for(MAC_DMN_Entity **ptr = &process->first_thread_entity; *ptr != 0; ptr = &(*ptr)->next)
     {
@@ -526,59 +532,107 @@ mac_dmn_refresh_initial_module(MAC_DMN_Process *process)
 }
 
 internal B32
-mac_dmn_process_should_run(MAC_DMN_Entity *process_entity, DMN_RunCtrls *ctrls)
+mac_dmn_thread_should_run(MAC_DMN_Entity *thread_entity, DMN_RunCtrls *ctrls)
 {
   B32 result = 1;
-  if(ctrls != 0 && process_entity != 0)
+  if(ctrls != 0 && thread_entity != 0 && thread_entity->kind == MAC_DMN_EntityKind_Thread)
   {
-    DMN_Handle process_handle = mac_dmn_handle_from_entity(process_entity);
-    if(ctrls->run_entities_are_processes)
+    DMN_Handle thread_handle = mac_dmn_handle_from_entity(thread_entity);
+    MAC_DMN_Process *process = thread_entity->thread.process;
+    if(!dmn_handle_match(ctrls->single_step_thread, dmn_handle_zero()))
     {
-      B32 is_listed = 0;
-      for EachIndex(idx, ctrls->run_entity_count)
-      {
-        if(dmn_handle_match(ctrls->run_entities[idx], process_handle))
-        {
-          is_listed = 1;
-          break;
-        }
-      }
-      result = ctrls->run_entities_are_unfrozen ? is_listed : !is_listed;
+      result = dmn_handle_match(ctrls->single_step_thread, thread_handle);
     }
     else if(ctrls->run_entity_count != 0)
     {
-      B32 has_listed_thread = 0;
-      MAC_DMN_Process *process = &process_entity->process;
-      for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+      B32 is_listed = 0;
+      if(ctrls->run_entities_are_processes)
       {
-        DMN_Handle thread_handle = mac_dmn_handle_from_entity(thread_entity);
-        for EachIndex(idx, ctrls->run_entity_count)
+        for(MAC_DMN_Entity *process_entity = mac_dmn_state->first_process_entity; process_entity != 0; process_entity = process_entity->next)
         {
-          if(dmn_handle_match(ctrls->run_entities[idx], thread_handle))
+          if(process_entity->kind == MAC_DMN_EntityKind_Process && &process_entity->process == process)
           {
-            has_listed_thread = 1;
+            DMN_Handle process_handle = mac_dmn_handle_from_entity(process_entity);
+            for EachIndex(idx, ctrls->run_entity_count)
+            {
+              if(dmn_handle_match(ctrls->run_entities[idx], process_handle))
+              {
+                is_listed = 1;
+                break;
+              }
+            }
             break;
           }
         }
       }
-      result = ctrls->run_entities_are_unfrozen ? has_listed_thread : !has_listed_thread;
-    }
-    if(!dmn_handle_match(ctrls->single_step_thread, dmn_handle_zero()))
-    {
-      B32 has_single_step_thread = 0;
-      MAC_DMN_Process *process = &process_entity->process;
-      for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+      else
       {
-        if(dmn_handle_match(ctrls->single_step_thread, mac_dmn_handle_from_entity(thread_entity)))
+        for EachIndex(idx, ctrls->run_entity_count)
         {
-          has_single_step_thread = 1;
-          break;
+          if(dmn_handle_match(ctrls->run_entities[idx], thread_handle))
+          {
+            is_listed = 1;
+            break;
+          }
         }
       }
-      result = has_single_step_thread;
+      result = ctrls->run_entities_are_unfrozen ? is_listed : !is_listed;
     }
   }
   return result;
+}
+
+internal B32
+mac_dmn_process_should_run(MAC_DMN_Entity *process_entity, DMN_RunCtrls *ctrls)
+{
+  B32 result = 1;
+  if(ctrls != 0 && process_entity != 0 && process_entity->kind == MAC_DMN_EntityKind_Process)
+  {
+    result = 0;
+    MAC_DMN_Process *process = &process_entity->process;
+    for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+    {
+      if(mac_dmn_thread_should_run(thread_entity, ctrls))
+      {
+        result = 1;
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+internal void
+mac_dmn_process_suspend_frozen_threads(MAC_DMN_Process *process, DMN_RunCtrls *ctrls)
+{
+  if(process != 0)
+  {
+    for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+    {
+      if(!thread_entity->thread.is_suspended_for_run &&
+         !mac_dmn_thread_should_run(thread_entity, ctrls) &&
+         thread_suspend(thread_entity->thread.thread) == KERN_SUCCESS)
+      {
+        thread_entity->thread.is_suspended_for_run = 1;
+      }
+    }
+  }
+}
+
+internal void
+mac_dmn_process_resume_suspended_threads(MAC_DMN_Process *process)
+{
+  if(process != 0)
+  {
+    for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+    {
+      if(thread_entity->thread.is_suspended_for_run)
+      {
+        thread_resume(thread_entity->thread.thread);
+        thread_entity->thread.is_suspended_for_run = 0;
+      }
+    }
+  }
 }
 
 internal MAC_DMN_ActiveTrap *
@@ -1203,6 +1257,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
         MAC_DMN_Process *process = &entity->process;
         if(process->is_attached && mac_dmn_process_should_run(entity, ctrls))
         {
+          mac_dmn_process_suspend_frozen_threads(process, ctrls);
           errno = 0;
           if(ptrace(PT_CONTINUE, process->pid, (caddr_t)1, 0) == 0 || errno == EBUSY)
           {
@@ -1245,6 +1300,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       {
         MAC_DMN_Process *process = &process_entity->process;
         process->is_running = 0;
+        mac_dmn_process_resume_suspended_threads(process);
         mac_dmn_refresh_thread_events(arena, &result, process_entity);
         if(WIFEXITED(status))
         {
@@ -1308,6 +1364,13 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       for(MAC_DMN_ActiveTrap *active_trap = first_active_trap; active_trap != 0; active_trap = active_trap->next)
       {
         mac_dmn_unset_trap(active_trap);
+      }
+      for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+      {
+        if(entity->kind == MAC_DMN_EntityKind_Process)
+        {
+          mac_dmn_process_resume_suspended_threads(&entity->process);
+        }
       }
       if(single_step_thread_entity != 0)
       {
