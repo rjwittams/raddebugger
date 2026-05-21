@@ -10,6 +10,13 @@
   }
   return NO;
 }
+- (void)windowDidResignKey:(NSNotification *)notification
+{
+  if(window != 0)
+  {
+    window->lose_focus_requested = 1;
+  }
+}
 @end
 
 internal WM_Window
@@ -26,6 +33,25 @@ mac_wm_window_from_handle(WM_Window handle)
   return result;
 }
 
+internal MAC_WM_Window *
+mac_wm_window_from_ns_window(NSWindow *ns_window)
+{
+  MAC_WM_Window *result = 0;
+  if(ns_window == 0)
+  {
+    ns_window = [NSApp keyWindow];
+  }
+  for(MAC_WM_Window *window = mac_wm_state->first_window; window != 0; window = window->next)
+  {
+    if(window->ns_window == ns_window)
+    {
+      result = window;
+      break;
+    }
+  }
+  return result;
+}
+
 internal Rng2F32
 mac_wm_rect_from_ns_rect(NSRect rect)
 {
@@ -36,12 +62,195 @@ mac_wm_rect_from_ns_rect(NSRect rect)
   return result;
 }
 
+internal Vec2F32
+mac_wm_client_pos_from_ns_point(MAC_WM_Window *window, NSPoint point)
+{
+  Vec2F32 result = {0};
+  if(window != 0)
+  {
+    NSView *content_view = [window->ns_window contentView];
+    NSRect bounds = [content_view bounds];
+    result = v2f32((F32)point.x, (F32)(bounds.size.height - point.y));
+  }
+  return result;
+}
+
 internal NSString *
 mac_wm_ns_string_from_string8(Arena *arena, String8 string)
 {
   String8 copy = push_str8_copy(arena, string);
   NSString *result = [[NSString alloc] initWithBytes:copy.str length:copy.size encoding:NSUTF8StringEncoding];
   return result;
+}
+
+internal WM_Modifiers
+mac_wm_modifiers_from_ns_flags(NSEventModifierFlags flags)
+{
+  WM_Modifiers result = 0;
+  if(flags & (NSEventModifierFlagControl|NSEventModifierFlagCommand)) { result |= WM_Modifier_Ctrl; }
+  if(flags & NSEventModifierFlagShift) { result |= WM_Modifier_Shift; }
+  if(flags & NSEventModifierFlagOption) { result |= WM_Modifier_Alt; }
+  return result;
+}
+
+internal WM_Key
+mac_wm_key_from_key_code(unsigned short key_code, B32 *right_sided_out)
+{
+  WM_Key result = WM_Key_Null;
+  B32 right_sided = 0;
+  switch(key_code)
+  {
+    default:{}break;
+    case 0:{result = WM_Key_A;}break;
+    case 1:{result = WM_Key_S;}break;
+    case 2:{result = WM_Key_D;}break;
+    case 3:{result = WM_Key_F;}break;
+    case 4:{result = WM_Key_H;}break;
+    case 5:{result = WM_Key_G;}break;
+    case 6:{result = WM_Key_Z;}break;
+    case 7:{result = WM_Key_X;}break;
+    case 8:{result = WM_Key_C;}break;
+    case 9:{result = WM_Key_V;}break;
+    case 11:{result = WM_Key_B;}break;
+    case 12:{result = WM_Key_Q;}break;
+    case 13:{result = WM_Key_W;}break;
+    case 14:{result = WM_Key_E;}break;
+    case 15:{result = WM_Key_R;}break;
+    case 16:{result = WM_Key_Y;}break;
+    case 17:{result = WM_Key_T;}break;
+    case 18:{result = WM_Key_1;}break;
+    case 19:{result = WM_Key_2;}break;
+    case 20:{result = WM_Key_3;}break;
+    case 21:{result = WM_Key_4;}break;
+    case 22:{result = WM_Key_6;}break;
+    case 23:{result = WM_Key_5;}break;
+    case 24:{result = WM_Key_Equal;}break;
+    case 25:{result = WM_Key_9;}break;
+    case 26:{result = WM_Key_7;}break;
+    case 27:{result = WM_Key_Minus;}break;
+    case 28:{result = WM_Key_8;}break;
+    case 29:{result = WM_Key_0;}break;
+    case 30:{result = WM_Key_RightBracket;}break;
+    case 31:{result = WM_Key_O;}break;
+    case 32:{result = WM_Key_U;}break;
+    case 33:{result = WM_Key_LeftBracket;}break;
+    case 34:{result = WM_Key_I;}break;
+    case 35:{result = WM_Key_P;}break;
+    case 36:{result = WM_Key_Return;}break;
+    case 37:{result = WM_Key_L;}break;
+    case 38:{result = WM_Key_J;}break;
+    case 39:{result = WM_Key_Quote;}break;
+    case 40:{result = WM_Key_K;}break;
+    case 41:{result = WM_Key_Semicolon;}break;
+    case 42:{result = WM_Key_BackSlash;}break;
+    case 43:{result = WM_Key_Comma;}break;
+    case 44:{result = WM_Key_Slash;}break;
+    case 45:{result = WM_Key_N;}break;
+    case 46:{result = WM_Key_M;}break;
+    case 47:{result = WM_Key_Period;}break;
+    case 48:{result = WM_Key_Tab;}break;
+    case 49:{result = WM_Key_Space;}break;
+    case 50:{result = WM_Key_Tick;}break;
+    case 51:{result = WM_Key_Backspace;}break;
+    case 53:{result = WM_Key_Esc;}break;
+    case 54:{result = WM_Key_Ctrl; right_sided = 1;}break;
+    case 55:{result = WM_Key_Ctrl;}break;
+    case 56:{result = WM_Key_Shift;}break;
+    case 57:{result = WM_Key_CapsLock;}break;
+    case 58:{result = WM_Key_Alt;}break;
+    case 59:{result = WM_Key_Ctrl;}break;
+    case 60:{result = WM_Key_Shift; right_sided = 1;}break;
+    case 61:{result = WM_Key_Alt; right_sided = 1;}break;
+    case 62:{result = WM_Key_Ctrl; right_sided = 1;}break;
+    case 65:{result = WM_Key_NumPeriod;}break;
+    case 67:{result = WM_Key_NumStar;}break;
+    case 69:{result = WM_Key_NumPlus;}break;
+    case 71:{result = WM_Key_NumLock;}break;
+    case 75:{result = WM_Key_NumSlash;}break;
+    case 76:{result = WM_Key_Return;}break;
+    case 78:{result = WM_Key_NumMinus;}break;
+    case 82:{result = WM_Key_Num0;}break;
+    case 83:{result = WM_Key_Num1;}break;
+    case 84:{result = WM_Key_Num2;}break;
+    case 85:{result = WM_Key_Num3;}break;
+    case 86:{result = WM_Key_Num4;}break;
+    case 87:{result = WM_Key_Num5;}break;
+    case 88:{result = WM_Key_Num6;}break;
+    case 89:{result = WM_Key_Num7;}break;
+    case 91:{result = WM_Key_Num8;}break;
+    case 92:{result = WM_Key_Num9;}break;
+    case 96:{result = WM_Key_F5;}break;
+    case 97:{result = WM_Key_F6;}break;
+    case 98:{result = WM_Key_F7;}break;
+    case 99:{result = WM_Key_F3;}break;
+    case 100:{result = WM_Key_F8;}break;
+    case 101:{result = WM_Key_F9;}break;
+    case 103:{result = WM_Key_F11;}break;
+    case 105:{result = WM_Key_F13;}break;
+    case 106:{result = WM_Key_F16;}break;
+    case 107:{result = WM_Key_F14;}break;
+    case 109:{result = WM_Key_F10;}break;
+    case 111:{result = WM_Key_F12;}break;
+    case 113:{result = WM_Key_F15;}break;
+    case 114:{result = WM_Key_Insert;}break;
+    case 115:{result = WM_Key_Home;}break;
+    case 116:{result = WM_Key_PageUp;}break;
+    case 117:{result = WM_Key_Delete;}break;
+    case 118:{result = WM_Key_F4;}break;
+    case 119:{result = WM_Key_End;}break;
+    case 120:{result = WM_Key_F2;}break;
+    case 121:{result = WM_Key_PageDown;}break;
+    case 122:{result = WM_Key_F1;}break;
+    case 123:{result = WM_Key_Left;}break;
+    case 124:{result = WM_Key_Right;}break;
+    case 125:{result = WM_Key_Down;}break;
+    case 126:{result = WM_Key_Up;}break;
+  }
+  if(right_sided_out != 0)
+  {
+    *right_sided_out = right_sided;
+  }
+  return result;
+}
+
+internal void
+mac_wm_push_text_events_from_ns_string(Arena *arena, WM_EventList *events, MAC_WM_Window *window, NSString *string)
+{
+  if(window != 0 && string != 0)
+  {
+    char const *utf8 = [string UTF8String];
+    if(utf8 != 0)
+    {
+      String8 text = str8_cstring((char *)utf8);
+      for(U64 off = 0; off < text.size;)
+      {
+        UnicodeDecode decode = utf8_decode(text.str + off, text.size - off);
+        if(decode.inc == 0)
+        {
+          break;
+        }
+        if(decode.codepoint >= 32 &&
+           decode.codepoint != 127 &&
+           !(0xf700 <= decode.codepoint && decode.codepoint <= 0xf8ff))
+        {
+          WM_Event *event = wm_event_list_push_new(arena, events, WM_EventKind_Text);
+          event->window = mac_wm_handle_from_window(window);
+          event->modifiers = wm_get_modifiers();
+          event->character = decode.codepoint;
+        }
+        off += decode.inc;
+      }
+    }
+  }
+}
+
+internal WM_Event *
+mac_wm_push_event(Arena *arena, WM_EventList *events, WM_EventKind kind, MAC_WM_Window *window)
+{
+  WM_Event *event = wm_event_list_push_new(arena, events, kind);
+  event->window = mac_wm_handle_from_window(window);
+  event->modifiers = wm_get_modifiers();
+  return event;
 }
 
 internal MAC_WM_Window *
@@ -442,6 +651,106 @@ wm_get_events(Arena *arena, B32 wait)
     {
       break;
     }
+    MAC_WM_Window *window = mac_wm_window_from_ns_window([event window]);
+    NSEventType type = [event type];
+    switch(type)
+    {
+      default:{}break;
+      case NSEventTypeApplicationDefined:
+      {
+        mac_wm_push_event(arena, &result, WM_EventKind_Wakeup, window);
+      }break;
+      case NSEventTypeKeyDown:
+      case NSEventTypeKeyUp:
+      {
+        B32 is_release = (type == NSEventTypeKeyUp);
+        B32 right_sided = 0;
+        WM_Key key = mac_wm_key_from_key_code([event keyCode], &right_sided);
+        WM_Event *wm_event = mac_wm_push_event(arena, &result, is_release ? WM_EventKind_Release : WM_EventKind_Press, window);
+        wm_event->modifiers = mac_wm_modifiers_from_ns_flags([event modifierFlags]);
+        wm_event->key = key;
+        wm_event->right_sided = right_sided;
+        wm_event->is_repeat = [event isARepeat];
+        wm_event->repeat_count = 1;
+        if(key != WM_Key_Null)
+        {
+          mac_wm_state->key_is_down[key] = !is_release;
+        }
+        if(key == WM_Key_Alt   && (wm_event->modifiers & WM_Modifier_Alt))   { wm_event->modifiers &= ~WM_Modifier_Alt; }
+        if(key == WM_Key_Ctrl  && (wm_event->modifiers & WM_Modifier_Ctrl))  { wm_event->modifiers &= ~WM_Modifier_Ctrl; }
+        if(key == WM_Key_Shift && (wm_event->modifiers & WM_Modifier_Shift)) { wm_event->modifiers &= ~WM_Modifier_Shift; }
+        if(type == NSEventTypeKeyDown)
+        {
+          mac_wm_push_text_events_from_ns_string(arena, &result, window, [event characters]);
+        }
+      }break;
+      case NSEventTypeFlagsChanged:
+      {
+        B32 right_sided = 0;
+        WM_Key key = mac_wm_key_from_key_code([event keyCode], &right_sided);
+        if(key != WM_Key_Null)
+        {
+          WM_Modifiers modifiers = mac_wm_modifiers_from_ns_flags([event modifierFlags]);
+          B32 is_down = 0;
+          if(key == WM_Key_Shift) { is_down = !!(modifiers & WM_Modifier_Shift); }
+          else if(key == WM_Key_Alt) { is_down = !!(modifiers & WM_Modifier_Alt); }
+          else if(key == WM_Key_Ctrl) { is_down = !!(modifiers & WM_Modifier_Ctrl); }
+          if(mac_wm_state->key_is_down[key] != is_down)
+          {
+            WM_Event *wm_event = mac_wm_push_event(arena, &result, is_down ? WM_EventKind_Press : WM_EventKind_Release, window);
+            wm_event->modifiers = modifiers;
+            wm_event->key = key;
+            wm_event->right_sided = right_sided;
+            mac_wm_state->key_is_down[key] = is_down;
+          }
+        }
+      }break;
+      case NSEventTypeLeftMouseDown:
+      case NSEventTypeLeftMouseUp:
+      case NSEventTypeRightMouseDown:
+      case NSEventTypeRightMouseUp:
+      case NSEventTypeOtherMouseDown:
+      case NSEventTypeOtherMouseUp:
+      {
+        B32 is_release = (type == NSEventTypeLeftMouseUp ||
+                          type == NSEventTypeRightMouseUp ||
+                          type == NSEventTypeOtherMouseUp);
+        WM_Key key = WM_Key_Null;
+        if(type == NSEventTypeLeftMouseDown || type == NSEventTypeLeftMouseUp)
+        {
+          key = WM_Key_LeftMouseButton;
+        }
+        else if(type == NSEventTypeRightMouseDown || type == NSEventTypeRightMouseUp)
+        {
+          key = WM_Key_RightMouseButton;
+        }
+        else
+        {
+          key = WM_Key_MiddleMouseButton;
+        }
+        WM_Event *wm_event = mac_wm_push_event(arena, &result, is_release ? WM_EventKind_Release : WM_EventKind_Press, window);
+        wm_event->modifiers = mac_wm_modifiers_from_ns_flags([event modifierFlags]);
+        wm_event->key = key;
+        wm_event->pos = mac_wm_client_pos_from_ns_point(window, [event locationInWindow]);
+        mac_wm_state->key_is_down[key] = !is_release;
+      }break;
+      case NSEventTypeMouseMoved:
+      case NSEventTypeLeftMouseDragged:
+      case NSEventTypeRightMouseDragged:
+      case NSEventTypeOtherMouseDragged:
+      {
+        WM_Event *wm_event = mac_wm_push_event(arena, &result, WM_EventKind_MouseMove, window);
+        wm_event->modifiers = mac_wm_modifiers_from_ns_flags([event modifierFlags]);
+        wm_event->pos = mac_wm_client_pos_from_ns_point(window, [event locationInWindow]);
+      }break;
+      case NSEventTypeScrollWheel:
+      {
+        WM_Event *wm_event = mac_wm_push_event(arena, &result, WM_EventKind_Scroll, window);
+        wm_event->modifiers = mac_wm_modifiers_from_ns_flags([event modifierFlags]);
+        wm_event->pos = mac_wm_client_pos_from_ns_point(window, [event locationInWindow]);
+        wm_event->delta = v2f32(-(F32)[event scrollingDeltaX], -(F32)[event scrollingDeltaY]);
+      }break;
+    }
     [NSApp sendEvent:event];
     limit = [NSDate distantPast];
   }
@@ -453,6 +762,12 @@ wm_get_events(Arena *arena, B32 wait)
       WM_Event *event = wm_event_list_push_new(arena, &result, WM_EventKind_WindowClose);
       event->window = mac_wm_handle_from_window(window);
     }
+    if(window->lose_focus_requested)
+    {
+      window->lose_focus_requested = 0;
+      WM_Event *event = wm_event_list_push_new(arena, &result, WM_EventKind_WindowLoseFocus);
+      event->window = mac_wm_handle_from_window(window);
+    }
   }
   return result;
 }
@@ -461,17 +776,19 @@ internal WM_Modifiers
 wm_get_modifiers(void)
 {
   NSEventModifierFlags flags = [NSEvent modifierFlags];
-  WM_Modifiers result = 0;
-  if(flags & NSEventModifierFlagControl) { result |= WM_Modifier_Ctrl; }
-  if(flags & NSEventModifierFlagShift) { result |= WM_Modifier_Shift; }
-  if(flags & NSEventModifierFlagOption) { result |= WM_Modifier_Alt; }
+  WM_Modifiers result = mac_wm_modifiers_from_ns_flags(flags);
   return result;
 }
 
 internal B32
 wm_key_is_down(WM_Key key)
 {
-  return 0;
+  B32 result = 0;
+  if(key < WM_Key_COUNT)
+  {
+    result = mac_wm_state->key_is_down[key];
+  }
+  return result;
 }
 
 internal Vec2F32
@@ -482,7 +799,7 @@ wm_mouse_from_window(WM_Window handle)
   if(window != 0)
   {
     NSPoint point = [window->ns_window mouseLocationOutsideOfEventStream];
-    result = v2f32(point.x, point.y);
+    result = mac_wm_client_pos_from_ns_point(window, point);
   }
   return result;
 }
@@ -493,6 +810,21 @@ wm_mouse_from_window(WM_Window handle)
 internal void
 wm_set_cursor(WM_Cursor cursor)
 {
+  NSCursor *ns_cursor = [NSCursor arrowCursor];
+  switch(cursor)
+  {
+    default:{}break;
+    case WM_Cursor_Pointer:{ns_cursor = [NSCursor arrowCursor];}break;
+    case WM_Cursor_IBar:{ns_cursor = [NSCursor IBeamCursor];}break;
+    case WM_Cursor_LeftRight:{ns_cursor = [NSCursor resizeLeftRightCursor];}break;
+    case WM_Cursor_UpDown:{ns_cursor = [NSCursor resizeUpDownCursor];}break;
+    case WM_Cursor_HandPoint:{ns_cursor = [NSCursor pointingHandCursor];}break;
+    case WM_Cursor_Disabled:{ns_cursor = [NSCursor operationNotAllowedCursor];}break;
+    case WM_Cursor_DownRight:
+    case WM_Cursor_UpRight:
+    case WM_Cursor_UpDownLeftRight:{ns_cursor = [NSCursor arrowCursor];}break;
+  }
+  [ns_cursor set];
 }
 
 ////////////////////////////////
@@ -512,7 +844,29 @@ wm_graphical_message(B32 error, String8 title, String8 message)
 internal String8
 wm_graphical_pick_file(Arena *arena, String8 initial_path)
 {
-  return str8_zero();
+  Temp scratch = scratch_begin(&arena, 1);
+  NSOpenPanel *panel = [NSOpenPanel openPanel];
+  [panel setCanChooseFiles:YES];
+  [panel setCanChooseDirectories:NO];
+  [panel setAllowsMultipleSelection:NO];
+  if(initial_path.size != 0)
+  {
+    NSString *ns_path = mac_wm_ns_string_from_string8(scratch.arena, initial_path);
+    [panel setDirectoryURL:[NSURL fileURLWithPath:ns_path]];
+  }
+  String8 result = str8_zero();
+  if([panel runModal] == NSModalResponseOK)
+  {
+    NSURL *url = [panel URL];
+    NSString *path = [url path];
+    char const *utf8 = [path UTF8String];
+    if(utf8 != 0)
+    {
+      result = push_str8_copy(arena, str8_cstring((char *)utf8));
+    }
+  }
+  scratch_end(scratch);
+  return result;
 }
 
 ////////////////////////////////
