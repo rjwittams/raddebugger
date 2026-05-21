@@ -1029,23 +1029,33 @@ dmn_init(void)
   Arena *arena = arena_alloc();
   mac_dmn_state = push_array(arena, MAC_DMN_State, 1);
   mac_dmn_state->arena = arena;
+  mac_dmn_state->access_mutex = mutex_alloc();
 }
 
 internal DMN_CtrlCtx *
 dmn_ctrl_begin(void)
 {
   local_persist DMN_CtrlCtx ctx = {0};
+  mac_dmn_ctrl_thread = 1;
   return &ctx;
 }
 
 internal void
 dmn_ctrl_exclusive_access_begin(void)
 {
+  MutexScope(mac_dmn_state->access_mutex)
+  {
+    mac_dmn_state->access_run_state = 1;
+  }
 }
 
 internal void
 dmn_ctrl_exclusive_access_end(void)
 {
+  MutexScope(mac_dmn_state->access_mutex)
+  {
+    mac_dmn_state->access_run_state = 0;
+  }
 }
 
 internal U32
@@ -1329,12 +1339,26 @@ dmn_halt(U64 code, U64 user_data)
 internal B32
 dmn_access_open(void)
 {
-  return 1;
+  B32 result = 0;
+  if(mac_dmn_ctrl_thread)
+  {
+    result = 1;
+  }
+  else
+  {
+    mutex_take(mac_dmn_state->access_mutex);
+    result = !mac_dmn_state->access_run_state;
+  }
+  return result;
 }
 
 internal void
 dmn_access_close(void)
 {
+  if(!mac_dmn_ctrl_thread)
+  {
+    mutex_drop(mac_dmn_state->access_mutex);
+  }
 }
 
 internal U64

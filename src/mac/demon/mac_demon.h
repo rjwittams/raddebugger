@@ -92,6 +92,8 @@ struct MAC_DMN_State
   MAC_DMN_Entity *free_entity;
   MAC_DMN_Entity *first_process_entity;
   MAC_DMN_Entity *last_process_entity;
+  Mutex access_mutex;
+  B32 access_run_state;
   volatile B32 halt_requested;
   U64 halt_code;
   U64 halt_user_data;
@@ -115,6 +117,7 @@ struct MAC_DMN_ActiveTrap
 };
 
 global MAC_DMN_State *mac_dmn_state = 0;
+thread_static B32 mac_dmn_ctrl_thread = 0;
 
 internal DMN_Handle mac_dmn_handle_from_entity(MAC_DMN_Entity *entity);
 internal MAC_DMN_Entity *mac_dmn_entity_from_handle(DMN_Handle handle);
