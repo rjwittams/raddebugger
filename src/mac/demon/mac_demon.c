@@ -463,7 +463,144 @@ mac_dmn_process_should_run(MAC_DMN_Entity *process_entity, DMN_RunCtrls *ctrls)
     }
     if(!dmn_handle_match(ctrls->single_step_thread, dmn_handle_zero()))
     {
-      result = 0;
+      B32 has_single_step_thread = 0;
+      MAC_DMN_Process *process = &process_entity->process;
+      for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+      {
+        if(dmn_handle_match(ctrls->single_step_thread, mac_dmn_handle_from_entity(thread_entity)))
+        {
+          has_single_step_thread = 1;
+          break;
+        }
+      }
+      result = has_single_step_thread;
+    }
+  }
+  return result;
+}
+
+internal MAC_DMN_ActiveTrap *
+mac_dmn_set_trap(Arena *arena, DMN_Trap *trap)
+{
+  MAC_DMN_Process *process = mac_dmn_process_from_handle(trap->process);
+  Arch arch = process != 0 ? process->arch : Arch_CURRENT;
+  ARCH_Info *arch_info = arch_info_from_arch(arch);
+  String8 trap_inst = arch_info->trap_instruction;
+  U8 *swap_bytes = push_array(arena, U8, trap_inst.size);
+  B32 good_read = (dmn_process_read(trap->process, r1u64(trap->vaddr, trap->vaddr + trap_inst.size), swap_bytes) == trap_inst.size);
+  B32 good_write = 0;
+  if(good_read)
+  {
+    good_write = dmn_process_write(trap->process, r1u64(trap->vaddr, trap->vaddr + trap_inst.size), trap_inst.str);
+  }
+  MAC_DMN_ActiveTrap *result = push_array(arena, MAC_DMN_ActiveTrap, 1);
+  result->good = good_read && good_write;
+  result->trap = trap;
+  result->swap_bytes = str8(swap_bytes, trap_inst.size);
+  return result;
+}
+
+internal void
+mac_dmn_unset_trap(MAC_DMN_ActiveTrap *active_trap)
+{
+  if(active_trap->good)
+  {
+    dmn_process_write(active_trap->trap->process,
+                      r1u64(active_trap->trap->vaddr, active_trap->trap->vaddr + active_trap->swap_bytes.size),
+                      active_trap->swap_bytes.str);
+  }
+}
+
+internal U64
+mac_dmn_thread_read_ip(MAC_DMN_Thread *thread)
+{
+  U64 result = 0;
+  if(thread != 0)
+  {
+    switch(thread->arch)
+    {
+      default:{}break;
+#if ARCH_X64
+      case Arch_x64:
+      {
+        x86_thread_state64_t state = {0};
+        mach_msg_type_number_t count = x86_THREAD_STATE64_COUNT;
+        if(thread_get_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+        {
+          result = state.__rip;
+        }
+      }break;
+#endif
+    }
+  }
+  return result;
+}
+
+internal B32
+mac_dmn_thread_write_ip(MAC_DMN_Thread *thread, U64 ip)
+{
+  B32 result = 0;
+  if(thread != 0)
+  {
+    switch(thread->arch)
+    {
+      default:{}break;
+#if ARCH_X64
+      case Arch_x64:
+      {
+        x86_thread_state64_t state = {0};
+        mach_msg_type_number_t count = x86_THREAD_STATE64_COUNT;
+        if(thread_get_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+        {
+          state.__rip = ip;
+          result = (thread_set_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, x86_THREAD_STATE64_COUNT) == KERN_SUCCESS);
+        }
+      }break;
+#endif
+    }
+  }
+  return result;
+}
+
+internal B32
+mac_dmn_set_single_step_flag(MAC_DMN_Thread *thread, B32 is_on)
+{
+  B32 result = 0;
+  if(thread != 0)
+  {
+    switch(thread->arch)
+    {
+      default:{}break;
+#if ARCH_X64
+      case Arch_x64:
+      {
+        x86_thread_state64_t state = {0};
+        mach_msg_type_number_t count = x86_THREAD_STATE64_COUNT;
+        if(thread_get_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+        {
+          if(is_on) { state.__rflags |= X64_RFlag_Trap; }
+          else      { state.__rflags &= ~X64_RFlag_Trap; }
+          result = (thread_set_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, x86_THREAD_STATE64_COUNT) == KERN_SUCCESS);
+        }
+      }break;
+#endif
+    }
+  }
+  return result;
+}
+
+internal MAC_DMN_ActiveTrap *
+mac_dmn_active_trap_from_process_vaddr(MAC_DMN_ActiveTrap *first, DMN_Handle process, U64 vaddr)
+{
+  MAC_DMN_ActiveTrap *result = 0;
+  for(MAC_DMN_ActiveTrap *active_trap = first; active_trap != 0; active_trap = active_trap->next)
+  {
+    if(active_trap->good &&
+       dmn_handle_match(active_trap->trap->process, process) &&
+       active_trap->trap->vaddr == vaddr)
+    {
+      result = active_trap;
+      break;
     }
   }
   return result;
@@ -518,6 +655,29 @@ mac_dmn_push_event_exit_process(Arena *arena, DMN_EventList *events, MAC_DMN_Ent
   e->process = mac_dmn_handle_from_entity(process_entity);
   e->arch = process_entity->process.arch;
   e->code = exit_code;
+}
+
+internal void
+mac_dmn_push_event_breakpoint(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, U64 instruction_pointer, U64 user_data)
+{
+  DMN_Event *e = dmn_event_list_push(arena, events);
+  e->kind = DMN_EventKind_Breakpoint;
+  e->process = mac_dmn_handle_from_entity(process_entity);
+  e->thread = mac_dmn_handle_from_entity(thread_entity);
+  e->arch = thread_entity->thread.arch;
+  e->instruction_pointer = instruction_pointer;
+  e->user_data = user_data;
+}
+
+internal void
+mac_dmn_push_event_single_step(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity)
+{
+  DMN_Event *e = dmn_event_list_push(arena, events);
+  e->kind = DMN_EventKind_SingleStep;
+  e->process = mac_dmn_handle_from_entity(process_entity);
+  e->thread = mac_dmn_handle_from_entity(thread_entity);
+  e->arch = thread_entity->thread.arch;
+  e->instruction_pointer = mac_dmn_thread_read_ip(&thread_entity->thread);
 }
 
 internal void
@@ -758,6 +918,39 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
 
   if(result.count == 0)
   {
+    Temp scratch = scratch_begin(0, 0);
+    MAC_DMN_ActiveTrap *first_active_trap = 0;
+    MAC_DMN_ActiveTrap *last_active_trap = 0;
+    if(ctrls != 0)
+    {
+      for(DMN_TrapChunkNode *n = ctrls->traps.first; n != 0; n = n->next)
+      {
+        for(U64 trap_idx = 0; trap_idx < n->count; trap_idx += 1)
+        {
+          DMN_Trap *trap = n->v + trap_idx;
+          if(trap->flags == 0)
+          {
+            MAC_DMN_ActiveTrap *active_trap = mac_dmn_set_trap(scratch.arena, trap);
+            SLLQueuePush(first_active_trap, last_active_trap, active_trap);
+          }
+        }
+      }
+    }
+
+    MAC_DMN_Entity *single_step_thread_entity = 0;
+    if(ctrls != 0 && !dmn_handle_match(ctrls->single_step_thread, dmn_handle_zero()))
+    {
+      single_step_thread_entity = mac_dmn_entity_from_handle(ctrls->single_step_thread);
+      if(single_step_thread_entity != 0 && single_step_thread_entity->kind == MAC_DMN_EntityKind_Thread)
+      {
+        mac_dmn_set_single_step_flag(&single_step_thread_entity->thread, 1);
+      }
+      else
+      {
+        single_step_thread_entity = 0;
+      }
+    }
+
     B32 any_processes = 0;
     B32 any_running = 0;
     for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
@@ -796,6 +989,15 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       }
       while(wait_id < 0 && errno == EINTR);
 
+      for(MAC_DMN_ActiveTrap *active_trap = first_active_trap; active_trap != 0; active_trap = active_trap->next)
+      {
+        mac_dmn_unset_trap(active_trap);
+      }
+      if(single_step_thread_entity != 0)
+      {
+        mac_dmn_set_single_step_flag(&single_step_thread_entity->thread, 0);
+      }
+
       MAC_DMN_Entity *process_entity = mac_dmn_process_entity_from_pid(wait_id);
       if(process_entity != 0)
       {
@@ -821,7 +1023,35 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
           }
           else
           {
-            mac_dmn_push_event_exception(arena, &result, process_entity, signo);
+            mac_dmn_refresh_threads(process);
+            MAC_DMN_Entity *thread_entity = process->first_thread_entity;
+            if(single_step_thread_entity != 0 && single_step_thread_entity->thread.process == process)
+            {
+              thread_entity = single_step_thread_entity;
+            }
+            if(signo == SIGTRAP && thread_entity != 0)
+            {
+              U64 ip = mac_dmn_thread_read_ip(&thread_entity->thread);
+              DMN_Handle process_handle = mac_dmn_handle_from_entity(process_entity);
+              MAC_DMN_ActiveTrap *hit_trap = mac_dmn_active_trap_from_process_vaddr(first_active_trap, process_handle, ip - 1);
+              if(hit_trap != 0)
+              {
+                mac_dmn_thread_write_ip(&thread_entity->thread, hit_trap->trap->vaddr);
+                mac_dmn_push_event_breakpoint(arena, &result, process_entity, thread_entity, hit_trap->trap->vaddr, hit_trap->trap->id);
+              }
+              else if(single_step_thread_entity == thread_entity)
+              {
+                mac_dmn_push_event_single_step(arena, &result, process_entity, thread_entity);
+              }
+              else
+              {
+                mac_dmn_push_event_exception(arena, &result, process_entity, signo);
+              }
+            }
+            else
+            {
+              mac_dmn_push_event_exception(arena, &result, process_entity, signo);
+            }
           }
         }
       }
@@ -830,6 +1060,18 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
         mac_dmn_push_event_not_attached(arena, &result);
       }
     }
+    else
+    {
+      for(MAC_DMN_ActiveTrap *active_trap = first_active_trap; active_trap != 0; active_trap = active_trap->next)
+      {
+        mac_dmn_unset_trap(active_trap);
+      }
+      if(single_step_thread_entity != 0)
+      {
+        mac_dmn_set_single_step_flag(&single_step_thread_entity->thread, 0);
+      }
+    }
+    scratch_end(scratch);
   }
 
   return result;

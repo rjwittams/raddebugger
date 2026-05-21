@@ -105,6 +105,15 @@ struct MAC_DMN_ProcessIterState
   U64 idx;
 };
 
+typedef struct MAC_DMN_ActiveTrap MAC_DMN_ActiveTrap;
+struct MAC_DMN_ActiveTrap
+{
+  MAC_DMN_ActiveTrap *next;
+  B32 good;
+  DMN_Trap *trap;
+  String8 swap_bytes;
+};
+
 global MAC_DMN_State *mac_dmn_state = 0;
 
 internal DMN_Handle mac_dmn_handle_from_entity(MAC_DMN_Entity *entity);
@@ -131,11 +140,19 @@ internal String8 mac_dmn_executable_path_from_pid(Arena *arena, pid_t pid);
 internal U64 mac_dmn_main_module_base_vaddr_from_process(MAC_DMN_Process *process, MachO_UUID expected_uuid);
 internal void mac_dmn_refresh_initial_module(MAC_DMN_Process *process);
 internal B32 mac_dmn_process_should_run(MAC_DMN_Entity *process_entity, DMN_RunCtrls *ctrls);
+internal MAC_DMN_ActiveTrap *mac_dmn_set_trap(Arena *arena, DMN_Trap *trap);
+internal void mac_dmn_unset_trap(MAC_DMN_ActiveTrap *active_trap);
+internal U64 mac_dmn_thread_read_ip(MAC_DMN_Thread *thread);
+internal B32 mac_dmn_thread_write_ip(MAC_DMN_Thread *thread, U64 ip);
+internal B32 mac_dmn_set_single_step_flag(MAC_DMN_Thread *thread, B32 is_on);
+internal MAC_DMN_ActiveTrap *mac_dmn_active_trap_from_process_vaddr(MAC_DMN_ActiveTrap *first, DMN_Handle process, U64 vaddr);
 internal void mac_dmn_push_event_create_process(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity);
 internal void mac_dmn_push_event_create_thread(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity);
 internal void mac_dmn_push_event_load_module(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *module_entity);
 internal void mac_dmn_push_event_handshake_complete(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity);
 internal void mac_dmn_push_event_exit_process(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, U32 exit_code);
+internal void mac_dmn_push_event_breakpoint(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, U64 instruction_pointer, U64 user_data);
+internal void mac_dmn_push_event_single_step(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity);
 internal void mac_dmn_push_event_exception(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, S32 signo);
 internal void mac_dmn_push_event_halt(Arena *arena, DMN_EventList *events);
 internal void mac_dmn_push_event_not_attached(Arena *arena, DMN_EventList *events);
