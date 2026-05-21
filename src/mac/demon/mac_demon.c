@@ -142,6 +142,24 @@ mac_dmn_process_entity_from_pid(pid_t pid)
   return result;
 }
 
+internal MAC_DMN_Entity *
+mac_dmn_thread_entity_from_thread_id(MAC_DMN_Process *process, U64 thread_id)
+{
+  MAC_DMN_Entity *result = 0;
+  if(process != 0)
+  {
+    for(MAC_DMN_Entity *entity = process->first_thread_entity; entity != 0; entity = entity->next)
+    {
+      if(entity->kind == MAC_DMN_EntityKind_Thread && entity->thread.thread_id == thread_id)
+      {
+        result = entity;
+        break;
+      }
+    }
+  }
+  return result;
+}
+
 internal char **
 mac_dmn_argv_from_launch_params(Arena *arena, ProcessLaunchParams *params)
 {
@@ -291,6 +309,36 @@ mac_dmn_thread_entity_alloc(MAC_DMN_Process *process, mach_port_t thread, Arch a
   return entity;
 }
 
+internal void
+mac_dmn_thread_entity_release(MAC_DMN_Entity *entity)
+{
+  if(entity != 0 && entity->kind == MAC_DMN_EntityKind_Thread)
+  {
+    MAC_DMN_Process *process = entity->thread.process;
+    for(MAC_DMN_Entity **ptr = &process->first_thread_entity; *ptr != 0; ptr = &(*ptr)->next)
+    {
+      if(*ptr == entity)
+      {
+        *ptr = entity->next;
+        if(process->last_thread_entity == entity)
+        {
+          process->last_thread_entity = 0;
+          for(MAC_DMN_Entity *n = process->first_thread_entity; n != 0; n = n->next)
+          {
+            process->last_thread_entity = n;
+          }
+        }
+        break;
+      }
+    }
+    if(entity->thread.thread != MACH_PORT_NULL)
+    {
+      mach_port_deallocate(mach_task_self(), entity->thread.thread);
+    }
+    mac_dmn_entity_release(entity);
+  }
+}
+
 internal MAC_DMN_Entity *
 mac_dmn_module_entity_alloc(MAC_DMN_Process *process, U64 base_vaddr, U64 size, String8 path, Arch arch)
 {
@@ -307,16 +355,45 @@ mac_dmn_module_entity_alloc(MAC_DMN_Process *process, U64 base_vaddr, U64 size, 
 internal void
 mac_dmn_refresh_threads(MAC_DMN_Process *process)
 {
-  if(process != 0 && process->task != MACH_PORT_NULL && process->first_thread_entity == 0)
+  if(process != 0 && process->task != MACH_PORT_NULL)
   {
     thread_act_array_t threads = 0;
     mach_msg_type_number_t thread_count = 0;
     if(task_threads(process->task, &threads, &thread_count) == KERN_SUCCESS)
     {
+      Temp scratch = scratch_begin(0, 0);
+      U64 *live_thread_ids = push_array(scratch.arena, U64, thread_count);
       for(mach_msg_type_number_t idx = 0; idx < thread_count; idx += 1)
       {
-        mac_dmn_thread_entity_alloc(process, threads[idx], process->arch);
+        U64 thread_id = mac_dmn_thread_id_from_port(threads[idx]);
+        live_thread_ids[idx] = thread_id;
+        if(mac_dmn_thread_entity_from_thread_id(process, thread_id) == 0)
+        {
+          mac_dmn_thread_entity_alloc(process, threads[idx], process->arch);
+        }
+        else
+        {
+          mach_port_deallocate(mach_task_self(), threads[idx]);
+        }
       }
+      for(MAC_DMN_Entity *thread_entity = process->first_thread_entity, *next = 0; thread_entity != 0; thread_entity = next)
+      {
+        next = thread_entity->next;
+        B32 is_live = 0;
+        for(mach_msg_type_number_t idx = 0; idx < thread_count; idx += 1)
+        {
+          if(thread_entity->thread.thread_id == live_thread_ids[idx])
+          {
+            is_live = 1;
+            break;
+          }
+        }
+        if(!is_live)
+        {
+          mac_dmn_thread_entity_release(thread_entity);
+        }
+      }
+      scratch_end(scratch);
       vm_deallocate(mach_task_self(), (vm_address_t)threads, thread_count*sizeof(thread_t));
     }
   }
