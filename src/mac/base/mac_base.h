@@ -142,6 +142,7 @@ internal tm mac_tm_from_date_time(DateTime dt);
 internal timespec mac_timespec_from_date_time(DateTime dt);
 internal DenseTime mac_dense_time_from_timespec(timespec in);
 internal FileProperties mac_file_properties_from_stat(struct stat *s);
+internal String8 mac_posix_ipc_name(Arena *arena, String8 name);
 internal void mac_safe_call_sig_handler(int x);
 
 ////////////////////////////////

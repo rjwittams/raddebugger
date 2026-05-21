@@ -42,6 +42,12 @@ link_os_gfx="-lX11 -lXext"
 link_render="-lGL -lEGL"
 link_font_provider="-lfreetype"
 
+if [ "$host_os" = "Darwin" ]; then
+  link_os_gfx=""
+  link_render=""
+  link_font_provider=""
+fi
+
 # --- Choose Compile/Link Lines -----------------------------------------------
 if [ -v gcc ];     then compile_debug="$gcc_debug"; fi
 if [ -v gcc ];     then compile_release="$gcc_release"; fi

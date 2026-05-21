@@ -68,6 +68,14 @@ mac_file_properties_from_stat(struct stat *s)
   return props;
 }
 
+internal String8
+mac_posix_ipc_name(Arena *arena, String8 name)
+{
+  U64 hash = u64_hash_from_str8(name);
+  String8 result = str8f(arena, "/raddbg_%llx", hash);
+  return result;
+}
+
 internal void
 mac_safe_call_sig_handler(int x)
 {
@@ -271,10 +279,13 @@ internal SharedMemory
 shared_memory_alloc(U64 size, String8 name)
 {
   Temp scratch = scratch_begin(0, 0);
-  String8 name_copy = push_str8_copy(scratch.arena, name);
+  String8 name_copy = mac_posix_ipc_name(scratch.arena, name);
   int id = shm_open((char *)name_copy.str, O_RDWR|O_CREAT, 0666);
-  ftruncate(id, size);
-  SharedMemory result = {(U64)id};
+  SharedMemory result = {0};
+  if(id != -1 && ftruncate(id, size) != -1)
+  {
+    result.u64[0] = (U64)id;
+  }
   scratch_end(scratch);
   return result;
 }
@@ -283,9 +294,13 @@ internal SharedMemory
 shared_memory_open(String8 name)
 {
   Temp scratch = scratch_begin(0, 0);
-  String8 name_copy = push_str8_copy(scratch.arena, name);
+  String8 name_copy = mac_posix_ipc_name(scratch.arena, name);
   int id = shm_open((char *)name_copy.str, O_RDWR, 0);
-  SharedMemory result = {(U64)id};
+  SharedMemory result = {0};
+  if(id != -1)
+  {
+    result.u64[0] = (U64)id;
+  }
   scratch_end(scratch);
   return result;
 }
@@ -610,6 +625,7 @@ semaphore_alloc(U32 initial_count, U32 max_count, String8 name)
   {
     name_to_open = str8f(scratch.arena, "/raddbg-%u-%llu", getpid(), ins_atomic_u64_inc_eval(&mac_state.default_env_count));
   }
+  name_to_open = mac_posix_ipc_name(scratch.arena, name_to_open);
   if(name_to_open.size > 0)
   {
     for EachIndex(attempt_idx, 64)
@@ -648,7 +664,7 @@ semaphore_open(String8 name)
   Semaphore result = {0};
   {
     Temp scratch = scratch_begin(0, 0);
-    String8 name_copy = str8_copy(scratch.arena, name);
+    String8 name_copy = mac_posix_ipc_name(scratch.arena, name);
     sem_t *s = sem_open((char *)name_copy.str, 0);
     if(s != SEM_FAILED)
     {

@@ -4,6 +4,10 @@
 #ifndef WINDOW_MANAGER_INC_H
 #define WINDOW_MANAGER_INC_H
 
+#if !defined(WM_STUB) && OS_MAC
+# define WM_STUB 1
+#endif
+
 #include "window_manager.h"
 #if WM_STUB
 # include "window_manager_stub.h"
