@@ -1086,6 +1086,43 @@ mac_dmn_active_trap_from_process_vaddr(MAC_DMN_ActiveTrap *first, DMN_Handle pro
   return result;
 }
 
+internal MAC_DMN_Entity *
+mac_dmn_thread_entity_from_active_trap(MAC_DMN_Process *process, MAC_DMN_ActiveTrap *first, MAC_DMN_ActiveTrap **active_trap_out)
+{
+  MAC_DMN_Entity *result = 0;
+  MAC_DMN_ActiveTrap *result_trap = 0;
+  if(process != 0)
+  {
+    for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+    {
+      if(thread_entity->kind == MAC_DMN_EntityKind_Thread)
+      {
+        U64 ip = mac_dmn_thread_read_ip(&thread_entity->thread);
+        for(MAC_DMN_ActiveTrap *active_trap = first; active_trap != 0; active_trap = active_trap->next)
+        {
+          MAC_DMN_Process *trap_process = mac_dmn_process_from_handle(active_trap->trap->process);
+          U64 trap_size = active_trap->swap_bytes.size;
+          if(active_trap->good &&
+             trap_process == process &&
+             trap_size <= ip &&
+             active_trap->trap->vaddr == ip - trap_size)
+          {
+            result = thread_entity;
+            result_trap = active_trap;
+            goto done;
+          }
+        }
+      }
+    }
+  }
+  done:;
+  if(active_trap_out != 0)
+  {
+    *active_trap_out = result_trap;
+  }
+  return result;
+}
+
 internal B32
 mac_dmn_process_write_with_protect(MAC_DMN_Process *process, Rng1U64 range, void *src)
 {
@@ -1629,16 +1666,22 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
           else
           {
             mac_dmn_refresh_threads(process);
-            MAC_DMN_Entity *thread_entity = process->first_thread_entity;
-            if(single_step_thread_entity != 0 && single_step_thread_entity->thread.process == process)
+            MAC_DMN_ActiveTrap *hit_trap = 0;
+            MAC_DMN_Entity *thread_entity = 0;
+            if(signo == SIGTRAP)
+            {
+              thread_entity = mac_dmn_thread_entity_from_active_trap(process, first_active_trap, &hit_trap);
+            }
+            if(thread_entity == 0 && single_step_thread_entity != 0 && single_step_thread_entity->thread.process == process)
             {
               thread_entity = single_step_thread_entity;
             }
+            if(thread_entity == 0)
+            {
+              thread_entity = process->first_thread_entity;
+            }
             if(signo == SIGTRAP && thread_entity != 0)
             {
-              U64 ip = mac_dmn_thread_read_ip(&thread_entity->thread);
-              DMN_Handle process_handle = mac_dmn_handle_from_entity(process_entity);
-              MAC_DMN_ActiveTrap *hit_trap = mac_dmn_active_trap_from_process_vaddr(first_active_trap, process_handle, ip - 1);
               if(hit_trap != 0)
               {
                 mac_dmn_thread_write_ip(&thread_entity->thread, hit_trap->trap->vaddr);
