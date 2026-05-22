@@ -1963,6 +1963,23 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
           D_Entity *thread = d_entity_from_handle(params->thread);
           if(thread == &d_entity_nil)
           {
+            thread = d_entity_from_handle(d_user_state->ctrl_last_stop_event.entity);
+          }
+          if(thread == &d_entity_nil)
+          {
+            D_EntityArray threads = d_entity_array_from_kind(D_EntityKind_Thread);
+            for EachIndex(idx, threads.count)
+            {
+              D_Entity *candidate = threads.v[idx];
+              if(!candidate->is_frozen)
+              {
+                thread = candidate;
+                break;
+              }
+            }
+          }
+          if(thread == &d_entity_nil)
+          {
             log_user_error(s("Must have a selected thread to step."));
           }
           else if(thread->handle.controller_kind == D_ControllerKind_Dump)
