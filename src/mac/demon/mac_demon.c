@@ -1219,9 +1219,15 @@ mac_dmn_process_suspend_frozen_threads(MAC_DMN_Process *process, DMN_RunCtrls *c
   {
     for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
     {
-      if(!thread_entity->thread.is_suspended_for_run &&
-         !mac_dmn_thread_should_run(thread_entity, ctrls) &&
-         thread_suspend(thread_entity->thread.thread) == KERN_SUCCESS)
+      B32 should_run = mac_dmn_thread_should_run(thread_entity, ctrls);
+      if(thread_entity->thread.is_suspended_for_run)
+      {
+        if(should_run && thread_resume(thread_entity->thread.thread) == KERN_SUCCESS)
+        {
+          thread_entity->thread.is_suspended_for_run = 0;
+        }
+      }
+      else if(!should_run && thread_suspend(thread_entity->thread.thread) == KERN_SUCCESS)
       {
         thread_entity->thread.is_suspended_for_run = 1;
       }
