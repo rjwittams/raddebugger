@@ -22,6 +22,8 @@
 #include <errno.h>
 #include <signal.h>
 #include <mach-o/dyld_images.h>
+#include <mach/mig_errors.h>
+#include <mach/ndr.h>
 #include <stdlib.h>
 #include <sys/ptrace.h>
 #include <sys/sysctl.h>
@@ -40,6 +42,38 @@ MAC_DMN_EntityKind;
 
 typedef struct MAC_DMN_Entity MAC_DMN_Entity;
 typedef struct MAC_DMN_Process MAC_DMN_Process;
+
+typedef union MAC_DMN_MachMsg
+{
+  mach_msg_header_t hdr;
+  U8 data[4096];
+}
+MAC_DMN_MachMsg;
+
+typedef struct MAC_DMN_ExceptionPortInfo
+{
+  exception_mask_t mask;
+  exception_mask_t masks[EXC_TYPES_COUNT];
+  mach_port_t ports[EXC_TYPES_COUNT];
+  exception_behavior_t behaviors[EXC_TYPES_COUNT];
+  thread_state_flavor_t flavors[EXC_TYPES_COUNT];
+  mach_msg_type_number_t count;
+}
+MAC_DMN_ExceptionPortInfo;
+
+typedef struct MAC_DMN_ExceptionMessage
+{
+  MAC_DMN_MachMsg request;
+  mig_reply_error_t reply;
+  mach_port_t thread;
+  mach_port_t task;
+  exception_type_t exception;
+  mach_exception_data_type_t code[2];
+  mach_msg_type_number_t code_count;
+  B32 is_valid;
+}
+MAC_DMN_ExceptionMessage;
+
 struct MAC_DMN_Process
 {
   pid_t pid;
@@ -50,6 +84,10 @@ struct MAC_DMN_Process
   B32 needs_attach_events;
   B32 dyld_bootstrap_pending;
   B32 dyld_bootstrap_stepping;
+  B32 uses_mach_exceptions;
+  mach_port_t exception_port;
+  MAC_DMN_ExceptionPortInfo exception_port_info;
+  MAC_DMN_ExceptionMessage pending_exception;
   MAC_DMN_Entity *first_thread_entity;
   MAC_DMN_Entity *last_thread_entity;
   MAC_DMN_Entity *first_module_entity;
@@ -102,6 +140,7 @@ struct MAC_DMN_State
   MAC_DMN_Entity *first_process_entity;
   MAC_DMN_Entity *last_process_entity;
   Mutex access_mutex;
+  mach_port_t exception_port_set;
   B32 access_run_state;
   volatile B32 halt_requested;
   U64 halt_code;
@@ -155,6 +194,15 @@ internal S32 mac_dmn_taskport_authorization_status(B32 interaction_allowed);
 internal vm_prot_t mac_dmn_vm_prot_from_access_flags(AccessFlags flags);
 internal Arch mac_dmn_host_arch(void);
 internal U64 mac_dmn_thread_id_from_port(mach_port_t thread);
+internal kern_return_t mac_dmn_exception_port_info_save(MAC_DMN_ExceptionPortInfo *info, task_t task);
+internal kern_return_t mac_dmn_exception_port_info_restore(MAC_DMN_ExceptionPortInfo *info, task_t task);
+internal B32 mac_dmn_process_begin_mach_exceptions(MAC_DMN_Process *process);
+internal void mac_dmn_process_end_mach_exceptions(MAC_DMN_Process *process);
+internal S32 mac_dmn_soft_signal_from_exception_message(MAC_DMN_ExceptionMessage *message);
+internal B32 mac_dmn_process_reply_pending_exception(MAC_DMN_Process *process, S32 signal);
+internal B32 mac_dmn_process_stop_for_detach(MAC_DMN_Process *process);
+internal MAC_DMN_Entity *mac_dmn_process_entity_from_exception_port(mach_port_t exception_port);
+internal B32 mac_dmn_exception_message_receive(MAC_DMN_ExceptionMessage *message, mach_msg_timeout_t timeout);
 internal MAC_DMN_Entity *mac_dmn_process_entity_alloc(pid_t pid, mach_port_t task, B32 is_attached, B32 needs_attach_events);
 internal MAC_DMN_Entity *mac_dmn_thread_entity_alloc(MAC_DMN_Process *process, mach_port_t thread, Arch arch);
 internal void mac_dmn_thread_entity_release(MAC_DMN_Entity *entity);
