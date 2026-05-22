@@ -1574,6 +1574,61 @@ mac_dmn_thread_clear_debug_traps(MAC_DMN_Thread *thread)
   return result;
 }
 
+internal B32
+mac_dmn_process_set_debug_traps(MAC_DMN_Process *process, DMN_TrapChunkList *traps)
+{
+  B32 result = 0;
+  if(process != 0 && traps != 0 && traps->trap_count != 0)
+  {
+    B32 did_set_task_state = 0;
+    for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+    {
+      if(thread_entity->kind == MAC_DMN_EntityKind_Thread)
+      {
+        if(mac_dmn_thread_set_debug_traps(&thread_entity->thread, traps))
+        {
+#if ARCH_X64
+          if(!did_set_task_state && process->arch == Arch_x64)
+          {
+            x86_debug_state64_t state = {0};
+            mach_msg_type_number_t count = x86_DEBUG_STATE64_COUNT;
+            if(thread_get_state(thread_entity->thread.thread, x86_DEBUG_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS &&
+               task_set_state(process->task, x86_DEBUG_STATE64, (thread_state_t)&state, x86_DEBUG_STATE64_COUNT) == KERN_SUCCESS)
+            {
+              did_set_task_state = 1;
+            }
+          }
+#endif
+          result = 1;
+        }
+      }
+    }
+  }
+  return result;
+}
+
+internal void
+mac_dmn_process_clear_debug_traps(MAC_DMN_Process *process)
+{
+  if(process != 0)
+  {
+    for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+    {
+      if(thread_entity->kind == MAC_DMN_EntityKind_Thread)
+      {
+        mac_dmn_thread_clear_debug_traps(&thread_entity->thread);
+      }
+    }
+#if ARCH_X64
+    if(process->arch == Arch_x64 && process->task != MACH_PORT_NULL)
+    {
+      x86_debug_state64_t state = {0};
+      task_set_state(process->task, x86_DEBUG_STATE64, (thread_state_t)&state, x86_DEBUG_STATE64_COUNT);
+    }
+#endif
+  }
+}
+
 internal DMN_Trap *
 mac_dmn_thread_hit_debug_trap(MAC_DMN_Thread *thread, MAC_DMN_FlaggedTrapTask *first_task)
 {
@@ -2282,13 +2337,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       MAC_DMN_Entity *process_entity = mac_dmn_entity_from_handle(task->process);
       if(process_entity != 0 && process_entity->kind == MAC_DMN_EntityKind_Process)
       {
-        for(MAC_DMN_Entity *thread_entity = process_entity->process.first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
-        {
-          if(thread_entity->kind == MAC_DMN_EntityKind_Thread)
-          {
-            mac_dmn_thread_set_debug_traps(&thread_entity->thread, &task->traps);
-          }
-        }
+        mac_dmn_process_set_debug_traps(&process_entity->process, &task->traps);
       }
     }
 
@@ -2487,13 +2536,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
         MAC_DMN_Entity *process_entity = mac_dmn_entity_from_handle(task->process);
         if(process_entity != 0 && process_entity->kind == MAC_DMN_EntityKind_Process)
         {
-          for(MAC_DMN_Entity *thread_entity = process_entity->process.first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
-          {
-            if(thread_entity->kind == MAC_DMN_EntityKind_Thread)
-            {
-              mac_dmn_thread_clear_debug_traps(&thread_entity->thread);
-            }
-          }
+          mac_dmn_process_clear_debug_traps(&process_entity->process);
         }
       }
     }
@@ -2508,13 +2551,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
         MAC_DMN_Entity *process_entity = mac_dmn_entity_from_handle(task->process);
         if(process_entity != 0 && process_entity->kind == MAC_DMN_EntityKind_Process)
         {
-          for(MAC_DMN_Entity *thread_entity = process_entity->process.first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
-          {
-            if(thread_entity->kind == MAC_DMN_EntityKind_Thread)
-            {
-              mac_dmn_thread_clear_debug_traps(&thread_entity->thread);
-            }
-          }
+          mac_dmn_process_clear_debug_traps(&process_entity->process);
         }
       }
       for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
