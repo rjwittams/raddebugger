@@ -2053,8 +2053,19 @@ dmn_ctrl_launch(DMN_CtrlCtx *ctx, ProcessLaunchParams *params)
     if(task_result == KERN_SUCCESS && task != MACH_PORT_NULL)
     {
       MAC_DMN_Entity *entity = mac_dmn_process_entity_alloc(pid, task, 1, 1);
-      entity->process.dyld_bootstrap_pending = 1;
-      result = (U32)pid;
+      MAC_DMN_Process *process = &entity->process;
+      process->dyld_bootstrap_pending = 1;
+      if(mac_dmn_process_begin_mach_exceptions(process))
+      {
+        result = (U32)pid;
+      }
+      else
+      {
+        String8 exe = params->cmd_line.first ? params->cmd_line.first->string : str8_zero();
+        log_user_errorf("Could not launch `%S`: failed to install Mach exception port for pid %u.", exe, (U32)pid);
+        mac_dmn_kill_launched_child(pid);
+        mac_dmn_process_entity_release(entity);
+      }
     }
     else
     {
