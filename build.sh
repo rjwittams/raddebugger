@@ -24,7 +24,11 @@ git_hash=$(git describe --always --dirty)
 git_hash_full=$(git rev-parse HEAD)
 
 # --- Compile/Link Line Definitions -------------------------------------------
+host_os=$(uname -s)
 clang_common="-I../src/ -I/usr/include/freetype2/ -I../local/ -D_GNU_SOURCE -g -DBUILD_GIT_HASH=\"$git_hash\" -DBUILD_GIT_HASH_FULL=\"$git_hash_full\" -Wno-unknown-warning-option -fdiagnostics-absolute-paths -Wall -Wno-missing-braces -Wno-unused-function -Wno-writable-strings -Wno-unused-value -Wno-unused-variable -Wno-unused-local-typedef -Wno-deprecated-register -Wno-deprecated-declarations -Wno-unused-but-set-variable -Wno-single-bit-bitfield-constant-conversion -Wno-compare-distinct-pointer-types -Wno-initializer-overrides -Wno-incompatible-pointer-types-discards-qualifiers -Wno-for-loop-analysis -Xclang -flto-visibility-public-std -D_USE_MATH_DEFINES -Dstrdup=_strdup -Dgnu_printf=printf"
+if [ "$host_os" = "Darwin" ]; then
+  clang_common="$clang_common -x objective-c"
+fi
 clang_debug="$compiler -g -O0 -DBUILD_DEBUG=1 ${clang_common} ${auto_compile_flags}"
 clang_release="$compiler -g -O2 -DBUILD_DEBUG=0 ${clang_common} ${auto_compile_flags}"
 clang_link="-lpthread -lm -lrt -ldl"
@@ -35,11 +39,22 @@ gcc_release="$compiler -g -O2 -DBUILD_DEBUG=0 ${gcc_common} ${auto_compile_flags
 gcc_link="-lpthread -lm -lrt -ldl"
 gcc_out="-o"
 
+if [ "$host_os" = "Darwin" ]; then
+  clang_link="-lpthread -lm"
+  gcc_link="-lpthread -lm"
+fi
+
 # --- Per-Build Settings ------------------------------------------------------
 link_dll="-fPIC"
 link_os_gfx="-lX11 -lXext"
 link_render="-lGL -lEGL"
 link_font_provider="-lfreetype"
+
+if [ "$host_os" = "Darwin" ]; then
+  link_os_gfx="-framework Cocoa"
+  link_render=""
+  link_font_provider=""
+fi
 
 # --- Choose Compile/Link Lines -----------------------------------------------
 if [ -v gcc ];     then compile_debug="$gcc_debug"; fi

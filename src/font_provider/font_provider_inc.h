@@ -7,6 +7,7 @@
 ////////////////////////////////
 //~ rjf: Backend Constants
 
+#define FP_BACKEND_STUB 0
 #define FP_BACKEND_DWRITE 1
 #define FP_BACKEND_FREETYPE 2
 
@@ -18,6 +19,8 @@
 #  define FP_BACKEND FP_BACKEND_DWRITE
 # elif OS_LINUX
 #  define FP_BACKEND FP_BACKEND_FREETYPE
+# elif OS_MAC
+#  define FP_BACKEND FP_BACKEND_STUB
 # endif
 #endif
 
@@ -29,7 +32,9 @@
 ////////////////////////////////
 //~ rjf: Backend Includes
 
-#if FP_BACKEND == FP_BACKEND_DWRITE
+#if FP_BACKEND == FP_BACKEND_STUB
+# include "stub/font_provider_stub.h"
+#elif FP_BACKEND == FP_BACKEND_DWRITE
 # include "dwrite/font_provider_dwrite.h"
 #elif FP_BACKEND == FP_BACKEND_FREETYPE
 # include "freetype/font_provider_freetype.h"

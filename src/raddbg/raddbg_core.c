@@ -5327,12 +5327,16 @@ rd_window_frame(void)
     if(dpi != ws->last_dpi)
     {
       fnt_reset();
+#if OS_MAC
+      ws->last_dpi = dpi;
+#else
       F32 current_font_size = rd_font_size();
       F32 new_font_size = current_font_size * (dpi / ws->last_dpi);
       new_font_size = Clamp(6.f, new_font_size, 72.f);
       CFG_Node *font_size_cfg = cfg_node_child_from_string_or_alloc(rd_state->cfg, window, str8_lit("font_size"));
       cfg_node_new_replacef(rd_state->cfg, font_size_cfg, "%I64u", (U64)new_font_size);
       ws->last_dpi = dpi;
+#endif
     }
     
     //- rjf: commit position
