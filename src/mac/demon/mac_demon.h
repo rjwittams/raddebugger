@@ -240,6 +240,8 @@ internal B32 mac_dmn_thread_write_ip(MAC_DMN_Thread *thread, U64 ip);
 internal B32 mac_dmn_set_single_step_flag(MAC_DMN_Thread *thread, B32 is_on);
 internal B32 mac_dmn_thread_set_debug_traps(MAC_DMN_Thread *thread, DMN_TrapChunkList *traps);
 internal B32 mac_dmn_thread_clear_debug_traps(MAC_DMN_Thread *thread);
+internal B32 mac_dmn_process_set_debug_traps(MAC_DMN_Process *process, DMN_TrapChunkList *traps);
+internal void mac_dmn_process_clear_debug_traps(MAC_DMN_Process *process);
 internal DMN_Trap *mac_dmn_thread_hit_debug_trap(MAC_DMN_Thread *thread, MAC_DMN_FlaggedTrapTask *first_task);
 internal MAC_DMN_ActiveTrap *mac_dmn_active_trap_from_process_vaddr(MAC_DMN_ActiveTrap *first, DMN_Handle process, U64 vaddr);
 internal MAC_DMN_Entity *mac_dmn_thread_entity_from_active_trap(MAC_DMN_Process *process, MAC_DMN_ActiveTrap *first, MAC_DMN_ActiveTrap **active_trap_out);
