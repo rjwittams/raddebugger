@@ -12812,6 +12812,43 @@ rd_frame(void)
               String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
               str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
             }
+            else if(str8_match(cmd_name, str8_lit("dump_threads"), 0))
+            {
+              handled = 1;
+              D_Entity *selected_thread = d_entity_from_handle(rd_base_regs()->thread);
+              D_Event stop_event = d_ctrl_last_stop_event();
+              String8 stop_entity = d_string_from_handle(scratch.arena, stop_event.entity);
+              String8List lines = {0};
+              str8_list_pushf(scratch.arena, &lines, "running:%u selected_thread:%S last_stop:{cause:%u entity:%S rip:0x%I64x}",
+                              d_ctrl_targets_running(), d_string_from_handle(scratch.arena, rd_base_regs()->thread),
+                              stop_event.cause, stop_entity, stop_event.rip_vaddr);
+              D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
+              for(U64 process_idx = 0; process_idx < processes.count; process_idx += 1)
+              {
+                D_Entity *process = processes.v[process_idx];
+                String8 process_handle = d_string_from_handle(scratch.arena, process->handle);
+                String8 process_name = process->string.size != 0 ? str8_skip_last_slash(process->string) : str8_lit("???");
+                str8_list_pushf(scratch.arena, &lines, "\nprocess#%I64u pid:%I64u handle:%S name:%S",
+                                process_idx, process->id, process_handle, process_name);
+                U64 thread_idx = 0;
+                for(D_Entity *thread = process->first; thread != &d_entity_nil; thread = thread->next)
+                {
+                  if(thread->kind != D_EntityKind_Thread) { continue; }
+                  U64 rip_vaddr = d_query_cached_rip_from_thread(thread);
+                  D_Entity *module = d_module_from_process_vaddr(process, rip_vaddr);
+                  String8 module_name = module != &d_entity_nil ? str8_skip_last_slash(module->string) : str8_lit("???");
+                  U64 module_base = module != &d_entity_nil ? module->vaddr_range.min : 0;
+                  U64 rip_voff = module != &d_entity_nil ? rip_vaddr - module_base : 0;
+                  str8_list_pushf(scratch.arena, &lines, "\n  thread#%I64u id:%I64u handle:%S selected:%u frozen:%u soloed:%u rip:0x%I64x module:%S+0x%I64x",
+                                  thread_idx, thread->id, d_string_from_handle(scratch.arena, thread->handle),
+                                  thread == selected_thread, thread->is_frozen, thread->is_soloed,
+                                  rip_vaddr, module_name, rip_voff);
+                  thread_idx += 1;
+                }
+              }
+              String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+              str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+            }
             else if(str8_match(cmd_name, str8_lit("read_memory"), 0) ||
                str8_match(cmd_name, str8_lit("write_memory"), 0))
             {
