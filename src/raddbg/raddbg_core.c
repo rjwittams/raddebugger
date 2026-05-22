@@ -12783,7 +12783,39 @@ rd_frame(void)
             B32 handled = 0;
 
             // rjf: IPC-only diagnostics for debugger backend smoke tests.
-            if(str8_match(cmd_name, str8_lit("read_memory"), 0) ||
+            if(str8_match(cmd_name, str8_lit("dump_processes"), 0))
+            {
+              handled = 1;
+              D_Entity *selected_thread = d_entity_from_handle(rd_base_regs()->thread);
+              D_Entity *selected_process = d_entity_ancestor_from_kind(selected_thread, D_EntityKind_Process);
+              D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
+              String8List lines = {0};
+              str8_list_pushf(scratch.arena, &lines, "processes:%I64u running:%u", processes.count, d_ctrl_targets_running());
+              for(U64 idx = 0; idx < processes.count; idx += 1)
+              {
+                D_Entity *process = processes.v[idx];
+                U64 thread_count = 0;
+                U64 module_count = 0;
+                for(D_Entity *child = process->first; child != 0; child = child->next)
+                {
+                  if(child->kind == D_EntityKind_Thread)
+                  {
+                    thread_count += 1;
+                  }
+                  else if(child->kind == D_EntityKind_Module)
+                  {
+                    module_count += 1;
+                  }
+                }
+                String8 handle_string = d_string_from_handle(scratch.arena, process->handle);
+                String8 process_name = process->string.size != 0 ? str8_skip_last_slash(process->string) : str8_lit("???");
+                str8_list_pushf(scratch.arena, &lines, "\n#%I64u pid:%I64u handle:%S selected:%u threads:%I64u modules:%I64u name:%S",
+                                idx, process->id, handle_string, process == selected_process, thread_count, module_count, process_name);
+              }
+              String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+              str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+            }
+            else if(str8_match(cmd_name, str8_lit("read_memory"), 0) ||
                str8_match(cmd_name, str8_lit("write_memory"), 0))
             {
               handled = 1;
