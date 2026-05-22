@@ -1,6 +1,8 @@
 // Copyright (c) Epic Games Tools
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
+#include <Security/Authorization.h>
+
 internal DMN_Handle
 mac_dmn_handle_from_entity(MAC_DMN_Entity *entity)
 {
@@ -297,7 +299,7 @@ mac_dmn_launch_traced_process(ProcessLaunchParams *params)
   return pid;
 }
 
-internal OSStatus
+internal S32
 mac_dmn_taskport_authorization_status(void)
 {
   OSStatus result = errAuthorizationInternal;
@@ -1562,11 +1564,11 @@ internal U32
 dmn_ctrl_launch(DMN_CtrlCtx *ctx, ProcessLaunchParams *params)
 {
   U32 result = 0;
-  OSStatus auth_status = mac_dmn_taskport_authorization_status();
+  S32 auth_status = mac_dmn_taskport_authorization_status();
   if(auth_status != errAuthorizationSuccess)
   {
     String8 exe = params->cmd_line.first ? params->cmd_line.first->string : str8_zero();
-    log_user_errorf("Could not launch `%S`: taskport authorization failed with OSStatus %d. On macOS, approve local debugging from the logged-in GUI session before launching targets.", exe, auth_status);
+    log_user_errorf("Could not launch `%S`: taskport authorization failed with OSStatus %d. On macOS, run `security authorize -u -P system.privilege.taskport` from a logged-in Terminal session before launching targets.", exe, auth_status);
     return result;
   }
   pid_t pid = mac_dmn_launch_traced_process(params);
