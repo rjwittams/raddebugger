@@ -243,6 +243,7 @@ r_mtl_upload_buffer(void *data, U64 size, U64 align, U64 *out_offset)
     if(r_mtl_state->upload_buffers[idx] == 0 || r_mtl_state->upload_buffer_caps[idx] < need_cap)
     {
       U64 new_cap = ClampBot(MB(1), need_cap);
+      r_mtl_retire_object(r_mtl_state->upload_buffers[idx]);
       r_mtl_state->upload_buffers[idx] = [r_mtl_state->device newBufferWithLength:new_cap options:MTLResourceStorageModeShared];
       [r_mtl_state->upload_buffers[idx] setLabel:@"RAD transient upload buffer"];
       r_mtl_state->upload_buffer_caps[idx] = new_cap;
