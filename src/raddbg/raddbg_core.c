@@ -12889,10 +12889,19 @@ rd_frame(void)
               D_Entity *selected_thread = d_entity_from_handle(rd_base_regs()->thread);
               D_Event stop_event = d_ctrl_last_stop_event();
               String8 stop_entity = d_string_from_handle(scratch.arena, stop_event.entity);
+              B32 targets_running = d_ctrl_targets_running();
               String8List lines = {0};
-              str8_list_pushf(scratch.arena, &lines, "running:%u selected_thread:%S last_stop:{cause:%u entity:%S rip:0x%I64x}",
-                              d_ctrl_targets_running(), d_string_from_handle(scratch.arena, rd_base_regs()->thread),
-                              stop_event.cause, stop_entity, stop_event.rip_vaddr);
+              str8_list_pushf(scratch.arena, &lines, "running:%u selected_thread:%S",
+                              targets_running, d_string_from_handle(scratch.arena, rd_base_regs()->thread));
+              if(targets_running)
+              {
+                str8_list_pushf(scratch.arena, &lines, " last_stop:{stale_while_running:1}");
+              }
+              else
+              {
+                str8_list_pushf(scratch.arena, &lines, " last_stop:{cause:%u entity:%S rip:0x%I64x}",
+                                stop_event.cause, stop_entity, stop_event.rip_vaddr);
+              }
               D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
               for(U64 process_idx = 0; process_idx < processes.count; process_idx += 1)
               {
@@ -12905,15 +12914,23 @@ rd_frame(void)
                 for(D_Entity *thread = process->first; thread != &d_entity_nil; thread = thread->next)
                 {
                   if(thread->kind != D_EntityKind_Thread) { continue; }
-                  U64 rip_vaddr = d_query_cached_rip_from_thread(thread);
-                  D_Entity *module = d_module_from_process_vaddr(process, rip_vaddr);
-                  String8 module_name = module != &d_entity_nil ? str8_skip_last_slash(module->string) : str8_lit("???");
-                  U64 module_base = module != &d_entity_nil ? module->vaddr_range.min : 0;
-                  U64 rip_voff = module != &d_entity_nil ? rip_vaddr - module_base : 0;
-                  str8_list_pushf(scratch.arena, &lines, "\n  thread#%I64u id:%I64u handle:%S selected:%u frozen:%u soloed:%u rip:0x%I64x module:%S+0x%I64x",
+                  str8_list_pushf(scratch.arena, &lines, "\n  thread#%I64u id:%I64u handle:%S selected:%u frozen:%u soloed:%u",
                                   thread_idx, thread->id, d_string_from_handle(scratch.arena, thread->handle),
-                                  thread == selected_thread, thread->is_frozen, thread->is_soloed,
-                                  rip_vaddr, module_name, rip_voff);
+                                  thread == selected_thread, thread->is_frozen, thread->is_soloed);
+                  if(targets_running)
+                  {
+                    str8_list_pushf(scratch.arena, &lines, " rip:stale module:stale");
+                  }
+                  else
+                  {
+                    U64 rip_vaddr = d_query_cached_rip_from_thread(thread);
+                    D_Entity *module = d_module_from_process_vaddr(process, rip_vaddr);
+                    String8 module_name = module != &d_entity_nil ? str8_skip_last_slash(module->string) : str8_lit("???");
+                    U64 module_base = module != &d_entity_nil ? module->vaddr_range.min : 0;
+                    U64 rip_voff = module != &d_entity_nil ? rip_vaddr - module_base : 0;
+                    str8_list_pushf(scratch.arena, &lines, " rip:0x%I64x module:%S+0x%I64x",
+                                    rip_vaddr, module_name, rip_voff);
+                  }
                   thread_idx += 1;
                 }
               }
