@@ -33,6 +33,14 @@
 
 typedef struct MAC_WM_Window MAC_WM_Window;
 
+typedef enum MAC_WM_ChromeMode
+{
+  MAC_WM_ChromeMode_Integrated,
+  MAC_WM_ChromeMode_Native,
+  MAC_WM_ChromeMode_Custom,
+}
+MAC_WM_ChromeMode;
+
 @interface MAC_WM_WindowDelegate : NSObject<NSWindowDelegate>
 {
 @public
@@ -40,12 +48,20 @@ typedef struct MAC_WM_Window MAC_WM_Window;
 }
 @end
 
+#define MAC_WM_TITLE_BAR_CLIENT_AREA_CAP 128
+
 struct MAC_WM_Window
 {
   MAC_WM_Window *next;
   MAC_WM_Window *prev;
   NSWindow *ns_window;
   MAC_WM_WindowDelegate *delegate;
+  MAC_WM_ChromeMode chrome_mode;
+  B32 custom_border;
+  F32 custom_border_title_thickness;
+  F32 custom_border_edge_thickness;
+  U64 title_bar_client_area_count;
+  Rng2F32 title_bar_client_areas[MAC_WM_TITLE_BAR_CLIENT_AREA_CAP];
   B32 close_requested;
   B32 lose_focus_requested;
 };
@@ -58,6 +74,7 @@ struct MAC_WM_State
   MAC_WM_Window *first_window;
   MAC_WM_Window *last_window;
   MAC_WM_Window *free_window;
+  MAC_WM_ChromeMode chrome_mode;
   B32 key_is_down[WM_Key_COUNT];
 };
 
@@ -66,6 +83,9 @@ global MAC_WM_State *mac_wm_state = 0;
 internal WM_Window mac_wm_handle_from_window(MAC_WM_Window *window);
 internal MAC_WM_Window *mac_wm_window_from_handle(WM_Window handle);
 internal MAC_WM_Window *mac_wm_window_from_ns_window(NSWindow *ns_window);
+internal MAC_WM_ChromeMode mac_wm_chrome_mode_from_environment(void);
+internal B32 mac_wm_chrome_mode_has_native_controls(MAC_WM_ChromeMode mode);
+internal B32 mac_wm_window_pos_is_title_bar_client_area(MAC_WM_Window *window, Vec2F32 pos);
 internal Rng2F32 mac_wm_rect_from_ns_rect(NSRect rect);
 internal Vec2F32 mac_wm_client_pos_from_ns_point(MAC_WM_Window *window, NSPoint point);
 internal NSString *mac_wm_ns_string_from_string8(Arena *arena, String8 string);
