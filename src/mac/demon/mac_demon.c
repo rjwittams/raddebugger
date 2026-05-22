@@ -2031,6 +2031,19 @@ mac_dmn_set_single_step_flag(MAC_DMN_Thread *thread, B32 is_on)
         }
       }break;
 #endif
+#if ARCH_ARM64
+      case Arch_arm64:
+      {
+        arm_debug_state64_t state = {0};
+        mach_msg_type_number_t count = ARM_DEBUG_STATE64_COUNT;
+        if(thread_get_state(thread->thread, ARM_DEBUG_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+        {
+          if(is_on) { state.__mdscr_el1 |= bit1; }
+          else      { state.__mdscr_el1 &= ~bit1; }
+          result = (thread_set_state(thread->thread, ARM_DEBUG_STATE64, (thread_state_t)&state, ARM_DEBUG_STATE64_COUNT) == KERN_SUCCESS);
+        }
+      }break;
+#endif
     }
   }
   return result;
@@ -2291,10 +2304,23 @@ mac_dmn_thread_entity_from_active_trap(MAC_DMN_Process *process, MAC_DMN_ActiveT
         {
           MAC_DMN_Process *trap_process = mac_dmn_process_from_handle(active_trap->trap->process);
           U64 trap_size = active_trap->swap_bytes.size;
+          B32 ip_matches_trap = 0;
+          switch(thread_entity->thread.arch)
+          {
+            default:{}break;
+            case Arch_x64:
+            {
+              ip_matches_trap = (trap_size <= ip && active_trap->trap->vaddr == ip - trap_size);
+            }break;
+            case Arch_arm64:
+            {
+              ip_matches_trap = (active_trap->trap->vaddr == ip ||
+                                 (trap_size <= ip && active_trap->trap->vaddr == ip - trap_size));
+            }break;
+          }
           if(active_trap->good &&
              trap_process == process &&
-             trap_size <= ip &&
-             active_trap->trap->vaddr == ip - trap_size)
+             ip_matches_trap)
           {
             result = thread_entity;
             result_trap = active_trap;

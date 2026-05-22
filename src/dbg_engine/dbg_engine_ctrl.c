@@ -6454,19 +6454,32 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
           ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
           U64 trap_inst_size = arch_info->trap_instruction.size;
           U64 rip = d_ip_from_thread(thread->handle);
-          if(trap_inst_size != 0 && trap_inst_size <= rip)
+          if(trap_inst_size != 0)
           {
-            U64 trap_vaddr = rip - trap_inst_size;
             for(DMN_TrapChunkNode *n = user_traps.first; n != 0 && stop_event == 0; n = n->next)
             {
               for(DMN_Trap *trap = n->v, *opl = n->v+n->count; trap < opl; trap += 1)
               {
-                if(dmn_handle_match(trap->process, process_dmn) && trap->vaddr == trap_vaddr)
+                B32 ip_matches_trap = 0;
+                switch(thread->arch)
+                {
+                  default:{}break;
+                  case Arch_x64:
+                  {
+                    ip_matches_trap = (trap_inst_size <= rip && trap->vaddr == rip - trap_inst_size);
+                  }break;
+                  case Arch_arm64:
+                  {
+                    ip_matches_trap = (trap->vaddr == rip ||
+                                       (trap_inst_size <= rip && trap->vaddr == rip - trap_inst_size));
+                  }break;
+                }
+                if(dmn_handle_match(trap->process, process_dmn) && ip_matches_trap)
                 {
                   void *regs_block = push_array(scratch.arena, U8, arch_info->reg_block_size);
                   if(d_thread_read_reg_block(thread->handle, regs_block))
                   {
-                    arch_reg_block_write_ip(arch_info, regs_block, trap_vaddr);
+                    arch_reg_block_write_ip(arch_info, regs_block, trap->vaddr);
                     d_thread_write_reg_block(thread->handle, regs_block);
                   }
                   DMN_Event *event = push_array(scratch.arena, DMN_Event, 1);
@@ -6474,8 +6487,8 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
                   event->process = process_dmn;
                   event->thread = d_dmn_from_handle(thread->handle);
                   event->arch = thread->arch;
-                  event->instruction_pointer = trap_vaddr;
-                  event->address = trap_vaddr;
+                  event->instruction_pointer = trap->vaddr;
+                  event->address = trap->vaddr;
                   event->user_data = trap->id;
                   stop_event = event;
                   stop_cause = D_EventCause_UserBreakpoint;
