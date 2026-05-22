@@ -1,3 +1,4 @@
+#undef T_Group
 #define T_Group "p2r"
 
 #if OS_WINDOWS
@@ -128,4 +129,3 @@ TEST(p2r_determ)
 #endif
 
 #undef T_Group
-

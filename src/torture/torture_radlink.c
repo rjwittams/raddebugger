@@ -432,6 +432,7 @@ t_write_entry_obj(void)
 
 ////////////////////////////////
 
+#undef T_Group
 #define T_Group "Linker" 
 
 TEST(machine_compat_check)
