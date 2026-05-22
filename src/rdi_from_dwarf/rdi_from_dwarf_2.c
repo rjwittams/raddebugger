@@ -737,7 +737,10 @@ d2r2_convert(Arena *arena, D2R2_ConvertParams *params)
       {
         DW2_LineTableFile *f = &hdr->files.v[file_idx];
         DW2_LineTableFile *dir = &hdr->dirs.v[f->dir_idx];
-        String8 full_file_path = str8f(scratch2.arena, "%S%s%S", dir->file_name, dir->file_name.size != 0 ? "/" : "", f->file_name);
+        PathStyle file_name_style = path_style_from_str8(f->file_name);
+        String8 full_file_path = (file_name_style == PathStyle_Relative ?
+                                  str8f(scratch2.arena, "%S%s%S", dir->file_name, dir->file_name.size != 0 ? "/" : "", f->file_name) :
+                                  f->file_name);
         U64 hash = u64_hash_from_str8(full_file_path);
         U64 slot_idx = hash%slots_count;
         SrcFileNode *node = 0;

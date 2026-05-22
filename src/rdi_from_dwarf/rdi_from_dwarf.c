@@ -2861,10 +2861,18 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
         // make file path
         String8 path;
         {
-          String8List path_list = {0};
-          str8_list_push_node(&path_list, &(String8Node){ .string = lookup->vm->header.dir_table.v[src->dir_idx] });
-          str8_list_push_node(&path_list, &(String8Node){ .string = src->path });
-          path = str8_path_list_join_by_style(arena, &path_list, path_style);
+          PathStyle src_path_style = path_style_from_str8(src->path);
+          if(src_path_style == PathStyle_Relative)
+          {
+            String8List path_list = {0};
+            str8_list_push_node(&path_list, &(String8Node){ .string = lookup->vm->header.dir_table.v[src->dir_idx] });
+            str8_list_push_node(&path_list, &(String8Node){ .string = src->path });
+            path = str8_path_list_join_by_style(arena, &path_list, path_style);
+          }
+          else
+          {
+            path = str8_copy(arena, src->path);
+          }
         }
         
         // fill out source file
