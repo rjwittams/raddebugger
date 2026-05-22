@@ -1239,6 +1239,21 @@ d_modules_from_dbgi_key(Arena *arena, DI_Key dbgi_key)
   return list;
 }
 
+internal B32
+d_debug_info_required_from_user_bp_refs(B32 file_is_pdb, B32 pdb_has_user_bp_refs, String8List touched_symbols, String8List touched_files)
+{
+  B32 result = 0;
+  if(file_is_pdb)
+  {
+    result = pdb_has_user_bp_refs;
+  }
+  else
+  {
+    result = (touched_symbols.node_count != 0 || touched_files.node_count != 0);
+  }
+  return result;
+}
+
 internal D_Entity *
 d_thread_from_id(U64 id)
 {
@@ -3995,7 +4010,33 @@ d_ctrl_thread__append_resolved_module_user_bp_traps(Arena *arena, D_EvalScope *e
     {
       String8 expr = bp->vaddr_expr;
       E_Value value = e_value_from_string(expr);
-      if(value.u64 != 0 || bp->flags != 0)
+      B32 resolved_to_procedure = 0;
+      if(value.u64 == 0)
+      {
+        RDI_NameMap *mapptr = rdi_element_from_name_idx(rdi, NameMaps, RDI_NameMapKind_Procedures);
+        if(mapptr != 0)
+        {
+          RDI_ParsedNameMap map = {0};
+          rdi_parsed_from_name_map(rdi, mapptr, &map);
+          RDI_NameMapNode *node = rdi_name_map_lookup(rdi, &map, expr.str, expr.size);
+          U32 id_count = 0;
+          U32 *ids = rdi_matches_from_map_node(rdi, node, &id_count);
+          for(U32 idx = 0; idx < id_count; idx += 1)
+          {
+            RDI_Symbol *procedure = rdi_element_from_name_idx(rdi, Procedures, ids[idx]);
+            U64 voff = rdi_first_voff_from_procedure(rdi, procedure);
+            if(voff != 0)
+            {
+              DMN_Trap trap = {process_dmn, base_vaddr + voff, (U64)bp};
+              trap.flags = d_dmn_trap_flags_from_breakpoint_flags(bp->flags);
+              trap.size = bp->size;
+              dmn_trap_chunk_list_push(arena, traps_out, 256, &trap);
+              resolved_to_procedure = 1;
+            }
+          }
+        }
+      }
+      if(!resolved_to_procedure && (value.u64 != 0 || bp->flags != 0))
       {
         DMN_Trap trap = {process_dmn, value.u64, (U64)bp};
         trap.flags = d_dmn_trap_flags_from_breakpoint_flags(bp->flags);
@@ -5292,6 +5333,7 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
                 
                 //- rjf: file is PDB -> do thin parse & lookup of all breakpoint files/symbols.
                 // if any are found in the PDB, then this RDI is necessary.
+                B32 file_has_user_bp_refs = 0;
                 if(file_is_pdb)
                 {
                   FileProperties props = properties_from_file(file);
@@ -5299,11 +5341,12 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
                   void *file_base = file_map_view_open(map, AccessFlag_Read, r1u64(0, props.size));
                   String8 file_data = str8(file_base, props.size);
                   {
-                    rdi_is_necessary = pdb_has_symbol_or_file_ref(file_data, d_ctrl_state->msg_user_bp_touched_symbols, d_ctrl_state->msg_user_bp_touched_files);
+                    file_has_user_bp_refs = pdb_has_symbol_or_file_ref(file_data, d_ctrl_state->msg_user_bp_touched_symbols, d_ctrl_state->msg_user_bp_touched_files);
                   }
                   file_map_view_close(map, file_base, r1u64(0, props.size));
                   file_map_close(map);
                 }
+                rdi_is_necessary = d_debug_info_required_from_user_bp_refs(file_is_pdb, file_has_user_bp_refs, d_ctrl_state->msg_user_bp_touched_symbols, d_ctrl_state->msg_user_bp_touched_files);
               }
               file_close(file);
               node = push_array(d_ctrl_state->ctrl_thread_msg_process_arena, D_ModuleReqCacheNode, 1);
