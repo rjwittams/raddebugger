@@ -218,6 +218,25 @@ mac_dmn_apply_child_stdio(ProcessLaunchParams *params)
   }
 }
 
+internal void
+mac_dmn_kill_launched_child(pid_t pid)
+{
+  if(pid > 0)
+  {
+    ptrace(PT_KILL, pid, 0, 0);
+    kill(pid, SIGKILL);
+    kill(pid, SIGCONT);
+    for(;;)
+    {
+      pid_t wait_id = waitpid(pid, 0, 0);
+      if(wait_id == pid || (wait_id < 0 && errno != EINTR))
+      {
+        break;
+      }
+    }
+  }
+}
+
 internal pid_t
 mac_dmn_launch_traced_process(ProcessLaunchParams *params)
 {
@@ -245,8 +264,28 @@ mac_dmn_launch_traced_process(ProcessLaunchParams *params)
     while(wait_id < 0 && errno == EINTR);
     if(wait_id != pid || !WIFSTOPPED(status))
     {
-      kill(pid, SIGKILL);
-      waitpid(pid, 0, WNOHANG);
+      String8 exe = params->cmd_line.first ? params->cmd_line.first->string : str8_zero();
+      if(wait_id != pid)
+      {
+        log_user_errorf("Could not launch `%S`: waitpid failed for traced child.", exe);
+      }
+      else if(WIFEXITED(status))
+      {
+        log_user_errorf("Could not launch `%S`: child exited before debugger attach with status %u.", exe, (U32)WEXITSTATUS(status));
+      }
+      else if(WIFSIGNALED(status))
+      {
+        log_user_errorf("Could not launch `%S`: child exited before debugger attach from signal %u.", exe, (U32)WTERMSIG(status));
+      }
+      else
+      {
+        log_user_errorf("Could not launch `%S`: child did not stop for debugger attach.", exe);
+      }
+      if(wait_id != pid)
+      {
+        kill(pid, SIGKILL);
+        waitpid(pid, 0, WNOHANG);
+      }
       pid = 0;
     }
   }
@@ -1500,15 +1539,17 @@ dmn_ctrl_launch(DMN_CtrlCtx *ctx, ProcessLaunchParams *params)
   if(pid != 0)
   {
     mach_port_t task = MACH_PORT_NULL;
-    if(task_for_pid(mach_task_self(), (int)pid, &task) == KERN_SUCCESS && task != MACH_PORT_NULL)
+    kern_return_t task_result = task_for_pid(mach_task_self(), (int)pid, &task);
+    if(task_result == KERN_SUCCESS && task != MACH_PORT_NULL)
     {
       mac_dmn_process_entity_alloc(pid, task, 1, 1);
       result = (U32)pid;
     }
     else
     {
-      kill(pid, SIGKILL);
-      waitpid(pid, 0, WNOHANG);
+      String8 exe = params->cmd_line.first ? params->cmd_line.first->string : str8_zero();
+      log_user_errorf("Could not launch `%S`: task_for_pid failed for pid %u with kern_return_t %d. On macOS, enable DevToolsSecurity and ensure the debugger has permission to control processes.", exe, (U32)pid, task_result);
+      mac_dmn_kill_launched_child(pid);
     }
   }
   return result;
@@ -1519,7 +1560,8 @@ dmn_ctrl_attach(DMN_CtrlCtx *ctx, U32 pid)
 {
   B32 result = 0;
   mach_port_t task = MACH_PORT_NULL;
-  if(task_for_pid(mach_task_self(), (int)pid, &task) == KERN_SUCCESS && task != MACH_PORT_NULL)
+  kern_return_t task_result = task_for_pid(mach_task_self(), (int)pid, &task);
+  if(task_result == KERN_SUCCESS && task != MACH_PORT_NULL)
   {
     int ptrace_result = ptrace(PT_ATTACHEXC, (pid_t)pid, 0, 0);
     if(ptrace_result == 0 || errno == EBUSY)
@@ -1529,8 +1571,13 @@ dmn_ctrl_attach(DMN_CtrlCtx *ctx, U32 pid)
     }
     else
     {
+      log_user_errorf("Could not attach to pid %u: ptrace(PT_ATTACHEXC) failed with errno %d.", pid, errno);
       mach_port_deallocate(mach_task_self(), task);
     }
+  }
+  else
+  {
+    log_user_errorf("Could not attach to pid %u: task_for_pid failed with kern_return_t %d. On macOS, enable DevToolsSecurity and ensure the debugger has permission to control processes.", pid, task_result);
   }
   return result;
 }
