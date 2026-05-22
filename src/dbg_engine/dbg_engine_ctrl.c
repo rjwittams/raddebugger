@@ -1894,6 +1894,26 @@ d_macho_unwind_info_data_from_module(Arena *arena, D_Handle module_handle)
   return result;
 }
 
+internal U64
+d_eh_frame_vaddr_from_module(D_Handle module_handle)
+{
+  U64 result = 0;
+  U64 hash = d_hash_from_handle(module_handle);
+  U64 slot_idx = hash%d_ctrl_state->module_image_info_cache.slots_count;
+  U64 stripe_idx = slot_idx%d_ctrl_state->module_image_info_cache.stripes_count;
+  D_ModuleImageInfoCacheSlot *slot = &d_ctrl_state->module_image_info_cache.slots[slot_idx];
+  D_ModuleImageInfoCacheStripe *stripe = &d_ctrl_state->module_image_info_cache.stripes[stripe_idx];
+  MutexScopeR(stripe->rw_mutex) for(D_ModuleImageInfoCacheNode *n = slot->first; n != 0; n = n->next)
+  {
+    if(d_handle_match(n->module, module_handle) && n->is_unwind_eh)
+    {
+      result = n->eh_ptr_ctx.data_vaddr;
+      break;
+    }
+  }
+  return result;
+}
+
 ////////////////////////////////
 //~ rjf: Unwinding Functions
 
@@ -2019,7 +2039,7 @@ d_eh_frame_hdr_from_eh_frame(Arena *arena, String8 eh_frame_data, U64 eh_frame_v
 }
 
 internal D_UnwindStepResult
-d_establish_frame_unwind_context__dwarf(Arena *arena, D_Handle process_handle, D_Handle module_handle, Arch arch, void *regs, U64 endt_us, D_FrameUnwindContext *ctx_out)
+d_establish_frame_unwind_context__dwarf_from_fde_addr(Arena *arena, D_Handle process_handle, D_Handle module_handle, Arch arch, void *regs, U64 fde_addr, U64 endt_us, D_FrameUnwindContext *ctx_out)
 {
   Temp scratch = scratch_begin(&arena, 1);
   ARCH_Info *arch_info = arch_info_from_arch(arch);
@@ -2054,8 +2074,12 @@ d_establish_frame_unwind_context__dwarf(Arena *arena, D_Handle process_handle, D
   // grab IP
   U64 ip = arch_ip_from_reg_block(arch_info, regs);
   
-  // use .eh_frame_hdr to quickly locate nearest FDE
-  U64 fde_addr = eh_find_nearest_fde(eh_frame_hdr, &eh_ptr_ctx, ip);
+  // use .eh_frame_hdr to quickly locate nearest FDE, unless the caller
+  // already has an exact FDE from a compact-unwind MODE_DWARF entry.
+  if(fde_addr == max_U64)
+  {
+    fde_addr = eh_find_nearest_fde(eh_frame_hdr, &eh_ptr_ctx, ip);
+  }
   
   if(fde_addr != max_U64)
   {
@@ -2212,6 +2236,13 @@ d_establish_frame_unwind_context__dwarf(Arena *arena, D_Handle process_handle, D
   }
   
   scratch_end(scratch);
+  return result;
+}
+
+internal D_UnwindStepResult
+d_establish_frame_unwind_context__dwarf(Arena *arena, D_Handle process_handle, D_Handle module_handle, Arch arch, void *regs, U64 endt_us, D_FrameUnwindContext *ctx_out)
+{
+  D_UnwindStepResult result = d_establish_frame_unwind_context__dwarf_from_fde_addr(arena, process_handle, module_handle, arch, regs, max_U64, endt_us, ctx_out);
   return result;
 }
 
@@ -3381,11 +3412,31 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
             U64 compact_cfa = 0;
             B32 compact_is_stale = 0;
             B32 compact_lookup_good = macho_unwind_info_lookup(unwind_info_data, rip - module_entity->vaddr_range.min, &lookup);
+            B32 compact_dwarf = (compact_lookup_good &&
+                                 (lookup.encoding & MACHO_UNWIND_X64_MODE_MASK) == MACHO_UNWIND_X64_MODE_DWARF);
             B32 compact_supported = compact_lookup_good && d_macho_compact_unwind_x64_mode_is_supported(lookup.encoding);
             B32 compact_cfa_good = compact_supported && d_macho_compact_unwind_x64_cfa_from_encoding(process_entity->handle, module_entity->vaddr_range.min, &lookup, regs_x64, &compact_is_stale, endt_us, &compact_cfa);
             if(compact_is_stale)
             {
               frame_ctx_result.flags |= D_UnwindFlag_Stale;
+            }
+            else if(compact_dwarf)
+            {
+              U64 eh_frame_vaddr = d_eh_frame_vaddr_from_module(module_entity->handle);
+              if(eh_frame_vaddr != 0)
+              {
+                U64 fde_addr = eh_frame_vaddr + (lookup.encoding & MACHO_UNWIND_X64_DWARF_SECTION_OFFSET);
+                D_FrameUnwindContext compact_dwarf_frame_ctx = {0};
+                frame_ctx_result = d_establish_frame_unwind_context__dwarf_from_fde_addr(arena, process_entity->handle, module_entity->handle, arch, regs_block, fde_addr, endt_us, &compact_dwarf_frame_ctx);
+                if(!(frame_ctx_result.flags & (D_UnwindFlag_Error|D_UnwindFlag_Stale)))
+                {
+                  frame_ctx = compact_dwarf_frame_ctx;
+                }
+              }
+              else
+              {
+                frame_ctx_result.flags |= D_UnwindFlag_Error;
+              }
             }
             else if(compact_lookup_good &&
                     compact_supported &&
