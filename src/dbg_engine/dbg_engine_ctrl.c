@@ -2146,10 +2146,16 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
           X64_RegBlock *regs_x64 = regs_block;
           MachO_UnwindInfoLookupResult lookup = {0};
           B32 compact_is_stale = 0;
-          if(macho_unwind_info_lookup(module_info->macho_unwind_info_data, start_ip - module_entity->vaddr_range.min, &lookup) &&
-             d_macho_compact_unwind_x64_mode_is_supported(lookup.encoding) &&
-             d_macho_compact_unwind_x64_cfa_from_encoding(process_entity->handle, module_entity->vaddr_range.min, &lookup, regs_x64, &compact_is_stale, endt_us, &cfa) &&
-             !compact_is_stale)
+          B32 compact_lookup_good = macho_unwind_info_lookup(module_info->macho_unwind_info_data, start_ip - module_entity->vaddr_range.min, &lookup);
+          B32 compact_supported = compact_lookup_good && d_macho_compact_unwind_x64_mode_is_supported(lookup.encoding);
+          B32 compact_cfa_good = compact_supported && d_macho_compact_unwind_x64_cfa_from_encoding(process_entity->handle, module_entity->vaddr_range.min, &lookup, regs_x64, &compact_is_stale, endt_us, &cfa);
+          if(compact_is_stale)
+          {
+            unwind.flags |= D_UnwindFlag_Stale;
+          }
+          else if(compact_lookup_good &&
+                  compact_supported &&
+                  compact_cfa_good)
           {
             D_UnwindStepResult step = d_unwind_step__macho_x64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, regs_x64, endt_us);
             if(step.flags == 0)
@@ -2157,13 +2163,17 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
               last_frame_node->v.cfa = cfa;
               step_is_good = 1;
             }
+            else if(step.flags & D_UnwindFlag_Stale)
+            {
+              unwind.flags |= D_UnwindFlag_Stale;
+            }
             else
             {
               MemoryCopy(regs_block, regs_block_restore, arch_reg_block_size);
             }
           }
         }
-        if(!step_is_good)
+        if(!unwind.flags && !step_is_good)
         {
           // rjf: try generic unwind step
           UWND_StepResult step = uwnd_step(unwinder, arch, &memory_map, &unwinder_module_info, tls_vaddr, regs_block, &cfa);
