@@ -5,3 +5,6 @@
 #if defined(X64_H)
 # include "x64/disasm/x64_disasm.c"
 #endif
+#if defined(ARM64_H)
+# include "arm64/disasm/arm64_disasm.c"
+#endif
