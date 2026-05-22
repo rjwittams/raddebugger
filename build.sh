@@ -79,7 +79,7 @@ fi
 
 # --- Build Everything (@build_targets) ---------------------------------------
 cd build
-if [ -n "${raddbg+x}" ];              then didbuild=1 && $compile ../src/raddbg/raddbg_main.c                                    $compile_link $link_os_gfx $link_render $link_font_provider $out raddbg; fi
+if [ -n "${raddbg+x}" ];              then didbuild=1 && $compile ../src/raddbg/raddbg_main.c                                    $compile_link $link_os_gfx $link_render $link_font_provider $out raddbg; if [ "$host_os" = "Darwin" ]; then codesign --force --sign - --entitlements ../src/mac/raddbg_debug.entitlements raddbg; fi; fi
 if [ -n "${radbin+x}" ];              then didbuild=1 && $compile ../src/radbin/radbin_main.c                                    $compile_link $out radbin; fi
 if [ -n "${radlink+x}" ];             then didbuild=1 && $compile ../src/linker/lnk.c                                            $compile_link $out radlink; fi
 cd ..
