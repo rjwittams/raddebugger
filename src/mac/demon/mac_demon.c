@@ -179,6 +179,28 @@ mac_dmn_thread_entity_from_thread_id(MAC_DMN_Process *process, U64 thread_id)
   return result;
 }
 
+internal B32
+mac_dmn_thread_port_is_valid(MAC_DMN_Thread *thread)
+{
+  B32 result = 0;
+  if(thread != 0 && thread->thread != MACH_PORT_NULL)
+  {
+    switch(thread->arch)
+    {
+      default:{}break;
+#if ARCH_X64
+      case Arch_x64:
+      {
+        x86_thread_state64_t state = {0};
+        mach_msg_type_number_t count = x86_THREAD_STATE64_COUNT;
+        result = (thread_get_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS);
+      }break;
+#endif
+    }
+  }
+  return result;
+}
+
 internal char **
 mac_dmn_argv_from_launch_params(Arena *arena, ProcessLaunchParams *params)
 {
@@ -458,6 +480,29 @@ mac_dmn_process_end_mach_exceptions(MAC_DMN_Process *process)
   }
 }
 
+internal B32
+mac_dmn_process_reacquire_task_after_exec(MAC_DMN_Process *process)
+{
+  B32 result = 0;
+  if(process != 0)
+  {
+    mac_dmn_process_end_mach_exceptions(process);
+    if(process->task != MACH_PORT_NULL)
+    {
+      mach_port_deallocate(mach_task_self(), process->task);
+      process->task = MACH_PORT_NULL;
+    }
+    mach_port_t task = MACH_PORT_NULL;
+    kern_return_t task_result = task_for_pid(mach_task_self(), (int)process->pid, &task);
+    if(task_result == KERN_SUCCESS && task != MACH_PORT_NULL)
+    {
+      process->task = task;
+      result = mac_dmn_process_begin_mach_exceptions(process);
+    }
+  }
+  return result;
+}
+
 internal S32
 mac_dmn_soft_signal_from_exception_message(MAC_DMN_ExceptionMessage *message)
 {
@@ -665,6 +710,24 @@ mac_dmn_thread_entity_release(MAC_DMN_Entity *entity)
   }
 }
 
+internal void
+mac_dmn_process_clear_thread_entities(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity)
+{
+  MAC_DMN_Process *process = process_entity != 0 && process_entity->kind == MAC_DMN_EntityKind_Process ? &process_entity->process : 0;
+  if(process != 0)
+  {
+    for(MAC_DMN_Entity *thread_entity = process->first_thread_entity, *next = 0; thread_entity != 0; thread_entity = next)
+    {
+      next = thread_entity->next;
+      if(arena != 0 && events != 0)
+      {
+        mac_dmn_push_event_exit_thread(arena, events, process_entity, thread_entity);
+      }
+      mac_dmn_thread_entity_release(thread_entity);
+    }
+  }
+}
+
 internal MAC_DMN_Entity *
 mac_dmn_module_entity_alloc(MAC_DMN_Process *process, U64 base_vaddr, U64 size, String8 path, Arch arch)
 {
@@ -727,6 +790,24 @@ mac_dmn_module_entity_release(MAC_DMN_Entity *entity)
 }
 
 internal void
+mac_dmn_process_clear_module_entities(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity)
+{
+  MAC_DMN_Process *process = process_entity != 0 && process_entity->kind == MAC_DMN_EntityKind_Process ? &process_entity->process : 0;
+  if(process != 0)
+  {
+    for(MAC_DMN_Entity *module_entity = process->first_module_entity, *next = 0; module_entity != 0; module_entity = next)
+    {
+      next = module_entity->next;
+      if(arena != 0 && events != 0)
+      {
+        mac_dmn_push_event_unload_module(arena, events, process_entity, module_entity);
+      }
+      mac_dmn_module_entity_release(module_entity);
+    }
+  }
+}
+
+internal void
 mac_dmn_refresh_threads(MAC_DMN_Process *process)
 {
   if(process != 0)
@@ -758,13 +839,27 @@ mac_dmn_refresh_thread_events(Arena *arena, DMN_EventList *events, MAC_DMN_Entit
       {
         U64 thread_id = mac_dmn_thread_id_from_port(threads[idx]);
         live_thread_ids[idx] = thread_id;
-        if(mac_dmn_thread_entity_from_thread_id(process, thread_id) == 0)
+        MAC_DMN_Entity *thread_entity = mac_dmn_thread_entity_from_thread_id(process, thread_id);
+        if(thread_entity == 0)
         {
-          MAC_DMN_Entity *thread_entity = mac_dmn_thread_entity_alloc(process, threads[idx], process->arch);
+          thread_entity = mac_dmn_thread_entity_alloc(process, threads[idx], process->arch);
           if(arena != 0 && events != 0)
           {
             mac_dmn_push_event_create_thread(arena, events, process_entity, thread_entity);
           }
+        }
+        else if(!mac_dmn_thread_port_is_valid(&thread_entity->thread))
+        {
+          if(thread_entity->thread.thread != MACH_PORT_NULL)
+          {
+            mach_port_deallocate(mach_task_self(), thread_entity->thread.thread);
+          }
+          thread_entity->thread.thread = threads[idx];
+          thread_entity->thread.thread_id = thread_id;
+          thread_entity->thread.arch = process->arch;
+          thread_entity->thread.is_suspended_for_run = 0;
+          thread_entity->thread.is_stepping_over_dyld_notification = 0;
+          thread_entity->thread.dyld_notification_step_vaddr = 0;
         }
         else
         {
@@ -946,6 +1041,14 @@ mac_dmn_refresh_initial_module(MAC_DMN_Process *process)
     Arch arch = arch_from_macho_cpu_type(bin.header.cpu_type);
     if(path.size != 0 && base_vaddr != 0 && image_size != 0)
     {
+      process->arch = arch;
+      for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+      {
+        if(thread_entity->kind == MAC_DMN_EntityKind_Thread)
+        {
+          thread_entity->thread.arch = arch;
+        }
+      }
       mac_dmn_module_entity_alloc(process, base_vaddr, image_size, path, arch);
     }
     scratch_end(scratch);
@@ -1188,6 +1291,25 @@ mac_dmn_refresh_module_events(Arena *arena, DMN_EventList *events, MAC_DMN_Entit
   {
     Temp scratch = scratch_begin(&arena, 1);
     MAC_DMN_Process *process = &process_entity->process;
+    String8 executable_path = mac_dmn_executable_path_from_pid(scratch.arena, process->pid);
+    MAC_DMN_Entity *first_module = process->first_module_entity;
+    if(first_module != 0 &&
+       executable_path.size != 0 &&
+       first_module->kind == MAC_DMN_EntityKind_Module &&
+       !path_match_normalized(first_module->module.path, executable_path))
+    {
+      mac_dmn_process_reacquire_task_after_exec(process);
+      mac_dmn_process_clear_thread_entities(arena, events, process_entity);
+      mac_dmn_process_clear_module_entities(arena, events, process_entity);
+      mac_dmn_refresh_initial_module(process);
+      for(MAC_DMN_Entity *module_entity = process->first_module_entity; module_entity != 0; module_entity = module_entity->next)
+      {
+        if(events != 0)
+        {
+          mac_dmn_push_event_load_module(arena, events, process_entity, module_entity);
+        }
+      }
+    }
     for(MAC_DMN_Entity *module_entity = process->first_module_entity; module_entity != 0; module_entity = module_entity->next)
     {
       module_entity->module.is_live = 0;
@@ -1231,6 +1353,10 @@ mac_dmn_refresh_module_events(Arena *arena, DMN_EventList *events, MAC_DMN_Entit
       for(MAC_DMN_Entity *module_entity = process->first_module_entity, *next = 0; module_entity != 0; module_entity = next)
       {
         next = module_entity->next;
+        if(executable_path.size != 0 && path_match_normalized(module_entity->module.path, executable_path))
+        {
+          module_entity->module.is_live = 1;
+        }
         if(!module_entity->module.is_live)
         {
           if(events != 0)
@@ -1238,6 +1364,17 @@ mac_dmn_refresh_module_events(Arena *arena, DMN_EventList *events, MAC_DMN_Entit
             mac_dmn_push_event_unload_module(arena, events, process_entity, module_entity);
           }
           mac_dmn_module_entity_release(module_entity);
+        }
+      }
+      if(process->first_module_entity == 0)
+      {
+        mac_dmn_refresh_initial_module(process);
+        for(MAC_DMN_Entity *module_entity = process->first_module_entity; module_entity != 0; module_entity = module_entity->next)
+        {
+          if(events != 0)
+          {
+            mac_dmn_push_event_load_module(arena, events, process_entity, module_entity);
+          }
         }
       }
     }
@@ -2702,8 +2839,8 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
         process->is_running = 0;
         mac_dmn_process_resume_suspended_threads(process);
         DMN_EventList result_before_auto_refresh = result;
-        mac_dmn_refresh_thread_events(arena, &result, process_entity);
         mac_dmn_refresh_module_events(arena, &result, process_entity);
+        mac_dmn_refresh_thread_events(arena, &result, process_entity);
         if(!got_mach_exception && WIFEXITED(status))
         {
           mac_dmn_push_event_exit_process(arena, &result, process_entity, (U32)WEXITSTATUS(status));
