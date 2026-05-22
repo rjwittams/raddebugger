@@ -9931,6 +9931,10 @@ rd_gather_auto_exprs(Arena *arena)
           
           // rjf: disassemble next instruction
           DASM_Inst inst = dasm_inst_from_code(scratch.arena, thread->arch, vaddr_range.min + off, str8_skip(slice.data, off), DASM_Syntax_Intel);
+          if(inst.size == 0)
+          {
+            break;
+          }
           next_off = off + inst.size;
           
           // rjf: gather locations from instruction
