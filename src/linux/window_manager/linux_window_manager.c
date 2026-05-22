@@ -687,6 +687,20 @@ wm_mouse_from_window(WM_Window handle)
 }
 
 ////////////////////////////////
+//~ @os_hooks Application Menu (Implemented Per-OS)
+
+internal void
+wm_set_main_menu(WM_MenuArray menu_array)
+{
+}
+
+internal B32
+wm_application_menu_bar_is_native(void)
+{
+  return 0;
+}
+
+////////////////////////////////
 //~ rjf: @os_hooks Cursors (Implemented Per-OS)
 
 internal void

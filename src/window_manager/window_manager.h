@@ -94,9 +94,41 @@ typedef enum WM_EventKind
   WM_EventKind_WindowClose,
   WM_EventKind_FileDrop,
   WM_EventKind_Wakeup,
+  WM_EventKind_MenuCommand,
   WM_EventKind_COUNT
 }
 WM_EventKind;
+
+typedef enum WM_MenuItemKind
+{
+  WM_MenuItemKind_Null,
+  WM_MenuItemKind_Command,
+  WM_MenuItemKind_Separator,
+}
+WM_MenuItemKind;
+
+typedef struct WM_MenuItem WM_MenuItem;
+struct WM_MenuItem
+{
+  WM_MenuItemKind kind;
+  String8 label;
+  String8 command_name;
+};
+
+typedef struct WM_Menu WM_Menu;
+struct WM_Menu
+{
+  String8 label;
+  U64 item_count;
+  WM_MenuItem *items;
+};
+
+typedef struct WM_MenuArray WM_MenuArray;
+struct WM_MenuArray
+{
+  U64 count;
+  WM_Menu *menus;
+};
 
 typedef U32 WM_Modifiers;
 enum
@@ -120,6 +152,7 @@ struct WM_Event
   B32 right_sided;
   U32 character;
   U32 repeat_count;
+  String8 string;
   Vec2F32 pos;
   Vec2F32 delta;
   String8List strings;
@@ -227,6 +260,12 @@ internal WM_EventList   wm_get_events(Arena *arena, B32 wait);
 internal WM_Modifiers   wm_get_modifiers(void);
 internal B32            wm_key_is_down(WM_Key key);
 internal Vec2F32        wm_mouse_from_window(WM_Window window);
+
+////////////////////////////////
+//~ @os_hooks Application Menu (Implemented Per-OS)
+
+internal void           wm_set_main_menu(WM_MenuArray menu_array);
+internal B32            wm_application_menu_bar_is_native(void);
 
 ////////////////////////////////
 //~ rjf: @os_hooks Cursors (Implemented Per-OS)
