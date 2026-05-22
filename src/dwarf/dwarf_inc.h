@@ -19,5 +19,8 @@
 #if defined(X64_H)
 # include "dwarf/x64/dwarf_x64.h"
 #endif
+#if defined(ARM64_H)
+# include "dwarf/arm64/dwarf_arm64.h"
+#endif
 
 #endif // DWARF_INC_H
