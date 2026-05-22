@@ -12734,7 +12734,10 @@ rd_frame(void)
           {
             String8 msg = rd_regs()->string;
             String8List msg_parts = str8_split(scratch.arena, msg, (U8 *)" ", 1, 0);
-            CmdLine msg_cmd_line = cmd_line_from_string_list(scratch.arena, msg_parts);
+            String8List msg_cmd_line_parts = {0};
+            str8_list_push(scratch.arena, &msg_cmd_line_parts, str8_lit("ipc"));
+            str8_list_concat_in_place(&msg_cmd_line_parts, &msg_parts);
+            CmdLine msg_cmd_line = cmd_line_from_string_list(scratch.arena, msg_cmd_line_parts);
             String8 cmd_kind_name = str8_list_first(&msg_cmd_line.inputs);
             RD_CmdKindInfo *cmd_kind_info = rd_cmd_kind_info_from_string(cmd_kind_name);
             if(cmd_kind_info != &rd_nil_cmd_kind_info) RD_RegsScope()
