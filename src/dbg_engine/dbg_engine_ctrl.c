@@ -6397,6 +6397,73 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   log_infof("sp_check_value := 0x%I64x\n", sp_check_value);
   
   //////////////////////////////
+  //- rjf: claim pending software-breakpoint stops
+  //
+  // On Darwin, when multiple processes hit the same patched software breakpoint
+  // nearly together, the non-selected tracee may already be stopped just after
+  // the trap instruction when the first breakpoint is reported. Surface that
+  // pending stop before moving any thread for the next run.
+  if(stop_event == 0 && OperatingSystem_CURRENT == OperatingSystem_Mac)
+  {
+    for(D_Entity *machine = entity_ctx->root->first;
+        machine != &d_entity_nil && stop_event == 0;
+        machine = machine->next)
+    {
+      if(machine->kind != D_EntityKind_Machine) { continue; }
+      for(D_Entity *process = machine->first;
+          process != &d_entity_nil && stop_event == 0;
+          process = process->next)
+      {
+        if(process->kind != D_EntityKind_Process) { continue; }
+        DMN_Handle process_dmn = d_dmn_from_handle(process->handle);
+        for(D_Entity *thread = process->first;
+            thread != &d_entity_nil && stop_event == 0;
+            thread = thread->next)
+        {
+          if(thread->kind != D_EntityKind_Thread ||
+             dmn_handle_match(d_dmn_from_handle(thread->handle), target_thread_dmn))
+          {
+            continue;
+          }
+          ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
+          U64 trap_inst_size = arch_info->trap_instruction.size;
+          U64 rip = d_ip_from_thread(thread->handle);
+          if(trap_inst_size != 0 && trap_inst_size <= rip)
+          {
+            U64 trap_vaddr = rip - trap_inst_size;
+            for(DMN_TrapChunkNode *n = user_traps.first; n != 0 && stop_event == 0; n = n->next)
+            {
+              for(DMN_Trap *trap = n->v, *opl = n->v+n->count; trap < opl; trap += 1)
+              {
+                if(dmn_handle_match(trap->process, process_dmn) && trap->vaddr == trap_vaddr)
+                {
+                  void *regs_block = push_array(scratch.arena, U8, arch_info->reg_block_size);
+                  if(d_thread_read_reg_block(thread->handle, regs_block))
+                  {
+                    arch_reg_block_write_ip(arch_info, regs_block, trap_vaddr);
+                    d_thread_write_reg_block(thread->handle, regs_block);
+                  }
+                  DMN_Event *event = push_array(scratch.arena, DMN_Event, 1);
+                  event->kind = DMN_EventKind_Breakpoint;
+                  event->process = process_dmn;
+                  event->thread = d_dmn_from_handle(thread->handle);
+                  event->arch = thread->arch;
+                  event->instruction_pointer = trap_vaddr;
+                  event->address = trap_vaddr;
+                  event->user_data = trap->id;
+                  stop_event = event;
+                  stop_cause = D_EventCause_UserBreakpoint;
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  //////////////////////////////
   //- rjf: single step "stuck threads"
   //
   // "Stuck threads" are threads that are already on a User BP and would hit
