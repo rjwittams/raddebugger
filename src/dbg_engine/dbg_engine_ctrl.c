@@ -3843,6 +3843,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
   U64 cfi_rebase   = 0;
   B32 is_unwind_eh = 0;
   String8 dwarf_unwind_data = {0};
+  String8 macho_unwind_info_data = {0};
   EH_FrameHdr eh_frame_hdr = {0};
   EH_PtrCtx eh_ptr_ctx   = { .pc_vaddr = max_U64, .text_vaddr = max_U64, .data_vaddr = max_U64, .func_vaddr = max_U64, .ptr_align = 0 };
   
@@ -4159,6 +4160,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
         U64 slide = vaddr_range.min - file_base_vaddr;
         U64 text_vaddr = 0;
         Rng1U64 eh_frame_vrange = {0};
+        Rng1U64 unwind_info_vrange = {0};
 
         for EachIndex(idx, bin.load_commands.count)
         {
@@ -4209,9 +4211,20 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
                 {
                   eh_frame_vrange = r1u64(slide + section.addr, slide + section.addr + section.size);
                 }
+                else if(str8_match(section_name, str8_lit("__unwind_info"), 0) &&
+                        str8_match(section_segment_name, str8_lit("__TEXT"), 0) &&
+                        section.size != 0)
+                {
+                  unwind_info_vrange = r1u64(slide + section.addr, slide + section.addr + section.size);
+                }
               }
             }
           }
+        }
+
+        if(unwind_info_vrange.max > unwind_info_vrange.min)
+        {
+          macho_unwind_info_data = d_data_from_process_vaddr_range(arena, process, unwind_info_vrange, 0);
         }
 
         if(eh_frame_vrange.max > eh_frame_vrange.min)
@@ -4316,6 +4329,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
         node->cfi_rebase                  = cfi_rebase;
         node->is_unwind_eh                = is_unwind_eh;
         node->dwarf_unwind_data           = str8_copy(arena, dwarf_unwind_data);
+        node->macho_unwind_info_data      = str8_copy(arena, macho_unwind_info_data);
         node->eh_frame_hdr                = eh_frame_hdr;
         node->eh_ptr_ctx                  = eh_ptr_ctx;
         node->entry_point_voff            = entry_point_voff;

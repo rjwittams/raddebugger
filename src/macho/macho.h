@@ -12,6 +12,19 @@
 #define MACHO_CPU_TYPE_X86_64 0x01000007
 #define MACHO_CPU_TYPE_ARM64  0x0100000c
 
+#define MACHO_UNWIND_SECTION_VERSION 1
+#define MACHO_UNWIND_SECOND_LEVEL_REGULAR 2
+#define MACHO_UNWIND_SECOND_LEVEL_COMPRESSED 3
+#define MACHO_UNWIND_INFO_COMPRESSED_ENTRY_FUNC_OFFSET(entry) ((entry) & 0x00ffffff)
+#define MACHO_UNWIND_INFO_COMPRESSED_ENTRY_ENCODING_INDEX(entry) (((entry) >> 24) & 0xff)
+
+#define MACHO_UNWIND_X64_MODE_MASK 0x0f000000
+#define MACHO_UNWIND_X64_MODE_RBP_FRAME 0x01000000
+#define MACHO_UNWIND_X64_MODE_STACK_IMMD 0x02000000
+#define MACHO_UNWIND_X64_MODE_STACK_IND 0x03000000
+#define MACHO_UNWIND_X64_MODE_DWARF 0x04000000
+#define MACHO_UNWIND_X64_DWARF_SECTION_OFFSET 0x00ffffff
+
 typedef struct MachO_UUID MachO_UUID;
 struct MachO_UUID
 {
@@ -115,6 +128,58 @@ struct MachO_Section64
   U32 reserved3;
 };
 
+typedef struct MachO_UnwindInfoSectionHeader MachO_UnwindInfoSectionHeader;
+struct MachO_UnwindInfoSectionHeader
+{
+  U32 version;
+  U32 common_encodings_array_section_offset;
+  U32 common_encodings_array_count;
+  U32 personality_array_section_offset;
+  U32 personality_array_count;
+  U32 index_section_offset;
+  U32 index_count;
+};
+
+typedef struct MachO_UnwindInfoSectionHeaderIndexEntry MachO_UnwindInfoSectionHeaderIndexEntry;
+struct MachO_UnwindInfoSectionHeaderIndexEntry
+{
+  U32 function_offset;
+  U32 second_level_pages_section_offset;
+  U32 lsda_index_array_section_offset;
+};
+
+typedef struct MachO_UnwindInfoRegularSecondLevelEntry MachO_UnwindInfoRegularSecondLevelEntry;
+struct MachO_UnwindInfoRegularSecondLevelEntry
+{
+  U32 function_offset;
+  U32 encoding;
+};
+
+typedef struct MachO_UnwindInfoRegularSecondLevelPageHeader MachO_UnwindInfoRegularSecondLevelPageHeader;
+struct MachO_UnwindInfoRegularSecondLevelPageHeader
+{
+  U32 kind;
+  U16 entry_page_offset;
+  U16 entry_count;
+};
+
+typedef struct MachO_UnwindInfoCompressedSecondLevelPageHeader MachO_UnwindInfoCompressedSecondLevelPageHeader;
+struct MachO_UnwindInfoCompressedSecondLevelPageHeader
+{
+  U32 kind;
+  U16 entry_page_offset;
+  U16 entry_count;
+  U16 encodings_page_offset;
+  U16 encodings_count;
+};
+
+typedef struct MachO_UnwindInfoLookupResult MachO_UnwindInfoLookupResult;
+struct MachO_UnwindInfoLookupResult
+{
+  Rng1U64 voff_range;
+  U32 encoding;
+};
+
 typedef struct MachO_Bin MachO_Bin;
 struct MachO_Bin
 {
@@ -133,5 +198,6 @@ internal MachO_UUID macho_uuid_from_bin(String8 data, MachO_Bin *bin);
 internal String8 macho_dsym_path_from_executable_path(Arena *arena, String8 executable_path);
 internal U64 macho_base_vaddr_from_bin(String8 data, MachO_Bin *bin);
 internal U64 macho_image_size_from_bin(String8 data, MachO_Bin *bin);
+internal B32 macho_unwind_info_lookup(String8 data, U64 voff, MachO_UnwindInfoLookupResult *result_out);
 
 #endif // MACHO_H
