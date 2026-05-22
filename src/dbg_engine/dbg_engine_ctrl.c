@@ -6644,6 +6644,25 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
     D_Spoof spoof = {0};
     DMN_TrapChunkList entry_traps = {0};
     B32 ignore_initial_halt = !!(msg->run_flags & D_RunFlag_IgnoreInitialHalt);
+    U64 ignore_initial_halt_count = 0;
+    if(ignore_initial_halt)
+    {
+      for(D_Entity *machine = entity_ctx->root->first;
+          machine != &d_entity_nil;
+          machine = machine->next)
+      {
+        if(machine->kind != D_EntityKind_Machine) { continue; }
+        for(D_Entity *process = machine->first;
+            process != &d_entity_nil;
+            process = process->next)
+        {
+          if(process->kind == D_EntityKind_Process)
+          {
+            ignore_initial_halt_count += 1;
+          }
+        }
+      }
+    }
     for(U64 run_loop_idx = 0;; run_loop_idx += 1)
     {
       //////////////////////////
@@ -6701,11 +6720,19 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
                                (event->kind == DMN_EventKind_Exception &&
                                 event->signo == SIGSTOP));
 #endif
-        ignore_initial_halt = 0;
         if(should_ignore_event)
         {
+          if(ignore_initial_halt_count > 0)
+          {
+            ignore_initial_halt_count -= 1;
+          }
+          if(ignore_initial_halt_count == 0)
+          {
+            ignore_initial_halt = 0;
+          }
           continue;
         }
+        ignore_initial_halt = 0;
       }
 
       //////////////////////////
