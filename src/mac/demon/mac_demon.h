@@ -12,6 +12,7 @@
 #define FileInfo MACOS_SDK_FileInfo
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <mach/vm_attributes.h>
 #include <mach/machine/thread_status.h>
 #undef FileInfo
 #pragma pop_macro("FileInfo")
@@ -263,6 +264,7 @@ internal void mac_dmn_process_set_dyld_notification_single_step_flags(MAC_DMN_Pr
 internal MAC_DMN_ActiveTrap *mac_dmn_set_trap(Arena *arena, DMN_Trap *trap, MAC_DMN_ActiveTrapKind kind);
 internal MAC_DMN_ActiveTrap *mac_dmn_push_active_trap(Arena *arena, MAC_DMN_ActiveTrap *first, DMN_Trap *trap, MAC_DMN_ActiveTrapKind kind);
 internal void mac_dmn_unset_trap(MAC_DMN_ActiveTrap *active_trap);
+internal B32 mac_dmn_process_sync_instruction_cache(MAC_DMN_Process *process, Rng1U64 range);
 internal U64 mac_dmn_thread_read_ip(MAC_DMN_Thread *thread);
 internal U64 mac_dmn_thread_read_sp(MAC_DMN_Thread *thread);
 internal U64 mac_dmn_stack_base_vaddr_from_thread(MAC_DMN_Thread *thread);
