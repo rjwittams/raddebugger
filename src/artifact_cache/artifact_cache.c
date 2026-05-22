@@ -178,7 +178,7 @@ ac_artifact_from_key_(Access *access, String8 key, AC_ArtifactParams *params, U6
       if(!got_artifact && ins_atomic_u64_eval(&node->completion_count) != 0 && ((node->last_completed_gen == params->gen) || !(params->flags & AC_Flag_WaitForFresh) || out_of_time))
       {
         got_artifact = 1;
-        artifact_is_stale = (node->last_completed_gen == params->gen);
+        artifact_is_stale = (node->last_completed_gen != params->gen);
         artifact = node->val;
         access_touch(access, &node->access_pt, stripe->cv);
       }
