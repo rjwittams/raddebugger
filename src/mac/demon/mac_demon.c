@@ -1240,6 +1240,26 @@ mac_dmn_set_trap(Arena *arena, DMN_Trap *trap, MAC_DMN_ActiveTrapKind kind)
   return result;
 }
 
+internal MAC_DMN_ActiveTrap *
+mac_dmn_push_active_trap(Arena *arena, MAC_DMN_ActiveTrap *first, DMN_Trap *trap, MAC_DMN_ActiveTrapKind kind)
+{
+  MAC_DMN_ActiveTrap *result = 0;
+  MAC_DMN_ActiveTrap *existing = mac_dmn_active_trap_from_process_vaddr(first, trap->process, trap->vaddr);
+  if(existing != 0)
+  {
+    result = push_array(arena, MAC_DMN_ActiveTrap, 1);
+    result->kind = kind;
+    result->good = existing->good;
+    result->trap = trap;
+    result->swap_bytes = str8_copy(arena, existing->swap_bytes);
+  }
+  else
+  {
+    result = mac_dmn_set_trap(arena, trap, kind);
+  }
+  return result;
+}
+
 internal void
 mac_dmn_unset_trap(MAC_DMN_ActiveTrap *active_trap)
 {
@@ -1897,7 +1917,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
           DMN_Trap *trap = n->v + trap_idx;
           if(trap->flags == 0)
           {
-            MAC_DMN_ActiveTrap *active_trap = mac_dmn_set_trap(scratch.arena, trap, MAC_DMN_ActiveTrapKind_User);
+            MAC_DMN_ActiveTrap *active_trap = mac_dmn_push_active_trap(scratch.arena, first_active_trap, trap, MAC_DMN_ActiveTrapKind_User);
             SLLQueuePush(first_active_trap, last_active_trap, active_trap);
           }
         }
@@ -1925,7 +1945,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
           DMN_Trap *trap = push_array(scratch.arena, DMN_Trap, 1);
           trap->process = process_handle;
           trap->vaddr = notification_vaddr;
-          MAC_DMN_ActiveTrap *active_trap = mac_dmn_set_trap(scratch.arena, trap, MAC_DMN_ActiveTrapKind_DyldNotification);
+          MAC_DMN_ActiveTrap *active_trap = mac_dmn_push_active_trap(scratch.arena, first_active_trap, trap, MAC_DMN_ActiveTrapKind_DyldNotification);
           SLLQueuePush(first_active_trap, last_active_trap, active_trap);
         }
         else if(process->dyld_bootstrap_pending)
