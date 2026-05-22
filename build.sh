@@ -66,6 +66,7 @@ fi
 cd build
 if [ -v raddbg ];                then didbuild=1 && $compile ../src/raddbg/raddbg_main.c                                    $compile_link $link_os_gfx $link_render $link_font_provider $out raddbg; fi
 if [ -v radbin ];                then didbuild=1 && $compile ../src/radbin/radbin_main.c                                    $compile_link $out radbin; fi
+if [ -v torture ];               then didbuild=1 && $compile ../src/torture/torture_main.c                                  $compile_link $link_os_gfx $link_render $link_font_provider $out torture; fi
 if [ -v radlink ];               then didbuild=1 && $compile ../src/linker/lnk.c                                            $compile_link $out radlink; fi
 cd ..
 
