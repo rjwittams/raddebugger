@@ -1,10 +1,18 @@
 // Copyright (c) Epic Games Tools
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
+#if OS_WINDOWS
+# define T_DEFAULT_OUT "torture"
+# define T_PATH_SEP "\\"
+#else
+# define T_DEFAULT_OUT "torture_out"
+# define T_PATH_SEP "/"
+#endif
+
 // command line
 global String8 g_stdout_file_name = str8_lit_comp("torture.out");
 global String8 g_wdir;
-global String8 g_out = str8_lit_comp("torture");
+global String8 g_out = str8_lit_comp(T_DEFAULT_OUT);
 global B32     g_verbose;
 global B32     g_redirect_stdout = 1;
 global B32     g_stop_on_first_fail_or_crash = 1;
@@ -117,7 +125,7 @@ t_delete_dir(String8 path)
 internal String8
 t_make_file_path(Arena *arena, String8 name)
 {
-  return push_str8f(arena, "%S\\%S", g_wdir, name);
+  return push_str8f(arena, "%S" T_PATH_SEP "%S", g_wdir, name);
 }
 
 internal B32
@@ -305,7 +313,9 @@ t_invoke_env(String8 exe_path, String8 cmdline, String8List env, U64 timeout, Ar
   g_last_exit_code = -1;
   
   File read_pipe_handle = {0}, write_pipe_handle = {0};
+  String8 posix_output_path = {0};
   if (capture_output) {
+#if OS_WINDOWS
     HANDLE read_pipe, write_pipe;
     SECURITY_ATTRIBUTES at = { .nLength = sizeof(at), .bInheritHandle = 1 };
     if (!CreatePipe(&read_pipe, &write_pipe, &at, 0)) {
@@ -313,6 +323,14 @@ t_invoke_env(String8 exe_path, String8 cmdline, String8List env, U64 timeout, Ar
     }
     read_pipe_handle  = (File){ .u64[0] = (U64)read_pipe  };
     write_pipe_handle = (File){ .u64[0] = (U64)write_pipe };
+#else
+    posix_output_path = push_str8f(scratch.arena, "%S" T_PATH_SEP "stdout.tmp", g_wdir);
+    write_pipe_handle = file_open(AccessFlag_Read|AccessFlag_Write, posix_output_path);
+    if(file_match(write_pipe_handle, file_zero()))
+    {
+      AssertAlways(0 && "failed to create an output capture file");
+    }
+#endif
   }
   
   // Build Launch Options
@@ -335,10 +353,14 @@ t_invoke_env(String8 exe_path, String8 cmdline, String8List env, U64 timeout, Ar
   // invoke exe
   Process process_handle = process_launch(&launch_opts);
   
-  // close handle so last to ReadFile does not block
-  file_close(write_pipe_handle);
+  // close handle so the child owns the capture destination after launch
+  if(capture_output)
+  {
+    file_close(write_pipe_handle);
+  }
   
   if ( ! process_match(process_handle, process_zero())) {
+#if OS_WINDOWS
     if (capture_output) {
       // capture process output
       String8List  output = {0};
@@ -358,11 +380,27 @@ t_invoke_env(String8 exe_path, String8 cmdline, String8List env, U64 timeout, Ar
         write_data_list_to_file_path(g_stdout_file_name, output);
       }
     }
+#endif
     
     U64 exit_code_u64 = 0;
     if (process_join(process_handle, timeout, &exit_code_u64)) {
       g_last_exit_code = (int)exit_code_u64;
       is_ok            = 1;
+#if !OS_WINDOWS
+      if(capture_output)
+      {
+        String8 output = data_from_file_path(output_arena ? output_arena : scratch.arena, posix_output_path);
+        if(output_out)
+        {
+          *output_out = output;
+        }
+        if(g_redirect_stdout)
+        {
+          write_data_to_file_path(g_stdout_file_name, output);
+        }
+        delete_file_at_path(posix_output_path);
+      }
+#endif
     } else {
       process_kill(process_handle);
     }
@@ -774,12 +812,12 @@ t_entry_point(CmdLine *cmdline)
       U64 dots_count = (max_label_size - cstring8_length((U8*)g_torture_tests[target_idx].label)) + dots_min;
       U64 curr_digit_count = count_digits_u64(i+1, 10);
       int idx_align_space_count = (int)(max_digit_count - curr_digit_count);
-      fprintf(stdout, "[%.*s%I64u/%I64u] ", idx_align_space_count, spaces, i+1, target_indices.count);
+      fprintf(stdout, "[%.*s%llu/%llu] ", idx_align_space_count, spaces, (unsigned long long)i+1, (unsigned long long)target_indices.count);
       fprintf(stdout, "%s %.*s:: %s", g_torture_tests[target_idx].group, (int)(max_group_size - cstring8_length((U8*)g_torture_tests[target_idx].group)), spaces, g_torture_tests[target_idx].label);
       fprintf(stdout, " %.*s ", (int)dots_count, dots);
       
       // setup output directory
-      g_wdir = push_str8f(scratch.arena, "%S\\%s", g_out, g_torture_tests[target_idx].label);
+      g_wdir = push_str8f(scratch.arena, "%S" T_PATH_SEP "%s", g_out, g_torture_tests[target_idx].label);
       g_wdir = full_path_from_path(scratch.arena, g_wdir);
       
       // delete files from last run in the work directory
@@ -889,4 +927,3 @@ t_entry_point(CmdLine *cmdline)
   
   scratch_end(scratch);
 }
-

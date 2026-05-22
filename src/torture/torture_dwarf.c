@@ -1,6 +1,7 @@
 // Copyright (c) Epic Games Tools
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
+#undef T_Group
 #define T_Group "Dwarf"
 
 TEST(dwarf_reference_form_info_offsets)
