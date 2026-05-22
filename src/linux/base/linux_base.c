@@ -1090,7 +1090,7 @@ file_iter_begin(Arena *arena, String8 path, FileIterFlags flags)
   base_iter->flags = flags;
   LNX_FileIter *iter = (LNX_FileIter *)base_iter->memory;
   {
-    String8 path_copy = push_str8_copy(arena, path);
+    String8 path_copy = path.size == 0 ? str8_lit("/") : push_str8_copy(arena, path);
     iter->dir = opendir((char *)path_copy.str);
     iter->path = path_copy;
   }
@@ -1153,7 +1153,10 @@ internal void
 file_iter_end(FileIter *iter)
 {
   LNX_FileIter *lnx_iter = (LNX_FileIter *)iter->memory;
-  closedir(lnx_iter->dir);
+  if(lnx_iter->dir != 0)
+  {
+    closedir(lnx_iter->dir);
+  }
 }
 
 //- rjf: directory creation
