@@ -31,6 +31,8 @@
 # include "win32/base/win32_base.c"
 #elif OS_LINUX
 # include "linux/base/linux_base.c"
+#elif OS_MAC
+# include "mac/base/mac_base.c"
 #else
 # error Operating system backend not found for base layer.
 #endif
