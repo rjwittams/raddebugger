@@ -8,5 +8,8 @@
 #if defined(X64_H)
 # include "x64/disasm/x64_disasm.h"
 #endif
+#if defined(ARM64_H)
+# include "arm64/disasm/arm64_disasm.h"
+#endif
 
 #endif // DISASM_INC_H

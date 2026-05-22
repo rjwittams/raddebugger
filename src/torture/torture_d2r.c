@@ -5,6 +5,7 @@
 //
 // [ ] d2r_types alias size and byte size on __float80 typedef mismatch
 
+#undef T_Group
 #define T_Group "d2r"
 
 internal RDI_Parsed *
