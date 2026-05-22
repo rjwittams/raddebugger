@@ -818,9 +818,9 @@ dw_string_from_register(Arena *arena, Arch arch, U64 reg_id)
 #undef X
       }
     } break;
-    case Arch_arm32: NotImplemented; break;
-    case Arch_arm64: NotImplemented; break;
-    case Arch_x86: NotImplemented; break;
+    case Arch_arm32: break;
+    case Arch_arm64: break;
+    case Arch_x86: break;
     default: InvalidPath; break;
   }
   if (reg_str.size == 0) {
@@ -1087,4 +1087,3 @@ dw_length_from_std_opcode(DW_StdOpcode opcode)
   }
   return 0;
 }
-
