@@ -263,7 +263,7 @@ dw_compute_cfa(Arch arch, DW_CFI_Row *row, void *reg_block, MachineOp_MemRead *m
     case DW_CFA_Rule_Expression:
     {
       // TODO: evaluate expression
-      NotImplemented;
+      unwind_status = MachineOpResult_Fail;
     }break;
   }
   return unwind_status;
@@ -340,16 +340,31 @@ dw_cfi_apply_register_rules(Arch arch, U64 cfa, DW_CFI_Row *row, void *reg_block
       case DW_CFI_RegisterRule_Expression:
       {
         // TODO: evaluate expression
-        NotImplemented;
+        if(reg_code == arch_info->instruction_pointer_reg_code ||
+           reg_code == arch_info->stack_pointer_reg_code)
+        {
+          unwind_status = MachineOpResult_Fail;
+          goto exit;
+        }
       }break;
       case DW_CFI_RegisterRule_ValExpression:
       {
         // TODO: evaluate expression
-        NotImplemented;
+        if(reg_code == arch_info->instruction_pointer_reg_code ||
+           reg_code == arch_info->stack_pointer_reg_code)
+        {
+          unwind_status = MachineOpResult_Fail;
+          goto exit;
+        }
       }break;
       case DW_CFI_RegisterRule_Architectural:
       {
-        NotImplemented;
+        if(reg_code == arch_info->instruction_pointer_reg_code ||
+           reg_code == arch_info->stack_pointer_reg_code)
+        {
+          unwind_status = MachineOpResult_Fail;
+          goto exit;
+        }
       }break;
     }
   }
