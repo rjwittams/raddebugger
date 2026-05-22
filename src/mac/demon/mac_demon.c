@@ -2417,7 +2417,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
           wait_id = waitpid(-1, &status, WNOHANG);
         }
         while(wait_id < 0 && errno == EINTR);
-        if(wait_id > 0)
+        if(wait_id > 0 && mac_dmn_process_entity_from_pid(wait_id) != 0)
         {
           break;
         }
