@@ -1467,7 +1467,7 @@ d_entity_store_apply_events(D_EntityCtxRWStore *store, D_EventList *list)
         module->tls_index = event->tls_index;
         module->tls_offset = event->tls_offset;
         D_Entity *first_module = d_entity_child_from_kind(process, D_EntityKind_Module);
-        if(first_module == module && process->string.size == 0)
+        if(first_module == module)
         {
           d_entity_equip_string(store, process, event->string);
         }
