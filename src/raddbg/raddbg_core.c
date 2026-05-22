@@ -6693,6 +6693,8 @@ rd_window_frame(void)
     //
     ProfScope("build top bar")
     {
+      B32 draw_custom_title_bar_controls = wm_window_should_draw_custom_title_bar_controls(ws->os);
+      F32 native_title_bar_left_padding = wm_window_native_title_bar_left_padding(ws->os);
       wm_window_clear_custom_border_data(ws->os);
       wm_window_push_custom_edges(ws->os, window_edge_px);
       wm_window_push_custom_title_bar(ws->os, dim_2f32(top_bar_rect).y);
@@ -6712,7 +6714,11 @@ rd_window_frame(void)
           UI_WidthFill UI_NamedRow(str8_lit("###menu_bar"))
           {
             //- rjf: icon
-            UI_Padding(ui_em(0.5f, 1.f))
+            if(native_title_bar_left_padding > 0)
+            {
+              ui_spacer(ui_px(native_title_bar_left_padding, 0));
+            }
+            else UI_Padding(ui_em(0.5f, 1.f))
             {
               UI_PrefWidth(ui_px(dim_2f32(top_bar_rect).y - ui_top_font_size()*0.8f, 1.f))
                 UI_Column
@@ -7247,8 +7253,9 @@ rd_window_frame(void)
               rd_cmd(RD_CmdKind_Exit);
             }
           }
-          
+
           // rjf: min/max/close buttons
+          if(draw_custom_title_bar_controls)
           {
             UI_Signal min_sig = {0};
             UI_Signal max_sig = {0};
