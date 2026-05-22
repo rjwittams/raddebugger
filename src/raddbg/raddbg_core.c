@@ -12955,6 +12955,69 @@ rd_frame(void)
                 str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "ok");
               }
             }
+            else if(str8_match(cmd_name, str8_lit("open_geo3d"), 0))
+            {
+              handled = 1;
+              String8 index_expr = {0};
+              String8 count_expr = {0};
+              String8 vtx_expr = {0};
+              String8 vtx_size_expr = {0};
+              if(msg_parts.first != 0 && msg_parts.first->next != 0)
+              {
+                String8Node *arg = msg_parts.first->next;
+                index_expr = arg->string;
+                if((arg = arg->next) != 0)
+                {
+                  count_expr = arg->string;
+                  if((arg = arg->next) != 0)
+                  {
+                    vtx_expr = arg->string;
+                    if((arg = arg->next) != 0)
+                    {
+                      vtx_size_expr = arg->string;
+                    }
+                  }
+                }
+              }
+              CFG_Node *panel = cfg_node_from_id(rd_regs()->panel);
+              if(panel == &cfg_nil_node)
+              {
+                CFG_NodePtrList windows = cfg_node_top_level_list_from_string(scratch.arena, str8_lit("window"));
+                if(windows.first != 0)
+                {
+                  CFG_PanelTree panel_tree = cfg_panel_tree_from_cfg(scratch.arena, windows.first->v);
+                  panel = panel_tree.focused->cfg;
+                }
+              }
+              if(index_expr.size == 0 || count_expr.size == 0 || vtx_expr.size == 0 || vtx_size_expr.size == 0)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: usage open_geo3d <index_expr> <count_expr> <vtx_expr> <vtx_size_expr>");
+              }
+              else if(panel == &cfg_nil_node)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: panel not found");
+              }
+              else
+              {
+                CFG_Node *tab = cfg_node_new(rd_state->cfg, panel, str8_lit("geo3d"));
+                CFG_Node *expr = cfg_node_new(rd_state->cfg, tab, str8_lit("expression"));
+                cfg_node_new(rd_state->cfg, expr, index_expr);
+                CFG_Node *count = cfg_node_new(rd_state->cfg, tab, str8_lit("count"));
+                cfg_node_new(rd_state->cfg, count, count_expr);
+                CFG_Node *vtx = cfg_node_new(rd_state->cfg, tab, str8_lit("vtx"));
+                cfg_node_new(rd_state->cfg, vtx, vtx_expr);
+                CFG_Node *vtx_size = cfg_node_new(rd_state->cfg, tab, str8_lit("vtx_size"));
+                cfg_node_new(rd_state->cfg, vtx_size, vtx_size_expr);
+                CFG_Node *yaw = cfg_node_new(rd_state->cfg, tab, str8_lit("yaw"));
+                cfg_node_new(rd_state->cfg, yaw, str8_lit("-0.125"));
+                CFG_Node *pitch = cfg_node_new(rd_state->cfg, tab, str8_lit("pitch"));
+                cfg_node_new(rd_state->cfg, pitch, str8_lit("-0.125"));
+                CFG_Node *zoom = cfg_node_new(rd_state->cfg, tab, str8_lit("zoom"));
+                cfg_node_new(rd_state->cfg, zoom, str8_lit("3.5"));
+                rd_cmd(RD_CmdKind_FocusTab, .panel = panel->id, .tab = tab->id);
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "ok");
+              }
+            }
             else if(str8_match(cmd_name, str8_lit("read_memory"), 0) ||
                str8_match(cmd_name, str8_lit("write_memory"), 0))
             {
