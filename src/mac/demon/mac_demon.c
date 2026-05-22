@@ -1478,6 +1478,173 @@ mac_dmn_set_single_step_flag(MAC_DMN_Thread *thread, B32 is_on)
   return result;
 }
 
+internal B32
+mac_dmn_thread_set_debug_traps(MAC_DMN_Thread *thread, DMN_TrapChunkList *traps)
+{
+  B32 result = 0;
+  if(thread != 0 && traps != 0)
+  {
+    switch(thread->arch)
+    {
+      default:{}break;
+#if ARCH_X64
+      case Arch_x64:
+      {
+        x86_debug_state64_t state = {0};
+        mach_msg_type_number_t count = x86_DEBUG_STATE64_COUNT;
+        if(thread_get_state(thread->thread, x86_DEBUG_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+        {
+          U64 *dr = &state.__dr0;
+          state.__dr6 = 0;
+          state.__dr7 = bit9|bit10|bit11;
+          U64 trap_idx = 0;
+          for(DMN_TrapChunkNode *n = traps->first; n != 0 && trap_idx < 4; n = n->next)
+          {
+            for(U64 n_idx = 0; n_idx < n->count && trap_idx < 4; n_idx += 1, trap_idx += 1)
+            {
+              DMN_Trap *trap = n->v + n_idx;
+              dr[trap_idx] = trap->vaddr;
+              state.__dr7 |= (1ull << (trap_idx*2));
+              state.__dr7 &= ~((U64)(bit17|bit18|bit19|bit20) << (trap_idx*4));
+              state.__dr7 &= ~((U64)(bit15|bit16));
+              switch(trap->flags)
+              {
+                case DMN_TrapFlag_BreakOnExecute:
+                default:{}break;
+                case DMN_TrapFlag_BreakOnWrite:
+                case DMN_TrapFlag_BreakOnWrite|DMN_TrapFlag_BreakOnExecute:
+                {
+                  state.__dr7 |= ((U64)bit17) << (trap_idx*4);
+                }break;
+                case DMN_TrapFlag_BreakOnRead|DMN_TrapFlag_BreakOnWrite|DMN_TrapFlag_BreakOnExecute:
+                case DMN_TrapFlag_BreakOnRead|DMN_TrapFlag_BreakOnWrite:
+                case DMN_TrapFlag_BreakOnRead:
+                {
+                  state.__dr7 |= (((U64)bit17) << (trap_idx*4));
+                  state.__dr7 |= (((U64)bit18) << (trap_idx*4));
+                }break;
+              }
+              switch(trap->size)
+              {
+                case 1:
+                default:{}break;
+                case 2:
+                {
+                  state.__dr7 |= (((U64)bit19) << (trap_idx*4));
+                }break;
+                case 4:
+                {
+                  state.__dr7 |= (((U64)bit19) << (trap_idx*4));
+                  state.__dr7 |= (((U64)bit20) << (trap_idx*4));
+                }break;
+                case 8:
+                {
+                  state.__dr7 |= (((U64)bit20) << (trap_idx*4));
+                }break;
+              }
+            }
+          }
+          result = (thread_set_state(thread->thread, x86_DEBUG_STATE64, (thread_state_t)&state, x86_DEBUG_STATE64_COUNT) == KERN_SUCCESS);
+        }
+      }break;
+#endif
+    }
+  }
+  return result;
+}
+
+internal B32
+mac_dmn_thread_clear_debug_traps(MAC_DMN_Thread *thread)
+{
+  B32 result = 0;
+  if(thread != 0)
+  {
+    switch(thread->arch)
+    {
+      default:{}break;
+#if ARCH_X64
+      case Arch_x64:
+      {
+        x86_debug_state64_t state = {0};
+        mach_msg_type_number_t count = x86_DEBUG_STATE64_COUNT;
+        if(thread_get_state(thread->thread, x86_DEBUG_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+        {
+          state.__dr0 = 0;
+          state.__dr1 = 0;
+          state.__dr2 = 0;
+          state.__dr3 = 0;
+          state.__dr6 = 0;
+          state.__dr7 = 0;
+          result = (thread_set_state(thread->thread, x86_DEBUG_STATE64, (thread_state_t)&state, x86_DEBUG_STATE64_COUNT) == KERN_SUCCESS);
+        }
+      }break;
+#endif
+    }
+  }
+  return result;
+}
+
+internal DMN_Trap *
+mac_dmn_thread_hit_debug_trap(MAC_DMN_Thread *thread, MAC_DMN_FlaggedTrapTask *first_task)
+{
+  DMN_Trap *result = 0;
+  if(thread != 0)
+  {
+    switch(thread->arch)
+    {
+      default:{}break;
+#if ARCH_X64
+      case Arch_x64:
+      {
+        x86_debug_state64_t state = {0};
+        mach_msg_type_number_t count = x86_DEBUG_STATE64_COUNT;
+        if(thread_get_state(thread->thread, x86_DEBUG_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS &&
+           (state.__dr6 & 0xF) != 0)
+        {
+          U64 flagged_trap_idx = max_U64;
+          if((state.__dr7 & (1ull<<0)) && (state.__dr6 & (1ull<<0))) { flagged_trap_idx = 0; }
+          else if((state.__dr7 & (1ull<<2)) && (state.__dr6 & (1ull<<1))) { flagged_trap_idx = 1; }
+          else if((state.__dr7 & (1ull<<4)) && (state.__dr6 & (1ull<<2))) { flagged_trap_idx = 2; }
+          else if((state.__dr7 & (1ull<<6)) && (state.__dr6 & (1ull<<3))) { flagged_trap_idx = 3; }
+          if(flagged_trap_idx != max_U64)
+          {
+            MAC_DMN_Process *process = thread->process;
+            DMN_Handle process_handle = {0};
+            for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+            {
+              if(entity->kind == MAC_DMN_EntityKind_Process && &entity->process == process)
+              {
+                process_handle = mac_dmn_handle_from_entity(entity);
+                break;
+              }
+            }
+            for(MAC_DMN_FlaggedTrapTask *task = first_task; task != 0 && result == 0; task = task->next)
+            {
+              if(dmn_handle_match(task->process, process_handle))
+              {
+                U64 trap_idx = 0;
+                for(DMN_TrapChunkNode *n = task->traps.first; n != 0 && result == 0; n = n->next)
+                {
+                  for(U64 n_idx = 0; n_idx < n->count; n_idx += 1, trap_idx += 1)
+                  {
+                    if(trap_idx == flagged_trap_idx)
+                    {
+                      result = n->v + n_idx;
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }break;
+#endif
+    }
+  }
+  return result;
+}
+
 internal MAC_DMN_ActiveTrap *
 mac_dmn_active_trap_from_process_vaddr(MAC_DMN_ActiveTrap *first, DMN_Handle process, U64 vaddr)
 {
@@ -1682,6 +1849,22 @@ mac_dmn_push_event_breakpoint(Arena *arena, DMN_EventList *events, MAC_DMN_Entit
   e->instruction_pointer = instruction_pointer;
   e->stack_pointer = mac_dmn_thread_read_sp(&thread_entity->thread);
   e->user_data = user_data;
+}
+
+internal void
+mac_dmn_push_event_data_breakpoint(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, DMN_Trap *trap)
+{
+  DMN_Event *e = dmn_event_list_push(arena, events);
+  e->kind = DMN_EventKind_Breakpoint;
+  e->process = mac_dmn_handle_from_entity(process_entity);
+  e->thread = mac_dmn_handle_from_entity(thread_entity);
+  e->arch = thread_entity->thread.arch;
+  e->instruction_pointer = mac_dmn_thread_read_ip(&thread_entity->thread);
+  e->stack_pointer = mac_dmn_thread_read_sp(&thread_entity->thread);
+  e->address = trap->vaddr;
+  e->size = trap->size;
+  e->flags = trap->flags;
+  e->user_data = trap->id;
 }
 
 internal void
@@ -2009,6 +2192,8 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
     Temp scratch = scratch_begin(0, 0);
     MAC_DMN_ActiveTrap *first_active_trap = 0;
     MAC_DMN_ActiveTrap *last_active_trap = 0;
+    MAC_DMN_FlaggedTrapTask *first_flagged_trap_task = 0;
+    MAC_DMN_FlaggedTrapTask *last_flagged_trap_task = 0;
     if(ctrls != 0)
     {
       for(DMN_TrapChunkNode *n = ctrls->traps.first; n != 0; n = n->next)
@@ -2020,6 +2205,41 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
           {
             MAC_DMN_ActiveTrap *active_trap = mac_dmn_push_active_trap(scratch.arena, first_active_trap, trap, MAC_DMN_ActiveTrapKind_User);
             SLLQueuePush(first_active_trap, last_active_trap, active_trap);
+          }
+          else
+          {
+            MAC_DMN_FlaggedTrapTask *task = 0;
+            for(MAC_DMN_FlaggedTrapTask *t = first_flagged_trap_task; t != 0; t = t->next)
+            {
+              if(dmn_handle_match(t->process, trap->process))
+              {
+                task = t;
+                break;
+              }
+            }
+            if(task == 0)
+            {
+              task = push_array(scratch.arena, MAC_DMN_FlaggedTrapTask, 1);
+              task->process = trap->process;
+              SLLQueuePush(first_flagged_trap_task, last_flagged_trap_task, task);
+            }
+            B32 already_in_task = 0;
+            for(DMN_TrapChunkNode *node = task->traps.first; node != 0; node = node->next)
+            {
+              for(U64 node_idx = 0; node_idx < node->count; node_idx += 1)
+              {
+                if(node->v[node_idx].id == trap->id)
+                {
+                  already_in_task = 1;
+                  goto break_flagged_trap_search;
+                }
+              }
+            }
+            break_flagged_trap_search:;
+            if(!already_in_task)
+            {
+              dmn_trap_chunk_list_push(scratch.arena, &task->traps, 8, trap);
+            }
           }
         }
       }
@@ -2064,6 +2284,21 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       if(entity->kind == MAC_DMN_EntityKind_Process)
       {
         mac_dmn_process_set_dyld_notification_single_step_flags(&entity->process, 1);
+      }
+    }
+
+    for(MAC_DMN_FlaggedTrapTask *task = first_flagged_trap_task; task != 0; task = task->next)
+    {
+      MAC_DMN_Entity *process_entity = mac_dmn_entity_from_handle(task->process);
+      if(process_entity != 0 && process_entity->kind == MAC_DMN_EntityKind_Process)
+      {
+        for(MAC_DMN_Entity *thread_entity = process_entity->process.first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+        {
+          if(thread_entity->kind == MAC_DMN_EntityKind_Thread)
+          {
+            mac_dmn_thread_set_debug_traps(&thread_entity->thread, &task->traps);
+          }
+        }
       }
     }
 
@@ -2207,6 +2442,11 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
             {
               thread_entity = process->first_thread_entity;
             }
+            DMN_Trap *hit_debug_trap = 0;
+            if(signo == SIGTRAP && thread_entity != 0)
+            {
+              hit_debug_trap = mac_dmn_thread_hit_debug_trap(&thread_entity->thread, first_flagged_trap_task);
+            }
             if(signo == SIGTRAP && thread_entity != 0)
             {
               if(hit_trap != 0)
@@ -2222,6 +2462,10 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
                 {
                   mac_dmn_push_event_breakpoint(arena, &result, process_entity, thread_entity, hit_trap->trap->vaddr, hit_trap->trap->id);
                 }
+              }
+              else if(hit_debug_trap != 0)
+              {
+                mac_dmn_push_event_data_breakpoint(arena, &result, process_entity, thread_entity, hit_debug_trap);
               }
               else if(thread_entity->thread.is_stepping_over_dyld_notification)
               {
@@ -2248,12 +2492,40 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       {
         mac_dmn_push_event_not_attached(arena, &result);
       }
+      for(MAC_DMN_FlaggedTrapTask *task = first_flagged_trap_task; task != 0; task = task->next)
+      {
+        MAC_DMN_Entity *process_entity = mac_dmn_entity_from_handle(task->process);
+        if(process_entity != 0 && process_entity->kind == MAC_DMN_EntityKind_Process)
+        {
+          for(MAC_DMN_Entity *thread_entity = process_entity->process.first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+          {
+            if(thread_entity->kind == MAC_DMN_EntityKind_Thread)
+            {
+              mac_dmn_thread_clear_debug_traps(&thread_entity->thread);
+            }
+          }
+        }
+      }
     }
     else
     {
       for(MAC_DMN_ActiveTrap *active_trap = first_active_trap; active_trap != 0; active_trap = active_trap->next)
       {
         mac_dmn_unset_trap(active_trap);
+      }
+      for(MAC_DMN_FlaggedTrapTask *task = first_flagged_trap_task; task != 0; task = task->next)
+      {
+        MAC_DMN_Entity *process_entity = mac_dmn_entity_from_handle(task->process);
+        if(process_entity != 0 && process_entity->kind == MAC_DMN_EntityKind_Process)
+        {
+          for(MAC_DMN_Entity *thread_entity = process_entity->process.first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+          {
+            if(thread_entity->kind == MAC_DMN_EntityKind_Thread)
+            {
+              mac_dmn_thread_clear_debug_traps(&thread_entity->thread);
+            }
+          }
+        }
       }
       for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
       {
