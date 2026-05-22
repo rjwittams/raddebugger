@@ -26,6 +26,8 @@ struct R_MTL_Window
 {
   R_MTL_Window *next;
   CAMetalLayer *layer;
+  id<MTLTexture> stage_color;
+  id<MTLTexture> stage_scratch_color;
   Vec2S32 drawable_size;
   F32 contents_scale;
 };
@@ -68,6 +70,26 @@ struct R_MTL_RectUniforms
 {
   Vec2F32 viewport_size;
   F32 opacity;
+  F32 _padding0_;
+  Mat4x4F32 texture_sample_channel_map;
+};
+
+typedef struct R_MTL_BlurUniforms R_MTL_BlurUniforms;
+struct R_MTL_BlurUniforms
+{
+  Rng2F32 rect;
+  Vec4F32 corner_radii;
+  Vec2F32 direction;
+  Vec2F32 viewport_size;
+  U32 blur_count;
+  U32 _padding0_[3];
+  Vec4F32 kernel[32];
+};
+
+typedef struct R_MTL_FinalizeUniforms R_MTL_FinalizeUniforms;
+struct R_MTL_FinalizeUniforms
+{
+  Vec2F32 viewport_size;
 };
 
 typedef struct R_MTL_State R_MTL_State;
@@ -77,8 +99,14 @@ struct R_MTL_State
   id<MTLDevice> device;
   id<MTLCommandQueue> command_queue;
   id<MTLRenderPipelineState> rect_pipeline;
+  id<MTLRenderPipelineState> blur_pipeline;
+  id<MTLRenderPipelineState> finalize_pipeline;
   id<MTLSamplerState> samplers[R_Tex2DSampleKind_COUNT];
   R_MTL_Tex2D *white_texture;
+  id<MTLBuffer> upload_buffers[3];
+  U64 upload_buffer_caps[3];
+  U64 upload_buffer_pos;
+  U64 upload_buffer_idx;
   R_MTL_Window *free_window;
   R_MTL_Tex2D *free_tex2d;
   R_MTL_Buffer *free_buffer;
@@ -95,9 +123,14 @@ internal R_MTL_Buffer *r_mtl_buffer_from_handle(R_Handle handle);
 internal MTLPixelFormat r_mtl_pixel_format_from_tex2d_format(R_Tex2DFormat format);
 internal U64 r_mtl_bytes_per_pixel_from_tex2d_format(R_Tex2DFormat format);
 internal NSUInteger r_mtl_resource_options_from_kind(R_ResourceKind kind);
+internal void r_mtl_log_ns_error(char *context, NSError *error);
+internal id<MTLRenderPipelineState> r_mtl_render_pipeline_from_library(id<MTLLibrary> library, NSString *vertex_name, NSString *fragment_name, MTLPixelFormat pixel_format);
+internal void r_mtl_window_resize_targets(R_MTL_Window *window);
+internal id<MTLBuffer> r_mtl_upload_buffer(void *data, U64 size, U64 align, U64 *out_offset);
 internal F32 r_mtl_contents_scale_from_window(WM_Window window);
 internal Vec2S32 r_mtl_drawable_size_from_window(WM_Window window);
 internal void r_mtl_rect_vertices_push(R_MTL_RectVertex *vertices, U64 *idx, R_Rect2DInst *inst, R_BatchGroup2DParams *params, Vec2S32 texture_size);
-internal MTLScissorRect r_mtl_scissor_from_clip(Rng2F32 clip, Vec2S32 drawable_size, F32 scale);
+internal B32 r_mtl_scissor_from_clip(Rng2F32 clip, Vec2S32 drawable_size, F32 scale, MTLScissorRect *out);
+internal R_MTL_BlurUniforms r_mtl_blur_uniforms_from_params(R_PassParams_Blur *params, Vec2F32 viewport_dim);
 
 #endif // RENDER_METAL_H
