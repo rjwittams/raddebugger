@@ -47,9 +47,9 @@ cc_link_dll="-fPIC"
 # --- External Libraries ------------------------------------------------------
 # sudo apt install -y pkg-config libfreetype6-dev libx11-dev libxext-dev libgl-dev libegl-dev
 if [[ "$host_os" == "Darwin" ]]; then
-  cc_font_provider=""
   cc_os_gfx="-framework Cocoa"
-  cc_render=""
+  cc_render="-framework Metal -framework QuartzCore"
+  cc_font_provider="-framework CoreText -framework CoreGraphics -framework CoreFoundation"
 elif [[ -x "$(command -v pkg-config)" ]]; then
   cc_font_provider="$(pkg-config --cflags --libs freetype2)"  
   cc_os_gfx="$(pkg-config --cflags --libs x11 xext)"
