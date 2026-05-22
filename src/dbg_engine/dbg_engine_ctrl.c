@@ -1913,6 +1913,76 @@ d_unwind_step_result_from_machine_op_result(MachineOpResult s)
   return result;
 }
 
+internal String8
+d_eh_frame_hdr_from_eh_frame(Arena *arena, String8 eh_frame_data, U64 eh_frame_vaddr, Arch arch, EH_PtrCtx *eh_ptr_ctx)
+{
+  Temp scratch = scratch_begin(&arena, 1);
+  String8 result = {0};
+
+  U64 fde_cap = eh_frame_data.size / sizeof(U32);
+  U64 fde_count = 0;
+  U64 *fde_offsets = push_array(scratch.arena, U64, fde_cap);
+  DW_FDE *fdes = push_array(scratch.arena, DW_FDE, fde_cap);
+
+  for(U64 cursor = 0; cursor + sizeof(U32) <= eh_frame_data.size;)
+  {
+    U32 length32 = 0;
+    str8_deserial_read_struct(eh_frame_data, cursor, &length32);
+    if(length32 == 0)
+    {
+      break;
+    }
+
+    DW_DescriptorEntry desc = {0};
+    U64 entry_size = eh_parse_descriptor_entry_header(eh_frame_data, cursor, &desc);
+    if(entry_size == 0 || cursor + entry_size > eh_frame_data.size)
+    {
+      break;
+    }
+
+    if(desc.type == DW_DescriptorEntryType_FDE)
+    {
+      U64 cie_off = max_U64;
+      if(desc.cie_pointer <= desc.cie_pointer_off)
+      {
+        cie_off = desc.cie_pointer_off - desc.cie_pointer;
+      }
+
+      DW_DescriptorEntry cie_desc = {0};
+      if(cie_off < eh_frame_data.size)
+      {
+        U64 cie_entry_size = eh_parse_descriptor_entry_header(eh_frame_data, cie_off, &cie_desc);
+        if(cie_entry_size != 0 && cie_off + cie_entry_size <= eh_frame_data.size && cie_desc.type == DW_DescriptorEntryType_CIE)
+        {
+          DW_CIE cie = {0};
+          DW_FDE fde = {0};
+          String8 cie_data = str8_substr(eh_frame_data, cie_desc.entry_range);
+          String8 fde_data = str8_substr(eh_frame_data, desc.entry_range);
+          if(eh_parse_cie(cie_data, cie_desc.format, arch, eh_frame_vaddr + cie_off, eh_ptr_ctx, &cie) &&
+             eh_parse_fde(fde_data, desc.format, eh_frame_vaddr + cursor, &cie, eh_ptr_ctx, &fde) &&
+             fde.pc_range.min < fde.pc_range.max &&
+             fde_count < fde_cap)
+          {
+            fde_offsets[fde_count] = eh_frame_vaddr + cursor;
+            fdes[fde_count] = fde;
+            fde_count += 1;
+          }
+        }
+      }
+    }
+
+    cursor += entry_size;
+  }
+
+  if(fde_count != 0)
+  {
+    result = eh_frame_hdr_from_call_frame_info(arena, fde_count, fde_offsets, fdes);
+  }
+
+  scratch_end(scratch);
+  return result;
+}
+
 internal D_UnwindStepResult
 d_establish_frame_unwind_context__dwarf(Arena *arena, D_Handle process_handle, D_Handle module_handle, Arch arch, void *regs, U64 endt_us, D_FrameUnwindContext *ctx_out)
 {
@@ -3049,12 +3119,9 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
           // no concept of frame unwind context
         }break;
         case OperatingSystem_Linux:
-        {
-          frame_ctx_result = d_establish_frame_unwind_context__dwarf(arena, process_entity->handle, module_entity->handle, arch, regs_block, endt_us, &frame_ctx);
-        }break;
         case OperatingSystem_Mac:
         {
-          NotImplemented;
+          frame_ctx_result = d_establish_frame_unwind_context__dwarf(arena, process_entity->handle, module_entity->handle, arch, regs_block, endt_us, &frame_ctx);
         }break;
         default: { InvalidPath; }break;
       }
@@ -3090,6 +3157,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
           }
         }break;
         case OperatingSystem_Linux:
+        case OperatingSystem_Mac:
         {
           step_result = d_unwind_step__dwarf(process_entity->handle, arch, regs_block, &frame_ctx, endt_us);
         }break;
@@ -3774,6 +3842,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
   String8 pdb_dbg_path = {0};
   U64 cfi_rebase   = 0;
   B32 is_unwind_eh = 0;
+  String8 dwarf_unwind_data = {0};
   EH_FrameHdr eh_frame_hdr = {0};
   EH_PtrCtx eh_ptr_ctx   = { .pc_vaddr = max_U64, .text_vaddr = max_U64, .data_vaddr = max_U64, .func_vaddr = max_U64, .ptr_align = 0 };
   
@@ -4066,7 +4135,109 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
     }
     elf_exit:;
   }
-  
+
+  //////////////////////////////
+  //- parse Mach-O module
+  //
+  else if(macho_magic_is_supported(*(U32 *)module_sig_bytes))
+  {
+    U32 magic = *(U32 *)module_sig_bytes;
+    U64 header_size = macho_header_size_from_magic(magic);
+    MachO_Header64 header = {0};
+    if(header_size != 0 &&
+       d_process_read(process, r1u64(vaddr_range.min, vaddr_range.min + header_size), &header) == header_size &&
+       header.load_commands_size < MB(16))
+    {
+      U64 data_size = header_size + header.load_commands_size;
+      U8 *data_bytes = push_array(scratch.arena, U8, data_size);
+      if(d_process_read(process, r1u64(vaddr_range.min, vaddr_range.min + data_size), data_bytes) == data_size)
+      {
+        String8 data = str8(data_bytes, data_size);
+        MachO_Bin bin = macho_bin_from_data(scratch.arena, data);
+        Arch arch = arch_from_macho_cpu_type(bin.header.cpu_type);
+        U64 file_base_vaddr = macho_base_vaddr_from_bin(data, &bin);
+        U64 slide = vaddr_range.min - file_base_vaddr;
+        U64 text_vaddr = 0;
+        Rng1U64 eh_frame_vrange = {0};
+
+        for EachIndex(idx, bin.load_commands.count)
+        {
+          MachO_LoadCommandInfo *info = &bin.load_commands.v[idx];
+          if(info->cmd == MACHO_LC_MAIN && info->offset + sizeof(MachO_EntryPointCommand) <= data.size)
+          {
+            MachO_EntryPointCommand command = {0};
+            str8_deserial_read_struct(data, info->offset, &command);
+            for EachIndex(seg_idx, bin.load_commands.count)
+            {
+              MachO_LoadCommandInfo *seg_info = &bin.load_commands.v[seg_idx];
+              if(seg_info->cmd == MACHO_LC_SEGMENT_64 && seg_info->offset + sizeof(MachO_SegmentCommand64) <= data.size)
+              {
+                MachO_SegmentCommand64 segment = {0};
+                str8_deserial_read_struct(data, seg_info->offset, &segment);
+                Rng1U64 segment_file_range = r1u64(segment.fileoff, segment.fileoff + segment.filesize);
+                if(contains_1u64(segment_file_range, command.entryoff))
+                {
+                  entry_point_voff = (segment.vmaddr + command.entryoff - segment.fileoff) - file_base_vaddr;
+                  break;
+                }
+              }
+            }
+          }
+          else if(info->cmd == MACHO_LC_SEGMENT_64 && info->offset + sizeof(MachO_SegmentCommand64) <= data.size)
+          {
+            MachO_SegmentCommand64 segment = {0};
+            str8_deserial_read_struct(data, info->offset, &segment);
+            String8 segment_name = macho_string_from_fixed_name(segment.segment_name, sizeof(segment.segment_name));
+            if(str8_match(segment_name, str8_lit("__TEXT"), 0))
+            {
+              text_vaddr = slide + segment.vmaddr;
+            }
+
+            U64 section_array_off = info->offset + sizeof(segment);
+            U64 section_array_opl = section_array_off + (U64)segment.section_count*sizeof(MachO_Section64);
+            if(section_array_opl <= info->offset + info->cmd_size && section_array_opl <= data.size)
+            {
+              for(U64 section_idx = 0; section_idx < segment.section_count; section_idx += 1)
+              {
+                MachO_Section64 section = {0};
+                str8_deserial_read_struct(data, section_array_off + section_idx*sizeof(section), &section);
+                String8 section_name = macho_string_from_fixed_name(section.section_name, sizeof(section.section_name));
+                String8 section_segment_name = macho_string_from_fixed_name(section.segment_name, sizeof(section.segment_name));
+                if(str8_match(section_name, str8_lit("__eh_frame"), 0) &&
+                   str8_match(section_segment_name, str8_lit("__TEXT"), 0) &&
+                   section.size != 0)
+                {
+                  eh_frame_vrange = r1u64(slide + section.addr, slide + section.addr + section.size);
+                }
+              }
+            }
+          }
+        }
+
+        if(eh_frame_vrange.max > eh_frame_vrange.min)
+        {
+          String8 eh_frame_data = d_data_from_process_vaddr_range(arena, process, eh_frame_vrange, 0);
+          eh_ptr_ctx.pc_vaddr = eh_frame_vrange.min;
+          eh_ptr_ctx.text_vaddr = text_vaddr;
+          eh_ptr_ctx.data_vaddr = eh_frame_vrange.min;
+          eh_ptr_ctx.ptr_align = byte_size_from_arch(arch);
+          String8 eh_frame_hdr_data = d_eh_frame_hdr_from_eh_frame(arena, eh_frame_data, eh_frame_vrange.min, arch, &eh_ptr_ctx);
+          if(eh_frame_hdr_data.size != 0)
+          {
+            eh_frame_hdr = eh_parse_frame_hdr(eh_frame_hdr_data, byte_size_from_arch(arch), &eh_ptr_ctx);
+            dwarf_unwind_data = eh_frame_data;
+            is_unwind_eh = 1;
+          }
+        }
+
+        if(path.size != 0)
+        {
+          exe_dbg_path = path;
+        }
+      }
+    }
+  }
+
   //////////////////////////////
   //- rjf: pick default initial debug info path
   //
@@ -4144,6 +4315,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
         node->pdatas_count                = pdatas_count;
         node->cfi_rebase                  = cfi_rebase;
         node->is_unwind_eh                = is_unwind_eh;
+        node->dwarf_unwind_data           = str8_copy(arena, dwarf_unwind_data);
         node->eh_frame_hdr                = eh_frame_hdr;
         node->eh_ptr_ctx                  = eh_ptr_ctx;
         node->entry_point_voff            = entry_point_voff;

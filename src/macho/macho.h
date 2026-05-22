@@ -8,6 +8,7 @@
 #define MACHO_MAGIC_64 0xfeedfacf
 #define MACHO_LC_SEGMENT_64 0x19
 #define MACHO_LC_UUID 0x1b
+#define MACHO_LC_MAIN 0x80000028
 #define MACHO_CPU_TYPE_X86_64 0x01000007
 #define MACHO_CPU_TYPE_ARM64  0x0100000c
 
@@ -70,6 +71,15 @@ struct MachO_UUIDCommand
   U32 cmd;
   U32 cmd_size;
   U8 uuid[16];
+};
+
+typedef struct MachO_EntryPointCommand MachO_EntryPointCommand;
+struct MachO_EntryPointCommand
+{
+  U32 cmd;
+  U32 cmd_size;
+  U64 entryoff;
+  U64 stacksize;
 };
 
 typedef struct MachO_SegmentCommand64 MachO_SegmentCommand64;
