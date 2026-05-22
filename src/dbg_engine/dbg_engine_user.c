@@ -1891,6 +1891,22 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
               need_run = 1;
               run_kind = D_RunKind_Run;
               run_thread = d_entity_from_handle(params->thread);
+              if(run_thread == &d_entity_nil)
+              {
+                run_thread = d_entity_from_handle(d_user_state->ctrl_last_stop_event.entity);
+              }
+              if(run_thread == &d_entity_nil)
+              {
+                for EachIndex(idx, threads.count)
+                {
+                  D_Entity *thread = threads.v[idx];
+                  if(!thread->is_frozen)
+                  {
+                    run_thread = thread;
+                    break;
+                  }
+                }
+              }
             }
             else
             {
