@@ -215,3 +215,214 @@ macho_image_size_from_bin(String8 data, MachO_Bin *bin)
   }
   return result;
 }
+
+internal B32
+macho_unwind_info_lookup(String8 data, U64 voff, MachO_UnwindInfoLookupResult *result_out)
+{
+  B32 result = 0;
+  if(result_out != 0)
+  {
+    MemoryZeroStruct(result_out);
+  }
+
+  MachO_UnwindInfoSectionHeader *header = str8_deserial_get_raw_ptr(data, 0, sizeof(MachO_UnwindInfoSectionHeader));
+  if(header != 0 &&
+     header->version == MACHO_UNWIND_SECTION_VERSION &&
+     header->index_count >= 2)
+  {
+    U64 common_encodings_size = (U64)header->common_encodings_array_count*sizeof(U32);
+    U64 index_size = (U64)header->index_count*sizeof(MachO_UnwindInfoSectionHeaderIndexEntry);
+    U32 *common_encodings = str8_deserial_get_raw_ptr(data, header->common_encodings_array_section_offset, common_encodings_size);
+    MachO_UnwindInfoSectionHeaderIndexEntry *index = str8_deserial_get_raw_ptr(data, header->index_section_offset, index_size);
+    if(common_encodings != 0 && index != 0)
+    {
+      U64 index_idx = max_U64;
+      for(U64 idx = 0; idx + 1 < header->index_count; idx += 1)
+      {
+        if((U64)index[idx].function_offset <= voff && voff < (U64)index[idx+1].function_offset)
+        {
+          index_idx = idx;
+          break;
+        }
+      }
+
+      if(index_idx != max_U64)
+      {
+        MachO_UnwindInfoSectionHeaderIndexEntry *index_entry = index + index_idx;
+        U32 next_index_function_offset = index[index_idx + 1].function_offset;
+        U32 page_kind = 0;
+        if(str8_deserial_read_struct(data, index_entry->second_level_pages_section_offset, &page_kind) == sizeof(page_kind))
+        {
+          switch(page_kind)
+          {
+            case MACHO_UNWIND_SECOND_LEVEL_REGULAR:
+            {
+              MachO_UnwindInfoRegularSecondLevelPageHeader *page = str8_deserial_get_raw_ptr(data, index_entry->second_level_pages_section_offset, sizeof(*page));
+              if(page != 0)
+              {
+                U64 entries_off = index_entry->second_level_pages_section_offset + page->entry_page_offset;
+                U64 entries_size = (U64)page->entry_count*sizeof(MachO_UnwindInfoRegularSecondLevelEntry);
+                MachO_UnwindInfoRegularSecondLevelEntry *entries = str8_deserial_get_raw_ptr(data, entries_off, entries_size);
+                if(entries != 0 && page->entry_count != 0)
+                {
+                  for(U64 entry_idx = 0; entry_idx < page->entry_count; entry_idx += 1)
+                  {
+                    U64 entry_voff = entries[entry_idx].function_offset;
+                    U64 next_voff = (entry_idx + 1 < page->entry_count) ? entries[entry_idx + 1].function_offset : next_index_function_offset;
+                    if(entry_voff <= voff && voff < next_voff && entries[entry_idx].encoding != 0)
+                    {
+                      if(result_out != 0)
+                      {
+                        result_out->voff_range = r1u64(entry_voff, next_voff);
+                        result_out->encoding = entries[entry_idx].encoding;
+                      }
+                      result = 1;
+                      break;
+                    }
+                  }
+                }
+              }
+            }break;
+
+            case MACHO_UNWIND_SECOND_LEVEL_COMPRESSED:
+            {
+              MachO_UnwindInfoCompressedSecondLevelPageHeader *page = str8_deserial_get_raw_ptr(data, index_entry->second_level_pages_section_offset, sizeof(*page));
+              if(page != 0)
+              {
+                U64 entries_off = index_entry->second_level_pages_section_offset + page->entry_page_offset;
+                U64 entries_size = (U64)page->entry_count*sizeof(U32);
+                U32 *entries = str8_deserial_get_raw_ptr(data, entries_off, entries_size);
+
+                U64 local_encodings_off = index_entry->second_level_pages_section_offset + page->encodings_page_offset;
+                U64 local_encodings_size = (U64)page->encodings_count*sizeof(U32);
+                U32 *local_encodings = str8_deserial_get_raw_ptr(data, local_encodings_off, local_encodings_size);
+
+                U64 target_page_voff = voff - index_entry->function_offset;
+                if(entries != 0 && local_encodings != 0 && page->entry_count != 0)
+                {
+                  for(U64 entry_idx = 0; entry_idx < page->entry_count; entry_idx += 1)
+                  {
+                    U32 entry = entries[entry_idx];
+                    U64 entry_page_voff = MACHO_UNWIND_INFO_COMPRESSED_ENTRY_FUNC_OFFSET(entry);
+                    U64 next_page_voff = (entry_idx + 1 < page->entry_count) ? MACHO_UNWIND_INFO_COMPRESSED_ENTRY_FUNC_OFFSET(entries[entry_idx + 1]) : (U64)next_index_function_offset - index_entry->function_offset;
+                    if(entry_page_voff <= target_page_voff && target_page_voff < next_page_voff)
+                    {
+                      U32 encoding_idx = MACHO_UNWIND_INFO_COMPRESSED_ENTRY_ENCODING_INDEX(entry);
+                      U32 encoding = 0;
+                      if(encoding_idx < header->common_encodings_array_count)
+                      {
+                        encoding = common_encodings[encoding_idx];
+                      }
+                      else
+                      {
+                        encoding_idx -= header->common_encodings_array_count;
+                        if(encoding_idx < page->encodings_count)
+                        {
+                          encoding = local_encodings[encoding_idx];
+                        }
+                      }
+
+                      if(encoding != 0)
+                      {
+                        if(result_out != 0)
+                        {
+                          result_out->voff_range = r1u64(index_entry->function_offset + entry_page_voff,
+                                                         index_entry->function_offset + next_page_voff);
+                          result_out->encoding = encoding;
+                        }
+                        result = 1;
+                      }
+                      break;
+                    }
+                  }
+                }
+              }
+            }break;
+          }
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+internal B32
+macho_unwind_x64_saved_regs_from_permutation(U32 reg_count, U32 permutation, U32 *regs_out)
+{
+  B32 result = 0;
+  if(regs_out != 0 && reg_count <= 6)
+  {
+    U32 permuted[6] = {0};
+    switch(reg_count)
+    {
+      case 6:
+      {
+        permuted[0] = permutation / 120; permutation -= permuted[0]*120;
+        permuted[1] = permutation / 24;  permutation -= permuted[1]*24;
+        permuted[2] = permutation / 6;   permutation -= permuted[2]*6;
+        permuted[3] = permutation / 2;   permutation -= permuted[3]*2;
+        permuted[4] = permutation;
+        permuted[5] = 0;
+      }break;
+      case 5:
+      {
+        permuted[0] = permutation / 120; permutation -= permuted[0]*120;
+        permuted[1] = permutation / 24;  permutation -= permuted[1]*24;
+        permuted[2] = permutation / 6;   permutation -= permuted[2]*6;
+        permuted[3] = permutation / 2;   permutation -= permuted[3]*2;
+        permuted[4] = permutation;
+      }break;
+      case 4:
+      {
+        permuted[0] = permutation / 60; permutation -= permuted[0]*60;
+        permuted[1] = permutation / 12; permutation -= permuted[1]*12;
+        permuted[2] = permutation / 3;  permutation -= permuted[2]*3;
+        permuted[3] = permutation;
+      }break;
+      case 3:
+      {
+        permuted[0] = permutation / 20; permutation -= permuted[0]*20;
+        permuted[1] = permutation / 4;  permutation -= permuted[1]*4;
+        permuted[2] = permutation;
+      }break;
+      case 2:
+      {
+        permuted[0] = permutation / 5; permutation -= permuted[0]*5;
+        permuted[1] = permutation;
+      }break;
+      case 1:
+      {
+        permuted[0] = permutation;
+      }break;
+    }
+
+    U32 used[7] = {0};
+    result = 1;
+    for(U32 idx = 0; idx < reg_count; idx += 1)
+    {
+      U32 renum = 0;
+      B32 found = 0;
+      for(U32 reg = 1; reg < 7; reg += 1)
+      {
+        if(!used[reg])
+        {
+          if(renum == permuted[idx])
+          {
+            regs_out[idx] = reg;
+            used[reg] = 1;
+            found = 1;
+            break;
+          }
+          renum += 1;
+        }
+      }
+      if(!found)
+      {
+        result = 0;
+        break;
+      }
+    }
+  }
+  return result;
+}
