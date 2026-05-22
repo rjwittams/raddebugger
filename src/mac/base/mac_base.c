@@ -1303,7 +1303,7 @@ process_launch(ProcessLaunchParams *params)
       {
         envp = push_array(scratch.arena, char *, params->env.node_count + 2);
         U64 env_idx = 0;
-        for EachNode(n, String8Node, params->cmd_line.first)
+        for EachNode(n, String8Node, params->env.first)
         {
           envp[env_idx] = (char *)n->string.str;
           env_idx += 1;
