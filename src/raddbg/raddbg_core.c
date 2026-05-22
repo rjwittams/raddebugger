@@ -12850,6 +12850,45 @@ rd_frame(void)
               String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
               str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
             }
+            else if(str8_match(cmd_name, str8_lit("dump_modules"), 0))
+            {
+              handled = 1;
+              D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
+              String8List lines = {0};
+              U64 total_module_count = 0;
+              for(U64 process_idx = 0; process_idx < processes.count; process_idx += 1)
+              {
+                for(D_Entity *module = processes.v[process_idx]->first; module != &d_entity_nil; module = module->next)
+                {
+                  if(module->kind == D_EntityKind_Module)
+                  {
+                    total_module_count += 1;
+                  }
+                }
+              }
+              str8_list_pushf(scratch.arena, &lines, "processes:%I64u modules:%I64u", processes.count, total_module_count);
+              for(U64 process_idx = 0; process_idx < processes.count; process_idx += 1)
+              {
+                D_Entity *process = processes.v[process_idx];
+                String8 process_handle = d_string_from_handle(scratch.arena, process->handle);
+                String8 process_name = process->string.size != 0 ? str8_skip_last_slash(process->string) : str8_lit("???");
+                str8_list_pushf(scratch.arena, &lines, "\nprocess#%I64u pid:%I64u handle:%S name:%S",
+                                process_idx, process->id, process_handle, process_name);
+                U64 module_idx = 0;
+                for(D_Entity *module = process->first; module != &d_entity_nil; module = module->next)
+                {
+                  if(module->kind != D_EntityKind_Module) { continue; }
+                  String8 module_handle = d_string_from_handle(scratch.arena, module->handle);
+                  String8 module_name = module->string.size != 0 ? str8_skip_last_slash(module->string) : str8_lit("???");
+                  str8_list_pushf(scratch.arena, &lines, "\n  module#%I64u handle:%S range:[0x%I64x,0x%I64x) name:%S path:%S",
+                                  module_idx, module_handle, module->vaddr_range.min, module->vaddr_range.max,
+                                  module_name, module->string);
+                  module_idx += 1;
+                }
+              }
+              String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+              str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+            }
             else if(str8_match(cmd_name, str8_lit("select_process"), 0))
             {
               handled = 1;
