@@ -2139,6 +2139,9 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
         // rjf: try Mach-O compact unwind first on macOS x64, then fall back to
         // the generic unwinder path.
         U64 cfa = 0;
+        UWND_Unwinder step_unwinder = unwinder;
+        UWND_ModuleInfo step_unwinder_module_info = unwinder_module_info;
+        EH_UWND_ModuleUnwindInfo compact_dwarf_unwind_info = {0};
         if(process_entity->os == OperatingSystem_Mac &&
            arch == Arch_x64 &&
            module_info->macho_unwind_info_data.size != 0)
@@ -2147,11 +2150,24 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
           MachO_UnwindInfoLookupResult lookup = {0};
           B32 compact_is_stale = 0;
           B32 compact_lookup_good = macho_unwind_info_lookup(module_info->macho_unwind_info_data, start_ip - module_entity->vaddr_range.min, &lookup);
+          B32 compact_dwarf = (compact_lookup_good &&
+                               (lookup.encoding & MACHO_UNWIND_X64_MODE_MASK) == MACHO_UNWIND_X64_MODE_DWARF);
           B32 compact_supported = compact_lookup_good && d_macho_compact_unwind_x64_mode_is_supported(lookup.encoding);
           B32 compact_cfa_good = compact_supported && d_macho_compact_unwind_x64_cfa_from_encoding(process_entity->handle, module_entity->vaddr_range.min, &lookup, regs_x64, &compact_is_stale, endt_us, &cfa);
           if(compact_is_stale)
           {
             unwind.flags |= D_UnwindFlag_Stale;
+          }
+          else if(compact_dwarf)
+          {
+            EH_UWND_ModuleUnwindInfo *eh_unwind_info = (module_info->unwinder == UWND_Unwinder_EHFrame ? (EH_UWND_ModuleUnwindInfo *)module_info->unwind_info : 0);
+            if(eh_unwind_info != 0 && eh_unwind_info->eh_frame_vaddr != 0)
+            {
+              compact_dwarf_unwind_info = *eh_unwind_info;
+              compact_dwarf_unwind_info.override_fde_vaddr = eh_unwind_info->eh_frame_vaddr + (lookup.encoding & MACHO_UNWIND_X64_DWARF_SECTION_OFFSET);
+              step_unwinder = UWND_Unwinder_EHFrame;
+              step_unwinder_module_info.unwind_info = &compact_dwarf_unwind_info;
+            }
           }
           else if(compact_lookup_good &&
                   compact_supported &&
@@ -2176,7 +2192,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
         if(!unwind.flags && !step_is_good)
         {
           // rjf: try generic unwind step
-          UWND_StepResult step = uwnd_step(unwinder, arch, &memory_map, &unwinder_module_info, tls_vaddr, regs_block, &cfa);
+          UWND_StepResult step = uwnd_step(step_unwinder, arch, &memory_map, &step_unwinder_module_info, tls_vaddr, regs_block, &cfa);
           // rjf: if the step failed -> restore original register values
           if(step.status != UWND_StepStatus_Good)
           {
@@ -3022,6 +3038,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
             {
               synthesized_eh_unwind_info = push_array(arena, EH_UWND_ModuleUnwindInfo, 1);
               synthesized_eh_unwind_info->ptr_ctx = eh_ptr_ctx;
+              synthesized_eh_unwind_info->eh_frame_vaddr = eh_frame_vrange.min;
               synthesized_eh_unwind_info->header = eh_parse_frame_hdr(eh_frame_hdr_data, byte_size_from_arch(arch), &synthesized_eh_unwind_info->ptr_ctx);
             }
           }
