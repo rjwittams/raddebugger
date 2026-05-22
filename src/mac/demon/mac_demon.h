@@ -189,6 +189,7 @@ internal MAC_DMN_Thread *mac_dmn_thread_from_handle(DMN_Handle handle);
 internal MAC_DMN_Module *mac_dmn_module_from_handle(DMN_Handle handle);
 internal MAC_DMN_Entity *mac_dmn_process_entity_from_pid(pid_t pid);
 internal MAC_DMN_Entity *mac_dmn_thread_entity_from_thread_id(MAC_DMN_Process *process, U64 thread_id);
+internal B32 mac_dmn_thread_port_is_valid(MAC_DMN_Thread *thread);
 internal char **mac_dmn_argv_from_launch_params(Arena *arena, ProcessLaunchParams *params);
 internal char **mac_dmn_envp_from_launch_params(Arena *arena, ProcessLaunchParams *params);
 internal void mac_dmn_apply_child_stdio(ProcessLaunchParams *params);
@@ -201,6 +202,7 @@ internal kern_return_t mac_dmn_exception_port_info_save(MAC_DMN_ExceptionPortInf
 internal kern_return_t mac_dmn_exception_port_info_restore(MAC_DMN_ExceptionPortInfo *info, task_t task);
 internal B32 mac_dmn_process_begin_mach_exceptions(MAC_DMN_Process *process);
 internal void mac_dmn_process_end_mach_exceptions(MAC_DMN_Process *process);
+internal B32 mac_dmn_process_reacquire_task_after_exec(MAC_DMN_Process *process);
 internal S32 mac_dmn_soft_signal_from_exception_message(MAC_DMN_ExceptionMessage *message);
 internal B32 mac_dmn_process_reply_pending_exception(MAC_DMN_Process *process, S32 signal);
 internal B32 mac_dmn_process_stop_for_detach(MAC_DMN_Process *process);
@@ -209,9 +211,11 @@ internal B32 mac_dmn_exception_message_receive(MAC_DMN_ExceptionMessage *message
 internal MAC_DMN_Entity *mac_dmn_process_entity_alloc(pid_t pid, mach_port_t task, B32 is_attached, B32 needs_attach_events);
 internal MAC_DMN_Entity *mac_dmn_thread_entity_alloc(MAC_DMN_Process *process, mach_port_t thread, Arch arch);
 internal void mac_dmn_thread_entity_release(MAC_DMN_Entity *entity);
+internal void mac_dmn_process_clear_thread_entities(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity);
 internal MAC_DMN_Entity *mac_dmn_module_entity_alloc(MAC_DMN_Process *process, U64 base_vaddr, U64 size, String8 path, Arch arch);
 internal MAC_DMN_Entity *mac_dmn_module_entity_from_base_vaddr(MAC_DMN_Process *process, U64 base_vaddr);
 internal void mac_dmn_module_entity_release(MAC_DMN_Entity *entity);
+internal void mac_dmn_process_clear_module_entities(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity);
 internal void mac_dmn_refresh_threads(MAC_DMN_Process *process);
 internal void mac_dmn_refresh_thread_events(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity);
 internal String8 mac_dmn_executable_path_from_pid(Arena *arena, pid_t pid);
