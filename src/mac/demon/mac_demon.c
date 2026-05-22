@@ -2190,7 +2190,17 @@ dmn_ctrl_kill(DMN_CtrlCtx *ctx, DMN_Handle handle, U32 exit_code)
   B32 result = 0;
   if(process != 0)
   {
-    result = (kill(process->pid, SIGKILL) == 0);
+    mac_dmn_process_reply_pending_exception(process, 0);
+    errno = 0;
+    B32 ptrace_kill_worked = (ptrace(PT_KILL, process->pid, 0, 0) == 0);
+    errno = 0;
+    B32 signal_kill_worked = (kill(process->pid, SIGKILL) == 0 || errno == ESRCH);
+    result = (ptrace_kill_worked || signal_kill_worked);
+    kill(process->pid, SIGCONT);
+    if(result)
+    {
+      process->is_running = 1;
+    }
   }
   return result;
 }

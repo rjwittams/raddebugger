@@ -1836,6 +1836,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         case D_CmdKind_Kill:
         {
           D_Entity *process = d_entity_from_handle(params->process);
+          B32 was_running = d_ctrl_targets_running();
           if(process == &d_entity_nil)
           {
             log_user_error(str8_lit("Cannot kill; no process was specified."));
@@ -1847,6 +1848,30 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
             msg->exit_code = 1;
             msg->entity = process->handle;
             MemoryCopyArray(msg->exception_code_filters, exception_code_filters);
+            if(was_running)
+            {
+              run_kind   = d_user_state->ctrl_last_run_kind;
+              run_thread = d_entity_from_handle(d_user_state->ctrl_last_run_thread_handle);
+              if(run_thread == &d_entity_nil ||
+                 d_entity_ancestor_from_kind(run_thread, D_EntityKind_Process) == process)
+              {
+                run_thread = &d_entity_nil;
+                D_EntityArray threads = d_entity_array_from_kind(D_EntityKind_Thread);
+                for EachIndex(idx, threads.count)
+                {
+                  D_Entity *thread = threads.v[idx];
+                  if(!thread->is_frozen &&
+                     d_entity_ancestor_from_kind(thread, D_EntityKind_Process) != process)
+                  {
+                    run_thread = thread;
+                    break;
+                  }
+                }
+              }
+              need_run = (run_thread != &d_entity_nil);
+              run_flags = d_user_state->ctrl_last_run_flags|D_RunFlag_IgnoreInitialHalt;
+              run_traps = d_user_state->ctrl_last_run_traps;
+            }
           }
         }break;
         case D_CmdKind_KillAll:
@@ -1859,6 +1884,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         case D_CmdKind_Detach:
         {
           D_Entity *process = d_entity_from_handle(params->process);
+          B32 was_running = d_ctrl_targets_running();
           if(process == &d_entity_nil)
           {
             log_user_error(str8_lit("Cannot detach; no process specified."));
@@ -1869,6 +1895,30 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
             msg->kind   = D_MsgKind_Detach;
             msg->entity = process->handle;
             MemoryCopyArray(msg->exception_code_filters, exception_code_filters);
+            if(was_running)
+            {
+              run_kind   = d_user_state->ctrl_last_run_kind;
+              run_thread = d_entity_from_handle(d_user_state->ctrl_last_run_thread_handle);
+              if(run_thread == &d_entity_nil ||
+                 d_entity_ancestor_from_kind(run_thread, D_EntityKind_Process) == process)
+              {
+                run_thread = &d_entity_nil;
+                D_EntityArray threads = d_entity_array_from_kind(D_EntityKind_Thread);
+                for EachIndex(idx, threads.count)
+                {
+                  D_Entity *thread = threads.v[idx];
+                  if(!thread->is_frozen &&
+                     d_entity_ancestor_from_kind(thread, D_EntityKind_Process) != process)
+                  {
+                    run_thread = thread;
+                    break;
+                  }
+                }
+              }
+              need_run = (run_thread != &d_entity_nil);
+              run_flags = d_user_state->ctrl_last_run_flags|D_RunFlag_IgnoreInitialHalt;
+              run_traps = d_user_state->ctrl_last_run_traps;
+            }
           }
         }break;
         case D_CmdKind_Continue:
@@ -2211,7 +2261,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         d_user_state->ctrl_last_run_kind              = run_kind;
         d_user_state->ctrl_last_run_frame_idx         = d_frame_index();
         d_user_state->ctrl_last_run_thread_handle     = run_thread->handle;
-        d_user_state->ctrl_last_run_flags             = run_flags;
+        d_user_state->ctrl_last_run_flags             = run_flags & ~D_RunFlag_IgnoreInitialHalt;
         d_user_state->ctrl_last_run_traps             = d_trap_list_copy(d_user_state->ctrl_last_run_arena, &run_traps_copy);
         d_user_state->ctrl_last_run_extra_bps         = d_breakpoint_array_copy(d_user_state->ctrl_last_run_arena, &run_extra_bps_copy);
         d_user_state->ctrl_is_running                 = 1;
