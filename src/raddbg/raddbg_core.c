@@ -12951,9 +12951,30 @@ rd_frame(void)
                 Access *access = access_open();
                 D_Entity *process = d_entity_ancestor_from_kind(thread, D_EntityKind_Process);
                 ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
-                D_CallStack call_stack = d_call_stack_from_thread(access, thread->handle, 1, now_time_us()+1000000);
+                U64 endt_us = now_time_us()+1000000;
+                D_Unwind unwind = d_unwind_from_thread(scratch.arena, thread->handle, endt_us);
+                D_CallStack call_stack = d_call_stack_from_unwind(scratch.arena, process, &unwind);
                 String8List lines = {0};
-                str8_list_pushf(scratch.arena, &lines, "frames:%I64u concrete:%I64u", call_stack.frames_count, call_stack.concrete_frames_count);
+                str8_list_pushf(scratch.arena, &lines, "frames:%I64u concrete:%I64u unwind_flags:0x%x", call_stack.frames_count, call_stack.concrete_frames_count, unwind.flags);
+                if(call_stack.frames_count == 0)
+                {
+                  void *regs_block = d_cached_reg_block_from_thread(scratch.arena, thread->handle);
+                  if(regs_block != 0)
+                  {
+                    U64 rip_vaddr = arch_ip_from_reg_block(arch_info, regs_block);
+                    U64 rsp_vaddr = arch_sp_from_reg_block(arch_info, regs_block);
+                    D_Entity *module = d_module_from_process_vaddr(process, rip_vaddr);
+                    String8 module_name = module != &d_entity_nil ? str8_skip_last_slash(module->string) : str8_lit("???");
+                    U64 module_base = module != &d_entity_nil ? module->vaddr_range.min : 0;
+                    U64 rip_voff = module != &d_entity_nil ? rip_vaddr - module_base : 0;
+                    String8 unwind_info_data = module != &d_entity_nil ? d_macho_unwind_info_data_from_module(scratch.arena, module->handle) : str8_zero();
+                    MachO_UnwindInfoLookupResult lookup = {0};
+                    B32 compact_lookup_good = macho_unwind_info_lookup(unwind_info_data, rip_voff, &lookup);
+                    U64 eh_frame_vaddr = module != &d_entity_nil ? d_eh_frame_vaddr_from_module(module->handle) : 0;
+                    str8_list_pushf(scratch.arena, &lines, "\nzero_frame_debug rip=0x%I64x rsp=0x%I64x module=%S base=0x%I64x voff=0x%I64x compact=%u encoding=0x%x eh_frame=0x%I64x",
+                                    rip_vaddr, rsp_vaddr, module_name, module_base, rip_voff, compact_lookup_good, lookup.encoding, eh_frame_vaddr);
+                  }
+                }
                 for(U64 idx = 0; idx < call_stack.frames_count; idx += 1)
                 {
                   D_CallStackFrame *frame = &call_stack.frames[call_stack.frames_count - 1 - idx];
