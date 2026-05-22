@@ -20,6 +20,12 @@ dasm_inst_from_code(Arena *arena, Arch arch, U64 vaddr, String8 code, DASM_Synta
       inst = x64_dasm_inst_from_code(arena, vaddr, code, syntax);
     }break;
 #endif
+#if defined(ARM64_H)
+    case Arch_arm64:
+    {
+      inst = arm64_dasm_inst_from_code(arena, vaddr, code, syntax);
+    }break;
+#endif
   }
   return inst;
 }
