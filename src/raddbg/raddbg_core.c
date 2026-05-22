@@ -4435,10 +4435,11 @@ rd_view_ui(Rng2F32 rect)
                             }
                           }
                           
-                          // rjf: can't edit, but has thread? -> select
-                          else if(cell_info.entity->kind == D_EntityKind_Thread)
+                          // Process/thread entity cells select the corresponding debug context.
+                          else if(cell_info.entity->kind == D_EntityKind_Process ||
+                                  cell_info.entity->kind == D_EntityKind_Thread)
                           {
-                            rd_cmd(RD_CmdKind_SelectThread, .thread = cell_info.entity->handle);
+                            rd_cmd(RD_CmdKind_SelectEntity, .ctrl_entity = cell_info.entity->handle);
                           }
                           
                           // rjf: other cases, but this watch window is floating, and this has a cfg/entity? -> push query
@@ -12849,6 +12850,41 @@ rd_frame(void)
               String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
               str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
             }
+            else if(str8_match(cmd_name, str8_lit("select_process"), 0))
+            {
+              handled = 1;
+              String8 process_string = {0};
+              if(msg_parts.first != 0 && msg_parts.first->next != 0)
+              {
+                process_string = msg_parts.first->next->string;
+              }
+              D_Entity *process = d_entity_from_handle(d_handle_from_string(process_string));
+              if(process == &d_entity_nil)
+              {
+                U64 pid = 0;
+                if(try_u64_from_str8_c_rules(process_string, &pid))
+                {
+                  D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
+                  for(U64 idx = 0; idx < processes.count; idx += 1)
+                  {
+                    if(processes.v[idx]->id == pid)
+                    {
+                      process = processes.v[idx];
+                      break;
+                    }
+                  }
+                }
+              }
+              if(process == &d_entity_nil || process->kind != D_EntityKind_Process)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: process not found");
+              }
+              else
+              {
+                rd_cmd(RD_CmdKind_SelectEntity, .ctrl_entity = process->handle);
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "ok");
+              }
+            }
             else if(str8_match(cmd_name, str8_lit("read_memory"), 0) ||
                str8_match(cmd_name, str8_lit("write_memory"), 0))
             {
@@ -16369,10 +16405,32 @@ rd_frame(void)
             }
           }break;
           
-          //- rjf: debug control context management operations
+          //- debug control context management operations
           case RD_CmdKind_SelectEntity:
           {
-            rd_cmd(RD_CmdKind_SelectThread, .thread = rd_regs()->ctrl_entity);
+            D_Entity *entity = d_entity_from_handle(rd_regs()->ctrl_entity);
+            if(entity->kind == D_EntityKind_Thread)
+            {
+              rd_cmd(RD_CmdKind_SelectThread, .thread = entity->handle);
+            }
+            else if(entity->kind == D_EntityKind_Process)
+            {
+              D_Entity *thread = d_entity_child_from_kind(entity, D_EntityKind_Thread);
+              if(thread != &d_entity_nil)
+              {
+                rd_cmd(RD_CmdKind_SelectThread, .thread = thread->handle);
+              }
+              else
+              {
+                D_Entity *machine = d_entity_ancestor_from_kind(entity, D_EntityKind_Machine);
+                rd_state->base_regs.v.unwind_count = 0;
+                rd_state->base_regs.v.inline_depth = 0;
+                rd_state->base_regs.v.thread  = d_handle_zero();
+                rd_state->base_regs.v.module  = d_handle_zero();
+                rd_state->base_regs.v.process = entity->handle;
+                rd_state->base_regs.v.machine = machine->handle;
+              }
+            }
           }break;
           case RD_CmdKind_SelectThread:
           {
