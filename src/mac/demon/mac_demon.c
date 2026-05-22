@@ -2375,9 +2375,12 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       {
         any_processes = 1;
         MAC_DMN_Process *process = &entity->process;
-        if(process->is_attached && mac_dmn_process_should_run(entity, ctrls))
+        if(process->is_attached)
         {
           mac_dmn_process_suspend_frozen_threads(process, ctrls);
+        }
+        if(process->is_attached && mac_dmn_process_should_run(entity, ctrls))
+        {
           mac_dmn_process_reply_pending_exception(process, 0);
           errno = 0;
           int ptrace_op = PT_CONTINUE;
