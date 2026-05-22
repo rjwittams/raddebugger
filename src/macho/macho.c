@@ -189,3 +189,29 @@ macho_base_vaddr_from_bin(String8 data, MachO_Bin *bin)
   }
   return result;
 }
+
+internal U64
+macho_image_size_from_bin(String8 data, MachO_Bin *bin)
+{
+  U64 result = 0;
+  U64 base_vaddr = macho_base_vaddr_from_bin(data, bin);
+  if(base_vaddr != 0)
+  {
+    U64 max_vaddr = base_vaddr;
+    for EachIndex(idx, bin->load_commands.count)
+    {
+      MachO_LoadCommandInfo *info = &bin->load_commands.v[idx];
+      if(info->cmd == MACHO_LC_SEGMENT_64 && info->offset + sizeof(MachO_SegmentCommand64) <= data.size)
+      {
+        MachO_SegmentCommand64 segment = {0};
+        str8_deserial_read_struct(data, info->offset, &segment);
+        if(segment.vmaddr >= base_vaddr)
+        {
+          max_vaddr = Max(max_vaddr, segment.vmaddr + segment.vmsize);
+        }
+      }
+    }
+    result = max_vaddr - base_vaddr;
+  }
+  return result;
+}

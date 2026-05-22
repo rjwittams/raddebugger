@@ -1265,9 +1265,18 @@ process_launch(ProcessLaunchParams *params)
   int file_actions_init_code = posix_spawn_file_actions_init(&file_actions);
   if(file_actions_init_code == 0)
   {
-    int stdout_code = posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdout_file.u64[0], STDOUT_FILENO);
-    int stderr_code = posix_spawn_file_actions_adddup2(&file_actions, (int)params->stderr_file.u64[0], STDERR_FILENO);
-    int stdin_code = posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdin_file.u64[0], STDIN_FILENO);
+    if(!file_match(params->stdout_file, file_zero()))
+    {
+      posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdout_file.u64[0], STDOUT_FILENO);
+    }
+    if(!file_match(params->stderr_file, file_zero()))
+    {
+      posix_spawn_file_actions_adddup2(&file_actions, (int)params->stderr_file.u64[0], STDERR_FILENO);
+    }
+    if(!file_match(params->stdin_file, file_zero()))
+    {
+      posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdin_file.u64[0], STDIN_FILENO);
+    }
     posix_spawnattr_t attr = {0};
     int attr_init_code = posix_spawnattr_init(&attr);
     if(attr_init_code == 0)
@@ -1299,7 +1308,7 @@ process_launch(ProcessLaunchParams *params)
       {
         envp = push_array(scratch.arena, char *, params->env.node_count + 2);
         U64 env_idx = 0;
-        for EachNode(n, String8Node, params->cmd_line.first)
+        for EachNode(n, String8Node, params->env.first)
         {
           envp[env_idx] = (char *)n->string.str;
           env_idx += 1;
