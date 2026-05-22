@@ -1774,7 +1774,12 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
         {
           mac_dmn_process_suspend_frozen_threads(process, ctrls);
           errno = 0;
-          if(ptrace(PT_CONTINUE, process->pid, (caddr_t)1, 0) == 0 || errno == EBUSY)
+          int ptrace_op = PT_CONTINUE;
+          if(single_step_thread_entity != 0 && single_step_thread_entity->thread.process == process)
+          {
+            ptrace_op = PT_STEP;
+          }
+          if(ptrace(ptrace_op, process->pid, (caddr_t)1, 0) == 0 || errno == EBUSY)
           {
             process->is_running = 1;
             any_running = 1;
