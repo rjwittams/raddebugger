@@ -18,6 +18,8 @@
 #import <AppKit/NSApplication.h>
 #import <AppKit/NSCursor.h>
 #import <AppKit/NSEvent.h>
+#import <AppKit/NSMenu.h>
+#import <AppKit/NSMenuItem.h>
 #import <AppKit/NSOpenPanel.h>
 #import <AppKit/NSPasteboard.h>
 #import <AppKit/NSScreen.h>
@@ -41,11 +43,30 @@ typedef enum MAC_WM_ChromeMode
 }
 MAC_WM_ChromeMode;
 
+typedef enum MAC_WM_MenuMode
+{
+  MAC_WM_MenuMode_Self,
+  MAC_WM_MenuMode_Native,
+}
+MAC_WM_MenuMode;
+
+typedef struct MAC_WM_MenuCommandNode MAC_WM_MenuCommandNode;
+struct MAC_WM_MenuCommandNode
+{
+  MAC_WM_MenuCommandNode *next;
+  WM_Window window;
+  String8 command_name;
+};
+
 @interface MAC_WM_WindowDelegate : NSObject<NSWindowDelegate>
 {
 @public
   MAC_WM_Window *window;
 }
+@end
+
+@interface MAC_WM_MenuTarget : NSObject
+- (void)menuItemSelected:(id)sender;
 @end
 
 #define MAC_WM_TITLE_BAR_CLIENT_AREA_CAP 128
@@ -75,6 +96,11 @@ struct MAC_WM_State
   MAC_WM_Window *last_window;
   MAC_WM_Window *free_window;
   MAC_WM_ChromeMode chrome_mode;
+  MAC_WM_MenuMode menu_mode;
+  MAC_WM_MenuTarget *menu_target;
+  MAC_WM_MenuCommandNode *first_pending_menu_command;
+  MAC_WM_MenuCommandNode *last_pending_menu_command;
+  MAC_WM_MenuCommandNode *free_menu_command_node;
   B32 key_is_down[WM_Key_COUNT];
 };
 
@@ -84,7 +110,9 @@ internal WM_Window mac_wm_handle_from_window(MAC_WM_Window *window);
 internal MAC_WM_Window *mac_wm_window_from_handle(WM_Window handle);
 internal MAC_WM_Window *mac_wm_window_from_ns_window(NSWindow *ns_window);
 internal MAC_WM_ChromeMode mac_wm_chrome_mode_from_environment(void);
+internal MAC_WM_MenuMode mac_wm_menu_mode_from_environment(void);
 internal B32 mac_wm_chrome_mode_has_native_controls(MAC_WM_ChromeMode mode);
+internal void mac_wm_push_menu_command(String8 command_name);
 internal B32 mac_wm_window_pos_is_title_bar_client_area(MAC_WM_Window *window, Vec2F32 pos);
 internal Rng2F32 mac_wm_rect_from_ns_rect(NSRect rect);
 internal Vec2F32 mac_wm_client_pos_from_ns_point(MAC_WM_Window *window, NSPoint point);

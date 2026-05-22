@@ -19,6 +19,18 @@
 }
 @end
 
+@implementation MAC_WM_MenuTarget
+- (void)menuItemSelected:(id)sender
+{
+  NSString *command = [sender representedObject];
+  if(command != 0)
+  {
+    char const *utf8 = [command UTF8String];
+    mac_wm_push_menu_command(str8_cstring((char *)utf8));
+  }
+}
+@end
+
 internal WM_Window
 mac_wm_handle_from_window(MAC_WM_Window *window)
 {
@@ -76,12 +88,54 @@ mac_wm_chrome_mode_from_environment(void)
   return result;
 }
 
+internal MAC_WM_MenuMode
+mac_wm_menu_mode_from_environment(void)
+{
+  MAC_WM_MenuMode result = MAC_WM_MenuMode_Self;
+  char *env = getenv("RADDBG_MAC_MENU");
+  if(env != 0)
+  {
+    String8 string = str8_cstring(env);
+    if(str8_match(string, str8_lit("native"), 0))
+    {
+      result = MAC_WM_MenuMode_Native;
+    }
+    else if(str8_match(string, str8_lit("self"), 0))
+    {
+      result = MAC_WM_MenuMode_Self;
+    }
+  }
+  return result;
+}
+
 internal B32
 mac_wm_chrome_mode_has_native_controls(MAC_WM_ChromeMode mode)
 {
   B32 result = (mode == MAC_WM_ChromeMode_Integrated ||
                 mode == MAC_WM_ChromeMode_Native);
   return result;
+}
+
+internal void
+mac_wm_push_menu_command(String8 command_name)
+{
+  if(mac_wm_state != 0)
+  {
+    MAC_WM_MenuCommandNode *node = mac_wm_state->free_menu_command_node;
+    if(node != 0)
+    {
+      SLLStackPop(mac_wm_state->free_menu_command_node);
+      MemoryZeroStruct(node);
+    }
+    else
+    {
+      node = push_array(mac_wm_state->arena, MAC_WM_MenuCommandNode, 1);
+    }
+    node->command_name = push_str8_copy(mac_wm_state->arena, command_name);
+    node->window = mac_wm_handle_from_window(mac_wm_window_from_ns_window([NSApp keyWindow]));
+    SLLQueuePush(mac_wm_state->first_pending_menu_command, mac_wm_state->last_pending_menu_command, node);
+    wm_send_wakeup_event();
+  }
 }
 
 internal B32
@@ -346,6 +400,8 @@ wm_init(void)
   mac_wm_state->gfx_info.caret_blink_time = 0.5f;
   mac_wm_state->gfx_info.default_refresh_rate = 60.f;
   mac_wm_state->chrome_mode = mac_wm_chrome_mode_from_environment();
+  mac_wm_state->menu_mode = mac_wm_menu_mode_from_environment();
+  mac_wm_state->menu_target = [MAC_WM_MenuTarget new];
 
   [NSApplication sharedApplication];
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
@@ -930,6 +986,18 @@ wm_get_events(Arena *arena, B32 wait)
       event->window = mac_wm_handle_from_window(window);
     }
   }
+  for(MAC_WM_MenuCommandNode *node = mac_wm_state->first_pending_menu_command, *next = 0;
+      node != 0;
+      node = next)
+  {
+    next = node->next;
+    WM_Event *event = wm_event_list_push_new(arena, &result, WM_EventKind_MenuCommand);
+    event->window = node->window;
+    event->string = push_str8_copy(arena, node->command_name);
+    SLLStackPush(mac_wm_state->free_menu_command_node, node);
+  }
+  mac_wm_state->first_pending_menu_command = 0;
+  mac_wm_state->last_pending_menu_command = 0;
   return result;
 }
 
@@ -962,6 +1030,80 @@ wm_mouse_from_window(WM_Window handle)
     NSPoint point = [window->ns_window mouseLocationOutsideOfEventStream];
     result = mac_wm_client_pos_from_ns_point(window, point);
   }
+  return result;
+}
+
+////////////////////////////////
+//~ @os_hooks Application Menu (Implemented Per-OS)
+
+internal NSString *
+mac_wm_persistent_ns_string_from_string8(String8 string)
+{
+  NSString *result = [[NSString alloc] initWithBytes:string.str length:string.size encoding:NSUTF8StringEncoding];
+  return result;
+}
+
+internal void
+wm_set_main_menu(WM_MenuArray menu_array)
+{
+  if(mac_wm_state->menu_mode == MAC_WM_MenuMode_Native)
+  {
+    NSMenu *main_menu = [[NSMenu alloc] initWithTitle:@""];
+
+    NSMenuItem *app_menu_item = [[NSMenuItem alloc] initWithTitle:@"" action:0 keyEquivalent:@""];
+    [main_menu addItem:app_menu_item];
+
+    NSMenu *app_menu = [[NSMenu alloc] initWithTitle:@"RAD Debugger"];
+    NSMenuItem *quit_item = [[NSMenuItem alloc] initWithTitle:@"Quit RAD Debugger"
+                                                       action:@selector(menuItemSelected:)
+                                                keyEquivalent:@"q"];
+    [quit_item setTarget:mac_wm_state->menu_target];
+    [quit_item setRepresentedObject:mac_wm_persistent_ns_string_from_string8(str8_lit("exit"))];
+    [app_menu addItem:quit_item];
+    [main_menu setSubmenu:app_menu forItem:app_menu_item];
+
+    for(U64 menu_idx = 0; menu_idx < menu_array.count; menu_idx += 1)
+    {
+      WM_Menu *menu = &menu_array.menus[menu_idx];
+      NSString *menu_label = mac_wm_persistent_ns_string_from_string8(menu->label);
+      NSMenuItem *menu_item = [[NSMenuItem alloc] initWithTitle:menu_label action:0 keyEquivalent:@""];
+      NSMenu *submenu = [[NSMenu alloc] initWithTitle:menu_label];
+      [main_menu addItem:menu_item];
+      [main_menu setSubmenu:submenu forItem:menu_item];
+
+      for(U64 item_idx = 0; item_idx < menu->item_count; item_idx += 1)
+      {
+        WM_MenuItem *item = &menu->items[item_idx];
+        switch(item->kind)
+        {
+          default:{}break;
+          case WM_MenuItemKind_Separator:
+          {
+            [submenu addItem:[NSMenuItem separatorItem]];
+          }break;
+          case WM_MenuItemKind_Command:
+          {
+            NSString *label = mac_wm_persistent_ns_string_from_string8(item->label);
+            NSString *command = mac_wm_persistent_ns_string_from_string8(item->command_name);
+            NSMenuItem *ns_item = [[NSMenuItem alloc] initWithTitle:label
+                                                             action:@selector(menuItemSelected:)
+                                                      keyEquivalent:@""];
+            [ns_item setTarget:mac_wm_state->menu_target];
+            [ns_item setRepresentedObject:command];
+            [submenu addItem:ns_item];
+          }break;
+        }
+      }
+    }
+
+    [NSApp setMainMenu:main_menu];
+  }
+}
+
+internal B32
+wm_application_menu_bar_is_native(void)
+{
+  B32 result = (mac_wm_state->menu_mode == MAC_WM_MenuMode_Native);
   return result;
 }
 
