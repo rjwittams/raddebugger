@@ -90,6 +90,88 @@ r_mtl_resource_options_from_kind(R_ResourceKind kind)
   return result;
 }
 
+internal void
+r_mtl_log_ns_error(char *context, NSError *error)
+{
+  if(error != 0)
+  {
+    fprintf(stderr, "raddebugger: Metal %s: %s\n", context, [[error localizedDescription] UTF8String]);
+  }
+}
+
+internal id<MTLRenderPipelineState>
+r_mtl_render_pipeline_from_library(id<MTLLibrary> library, NSString *vertex_name, NSString *fragment_name, MTLPixelFormat pixel_format)
+{
+  id<MTLRenderPipelineState> result = 0;
+  id<MTLFunction> vertex_function = [library newFunctionWithName:vertex_name];
+  id<MTLFunction> fragment_function = [library newFunctionWithName:fragment_name];
+  if(vertex_function != 0 && fragment_function != 0)
+  {
+    MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
+    descriptor.vertexFunction = vertex_function;
+    descriptor.fragmentFunction = fragment_function;
+    descriptor.colorAttachments[0].pixelFormat = pixel_format;
+    descriptor.colorAttachments[0].blendingEnabled = YES;
+    descriptor.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
+    descriptor.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
+    descriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+    descriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+    descriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+    descriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorZero;
+    NSError *error = 0;
+    result = [r_mtl_state->device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+    r_mtl_log_ns_error((char *)[[NSString stringWithFormat:@"pipeline %@/%@", vertex_name, fragment_name] UTF8String], error);
+  }
+  else
+  {
+    fprintf(stderr, "raddebugger: Metal missing shader function %s/%s\n", [vertex_name UTF8String], [fragment_name UTF8String]);
+  }
+  return result;
+}
+
+internal void
+r_mtl_window_resize_targets(R_MTL_Window *window)
+{
+  if(window != 0 && r_mtl_state->device != 0)
+  {
+    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                         width:Max(window->drawable_size.x, 1)
+                                                                                        height:Max(window->drawable_size.y, 1)
+                                                                                     mipmapped:NO];
+    descriptor.usage = MTLTextureUsageRenderTarget|MTLTextureUsageShaderRead;
+    descriptor.storageMode = MTLStorageModePrivate;
+    window->stage_color = [r_mtl_state->device newTextureWithDescriptor:descriptor];
+    window->stage_scratch_color = [r_mtl_state->device newTextureWithDescriptor:descriptor];
+    [window->stage_color setLabel:@"RAD stage color"];
+    [window->stage_scratch_color setLabel:@"RAD stage scratch color"];
+  }
+}
+
+internal id<MTLBuffer>
+r_mtl_upload_buffer(void *data, U64 size, U64 align, U64 *out_offset)
+{
+  id<MTLBuffer> result = 0;
+  if(size != 0)
+  {
+    U64 idx = r_mtl_state->upload_buffer_idx % ArrayCount(r_mtl_state->upload_buffers);
+    align = ClampBot(1, align);
+    U64 pos = AlignPow2(r_mtl_state->upload_buffer_pos, align);
+    U64 need_cap = pos + size;
+    if(r_mtl_state->upload_buffers[idx] == 0 || r_mtl_state->upload_buffer_caps[idx] < need_cap)
+    {
+      U64 new_cap = ClampBot(MB(1), need_cap);
+      r_mtl_state->upload_buffers[idx] = [r_mtl_state->device newBufferWithLength:new_cap options:MTLResourceStorageModeShared];
+      [r_mtl_state->upload_buffers[idx] setLabel:@"RAD transient upload buffer"];
+      r_mtl_state->upload_buffer_caps[idx] = new_cap;
+    }
+    result = r_mtl_state->upload_buffers[idx];
+    MemoryCopy((U8 *)[result contents] + pos, data, size);
+    r_mtl_state->upload_buffer_pos = pos + size;
+    *out_offset = pos;
+  }
+  return result;
+}
+
 internal F32
 r_mtl_contents_scale_from_window(WM_Window window)
 {
@@ -177,20 +259,65 @@ r_mtl_rect_vertices_push(R_MTL_RectVertex *vertices, U64 *idx, R_Rect2DInst *ins
   }
 }
 
-internal MTLScissorRect
-r_mtl_scissor_from_clip(Rng2F32 clip, Vec2S32 drawable_size, F32 scale)
+internal B32
+r_mtl_scissor_from_clip(Rng2F32 clip, Vec2S32 drawable_size, F32 scale, MTLScissorRect *out)
 {
   S32 x0 = Clamp(0, (S32)floor_f32(clip.x0*scale), drawable_size.x);
   S32 y0 = Clamp(0, (S32)floor_f32(clip.y0*scale), drawable_size.y);
   S32 x1 = Clamp(0, (S32)ceil_f32(clip.x1*scale), drawable_size.x);
   S32 y1 = Clamp(0, (S32)ceil_f32(clip.y1*scale), drawable_size.y);
-  MTLScissorRect result =
+  B32 result = (x0 < x1 && y0 < y1);
+  if(result)
   {
-    (NSUInteger)x0,
-    (NSUInteger)y0,
-    (NSUInteger)Max(x1 - x0, 1),
-    (NSUInteger)Max(y1 - y0, 1),
-  };
+    out->x = (NSUInteger)x0;
+    out->y = (NSUInteger)y0;
+    out->width = (NSUInteger)(x1 - x0);
+    out->height = (NSUInteger)(y1 - y0);
+  }
+  return result;
+}
+
+internal R_MTL_BlurUniforms
+r_mtl_blur_uniforms_from_params(R_PassParams_Blur *params, Vec2F32 viewport_dim)
+{
+  R_MTL_BlurUniforms result = {0};
+  result.rect = params->rect;
+  result.viewport_size = viewport_dim;
+  MemoryCopyArray(result.corner_radii.v, params->corner_radii);
+
+  F32 weights[ArrayCount(result.kernel)*2] = {0};
+  F32 blur_size = Min(params->blur_size, ArrayCount(weights));
+  U64 blur_count = (U64)round_f32(blur_size);
+  F32 stdev = (blur_size-1.f)/2.f;
+  F32 one_over_root_2pi_stdev2 = 1/sqrt_f32(2*pi32*stdev*stdev);
+  F32 euler32 = 2.718281828459045f;
+  weights[0] = 1.f;
+  if(stdev > 0.f)
+  {
+    for(U64 idx = 0; idx < blur_count; idx += 1)
+    {
+      F32 kernel_x = (F32)idx;
+      weights[idx] = one_over_root_2pi_stdev2*pow_f32(euler32, -kernel_x*kernel_x/(2.f*stdev*stdev));
+    }
+  }
+  if(weights[0] > 1.f)
+  {
+    MemoryZeroArray(weights);
+    weights[0] = 1.f;
+  }
+  else
+  {
+    for(U64 idx = 1; idx < blur_count; idx += 2)
+    {
+      F32 w0 = weights[idx + 0];
+      F32 w1 = weights[idx + 1];
+      F32 w = w0 + w1;
+      F32 t = w1 / w;
+      result.kernel[(idx+1)/2] = v4f32(w, (F32)idx + t, 0, 0);
+    }
+  }
+  result.kernel[0].x = weights[0];
+  result.blur_count = 1 + (U32)(blur_count / 2);
   return result;
 }
 
@@ -222,6 +349,20 @@ r_init(CmdLine *cmdln)
        "struct RectUniforms {\n"
        "  packed_float2 viewport_size;\n"
        "  float opacity;\n"
+       "  float _padding0;\n"
+       "  float4x4 texture_sample_channel_map;\n"
+       "};\n"
+       "struct BlurUniforms {\n"
+       "  float4 rect;\n"
+       "  float4 corner_radii;\n"
+       "  packed_float2 direction;\n"
+       "  packed_float2 viewport_size;\n"
+       "  uint blur_count;\n"
+       "  uint _padding0[3];\n"
+       "  float4 kernel_weights[32];\n"
+       "};\n"
+       "struct FinalizeUniforms {\n"
+       "  packed_float2 viewport_size;\n"
        "};\n"
        "struct VertexOut {\n"
        "  float4 position [[position]];\n"
@@ -236,6 +377,12 @@ r_init(CmdLine *cmdln)
        "};\n"
        "float rect_sdf(float2 sample_pos, float2 rect_half_size, float r) {\n"
        "  return length(max(abs(sample_pos) - rect_half_size + r, 0.0f)) - r;\n"
+       "}\n"
+       "float linear_from_srgb_f32(float x) {\n"
+       "  return x < 0.0404482362771082f ? x / 12.92f : pow((x + 0.055f) / 1.055f, 2.4f);\n"
+       "}\n"
+       "float4 linear_from_srgba(float4 v) {\n"
+       "  return float4(linear_from_srgb_f32(v.x), linear_from_srgb_f32(v.y), linear_from_srgb_f32(v.z), v.w);\n"
        "}\n"
        "vertex VertexOut rect_vertex(uint vertex_id [[vertex_id]],\n"
        "                             const device RectVertex *vertices [[buffer(0)]],\n"
@@ -259,7 +406,11 @@ r_init(CmdLine *cmdln)
        "                              texture2d<float> tex [[texture(0)]],\n"
        "                              sampler tex_sampler [[sampler(0)]],\n"
        "                              constant RectUniforms &uniforms [[buffer(1)]]) {\n"
-       "  float4 sample_color = in.omit_texture > 0.5f ? float4(1.0f) : tex.sample(tex_sampler, in.texcoord);\n"
+       "  float4 sample_color = float4(1.0f);\n"
+       "  if(in.omit_texture < 0.5f) {\n"
+       "    sample_color = uniforms.texture_sample_channel_map * tex.sample(tex_sampler, in.texcoord);\n"
+       "    sample_color = linear_from_srgba(sample_color);\n"
+       "  }\n"
        "  float soft_span = max(2.0f*in.softness, 0.001f);\n"
        "  float border_sdf_t = 1.0f;\n"
        "  if(in.border_thickness > 0.0f) {\n"
@@ -281,26 +432,74 @@ r_init(CmdLine *cmdln)
        "  result.a *= border_sdf_t;\n"
        "  result.rgb *= uniforms.opacity;\n"
        "  return result;\n"
+       "}\n"
+       "vertex VertexOut fullscreen_vertex(uint vertex_id [[vertex_id]],\n"
+       "                                 constant FinalizeUniforms &uniforms [[buffer(0)]]) {\n"
+       "  float2 pos[] = { float2(0.0f, uniforms.viewport_size.y), float2(0.0f, 0.0f), float2(uniforms.viewport_size.x, uniforms.viewport_size.y), float2(uniforms.viewport_size.x, 0.0f) };\n"
+       "  float2 pct = pos[vertex_id] / uniforms.viewport_size;\n"
+       "  VertexOut out;\n"
+       "  out.position = float4(2.0f*pct.x - 1.0f, 1.0f - 2.0f*pct.y, 0.0f, 1.0f);\n"
+       "  out.texcoord = pct;\n"
+       "  out.color = float4(1.0f);\n"
+       "  out.sdf_sample_pos = float2(0.0f);\n"
+       "  out.rect_half_size = float2(0.0f);\n"
+       "  out.corner_radius = 0.0f;\n"
+       "  out.border_thickness = 0.0f;\n"
+       "  out.softness = 0.0f;\n"
+       "  out.omit_texture = 0.0f;\n"
+       "  return out;\n"
+       "}\n"
+       "fragment float4 finalize_fragment(VertexOut in [[stage_in]],\n"
+       "                                  texture2d<float> tex [[texture(0)]],\n"
+       "                                  sampler tex_sampler [[sampler(0)]]) {\n"
+       "  return tex.sample(tex_sampler, in.texcoord);\n"
+       "}\n"
+       "vertex VertexOut blur_vertex(uint vertex_id [[vertex_id]],\n"
+       "                          constant BlurUniforms &uniforms [[buffer(0)]]) {\n"
+       "  float2 pos[] = { uniforms.rect.xw, uniforms.rect.xy, uniforms.rect.zw, uniforms.rect.zy };\n"
+       "  float radii[] = { uniforms.corner_radii.y, uniforms.corner_radii.x, uniforms.corner_radii.w, uniforms.corner_radii.z };\n"
+       "  float2 corner_pct = float2((vertex_id >> 1) ? 1.0f : 0.0f, (vertex_id & 1) ? 0.0f : 1.0f);\n"
+       "  float2 pct = pos[vertex_id] / uniforms.viewport_size;\n"
+       "  float2 half_size = float2((uniforms.rect.z - uniforms.rect.x)/2.0f, (uniforms.rect.w - uniforms.rect.y)/2.0f);\n"
+       "  VertexOut out;\n"
+       "  out.position = float4(2.0f*pct.x - 1.0f, 1.0f - 2.0f*pct.y, 0.0f, 1.0f);\n"
+       "  out.texcoord = pct;\n"
+       "  out.color = float4(1.0f);\n"
+       "  out.sdf_sample_pos = (2.0f*corner_pct - 1.0f) * half_size;\n"
+       "  out.rect_half_size = half_size - 2.0f;\n"
+       "  out.corner_radius = radii[vertex_id];\n"
+       "  out.border_thickness = 0.0f;\n"
+       "  out.softness = 0.0f;\n"
+       "  out.omit_texture = 0.0f;\n"
+       "  return out;\n"
+       "}\n"
+       "fragment float4 blur_fragment(VertexOut in [[stage_in]],\n"
+       "                              texture2d<float> tex [[texture(0)]],\n"
+       "                              sampler tex_sampler [[sampler(0)]],\n"
+       "                              constant BlurUniforms &uniforms [[buffer(0)]]) {\n"
+       "  float3 color = uniforms.kernel_weights[0].x * tex.sample(tex_sampler, in.texcoord).rgb;\n"
+       "  for(uint i = 1; i < uniforms.blur_count; i += 1) {\n"
+       "    float weight = uniforms.kernel_weights[i].x;\n"
+       "    float offset = uniforms.kernel_weights[i].y;\n"
+       "    color += weight * tex.sample(tex_sampler, in.texcoord - offset * uniforms.direction).rgb;\n"
+       "    color += weight * tex.sample(tex_sampler, in.texcoord + offset * uniforms.direction).rgb;\n"
+       "  }\n"
+       "  float corner_sdf_s = rect_sdf(in.sdf_sample_pos, in.rect_half_size, in.corner_radius);\n"
+       "  float corner_sdf_t = 1.0f - smoothstep(0.0f, 2.0f, corner_sdf_s);\n"
+       "  if(corner_sdf_t < 0.9f) {\n"
+       "    discard_fragment();\n"
+       "  }\n"
+       "  return float4(color, 1.0f);\n"
        "}\n";
-    NSError *error = 0;
-    id<MTLLibrary> library = [r_mtl_state->device newLibraryWithSource:shader_source options:0 error:&error];
-    if(library != 0)
-    {
-      id<MTLFunction> vertex_function = [library newFunctionWithName:@"rect_vertex"];
-      id<MTLFunction> fragment_function = [library newFunctionWithName:@"rect_fragment"];
-      MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
-      descriptor.vertexFunction = vertex_function;
-      descriptor.fragmentFunction = fragment_function;
-      descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
-      descriptor.colorAttachments[0].blendingEnabled = YES;
-      descriptor.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
-      descriptor.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
-      descriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
-      descriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-      descriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
-      descriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-      r_mtl_state->rect_pipeline = [r_mtl_state->device newRenderPipelineStateWithDescriptor:descriptor error:&error];
-    }
+      NSError *error = 0;
+      id<MTLLibrary> library = [r_mtl_state->device newLibraryWithSource:shader_source options:0 error:&error];
+      r_mtl_log_ns_error("library creation", error);
+      if(library != 0)
+      {
+        r_mtl_state->rect_pipeline = r_mtl_render_pipeline_from_library(library, @"rect_vertex", @"rect_fragment", MTLPixelFormatBGRA8Unorm);
+        r_mtl_state->blur_pipeline = r_mtl_render_pipeline_from_library(library, @"blur_vertex", @"blur_fragment", MTLPixelFormatBGRA8Unorm);
+        r_mtl_state->finalize_pipeline = r_mtl_render_pipeline_from_library(library, @"fullscreen_vertex", @"finalize_fragment", MTLPixelFormatBGRA8Unorm);
+      }
 
     for EachIndex(idx, R_Tex2DSampleKind_COUNT)
     {
@@ -344,6 +543,7 @@ r_window_equip(WM_Window window)
     result->layer.contentsScale = result->contents_scale;
     result->drawable_size = r_mtl_drawable_size_from_window(window);
     result->layer.drawableSize = CGSizeMake(result->drawable_size.x, result->drawable_size.y);
+    r_mtl_window_resize_targets(result);
     [content_view setWantsLayer:YES];
     [content_view setLayer:result->layer];
   }
@@ -363,6 +563,8 @@ r_window_unequip(WM_Window window, R_Handle window_equip)
       [content_view setLayer:0];
     }
     mtl_window->layer = 0;
+    mtl_window->stage_color = 0;
+    mtl_window->stage_scratch_color = 0;
     SLLStackPush(r_mtl_state->free_window, mtl_window);
   }
 }
@@ -503,6 +705,8 @@ r_buffer_release(R_Handle handle)
 r_hook void
 r_begin_frame(void)
 {
+  r_mtl_state->upload_buffer_idx += 1;
+  r_mtl_state->upload_buffer_pos = 0;
 }
 
 r_hook void
@@ -526,6 +730,7 @@ r_window_begin_frame(WM_Window window, R_Handle window_equip)
       mtl_window->drawable_size = drawable_size;
       mtl_window->layer.contentsScale = contents_scale;
       mtl_window->layer.drawableSize = CGSizeMake(drawable_size.x, drawable_size.y);
+      r_mtl_window_resize_targets(mtl_window);
     }
   }
 }
@@ -539,39 +744,42 @@ r_hook void
 r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
 {
   R_MTL_Window *mtl_window = r_mtl_window_from_handle(window_equip);
-  if(mtl_window != 0 && r_mtl_state->command_queue != 0)
+  if(mtl_window != 0 && r_mtl_state->command_queue != 0 && mtl_window->stage_color != 0)
   {
     id<CAMetalDrawable> drawable = [mtl_window->layer nextDrawable];
     if(drawable != 0)
     {
-      MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-      pass.colorAttachments[0].texture = drawable.texture;
-      pass.colorAttachments[0].loadAction = MTLLoadActionClear;
-      pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-      pass.colorAttachments[0].clearColor = MTLClearColorMake(0.06, 0.06, 0.065, 1.0);
-
       id<MTLCommandBuffer> command_buffer = [r_mtl_state->command_queue commandBuffer];
-      id<MTLRenderCommandEncoder> encoder = [command_buffer renderCommandEncoderWithDescriptor:pass];
-      if(r_mtl_state->rect_pipeline != 0)
+      Temp scratch = scratch_begin(0, 0);
+      Rng2F32 viewport_rect = wm_client_rect_from_window(window);
+      Vec2F32 viewport_dim = dim_2f32(viewport_rect);
+      F32 scale = r_mtl_contents_scale_from_window(window);
+
+      MTLRenderPassDescriptor *stage_clear_pass = [MTLRenderPassDescriptor renderPassDescriptor];
+      stage_clear_pass.colorAttachments[0].texture = mtl_window->stage_color;
+      stage_clear_pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+      stage_clear_pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+      stage_clear_pass.colorAttachments[0].clearColor = MTLClearColorMake(0.06, 0.06, 0.065, 1.0);
+      id<MTLRenderCommandEncoder> clear_encoder = [command_buffer renderCommandEncoderWithDescriptor:stage_clear_pass];
+      [clear_encoder endEncoding];
+
+      for(R_PassNode *pass_n = passes->first; pass_n != 0; pass_n = pass_n->next)
       {
-        Temp scratch = scratch_begin(0, 0);
-        Rng2F32 viewport_rect = wm_client_rect_from_window(window);
-        Vec2F32 viewport_dim = dim_2f32(viewport_rect);
-        R_MTL_RectUniforms uniforms =
+        R_Pass *render_pass = &pass_n->v;
+        switch(render_pass->kind)
         {
-          viewport_dim,
-          1.f,
-        };
-        F32 scale = r_mtl_contents_scale_from_window(window);
-        [encoder setRenderPipelineState:r_mtl_state->rect_pipeline];
-        for(R_PassNode *pass_n = passes->first; pass_n != 0; pass_n = pass_n->next)
-        {
-          R_Pass *render_pass = &pass_n->v;
-          switch(render_pass->kind)
+          default:{}break;
+          case R_PassKind_UI:
           {
-            default:{}break;
-            case R_PassKind_UI:
+            if(r_mtl_state->rect_pipeline != 0)
             {
+              MTLRenderPassDescriptor *stage_pass = [MTLRenderPassDescriptor renderPassDescriptor];
+              stage_pass.colorAttachments[0].texture = mtl_window->stage_color;
+              stage_pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+              stage_pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+              id<MTLRenderCommandEncoder> encoder = [command_buffer renderCommandEncoderWithDescriptor:stage_pass];
+              [encoder setRenderPipelineState:r_mtl_state->rect_pipeline];
+
               R_PassParams_UI *params = render_pass->params_ui;
               for(R_BatchGroup2DNode *group_n = params->rects.first; group_n != 0; group_n = group_n->next)
               {
@@ -597,41 +805,118 @@ r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
                       r_mtl_rect_vertices_push(vertices, &vertex_idx, insts + inst_idx, group_params, texture->size);
                     }
                   }
-                  id<MTLBuffer> vertex_buffer = [r_mtl_state->device newBufferWithBytes:vertices
-                                                                                  length:vertex_count*sizeof(R_MTL_RectVertex)
-                                                                                 options:MTLResourceStorageModeShared];
-                  R_MTL_RectUniforms group_uniforms = uniforms;
+                  U64 vertex_offset = 0;
+                  id<MTLBuffer> vertex_buffer = r_mtl_upload_buffer(vertices, vertex_count*sizeof(R_MTL_RectVertex), 16, &vertex_offset);
+                  R_MTL_RectUniforms group_uniforms = {0};
+                  group_uniforms.viewport_size = viewport_dim;
                   group_uniforms.opacity = 1.f - group_params->transparency;
-                  id<MTLBuffer> uniform_buffer = [r_mtl_state->device newBufferWithBytes:&group_uniforms
-                                                                                   length:sizeof(group_uniforms)
-                                                                                  options:MTLResourceStorageModeShared];
+                  group_uniforms.texture_sample_channel_map = r_sample_channel_map_from_tex2dformat(texture->format);
+                  U64 uniform_offset = 0;
+                  id<MTLBuffer> uniform_buffer = r_mtl_upload_buffer(&group_uniforms, sizeof(group_uniforms), 256, &uniform_offset);
                   if(group_params->clip.x0 != 0 ||
                      group_params->clip.y0 != 0 ||
                      group_params->clip.x1 != 0 ||
                      group_params->clip.y1 != 0)
                   {
-                    MTLScissorRect scissor = r_mtl_scissor_from_clip(group_params->clip, mtl_window->drawable_size, scale);
-                    [encoder setScissorRect:scissor];
+                    MTLScissorRect scissor = {0};
+                    if(!r_mtl_scissor_from_clip(group_params->clip, mtl_window->drawable_size, scale, &scissor))
+                    {
+                      continue;
+                    }
+                    else
+                    {
+                      [encoder setScissorRect:scissor];
+                    }
                   }
                   else
                   {
                     MTLScissorRect scissor = {0, 0, (NSUInteger)mtl_window->drawable_size.x, (NSUInteger)mtl_window->drawable_size.y};
                     [encoder setScissorRect:scissor];
                   }
-                  [encoder setVertexBuffer:vertex_buffer offset:0 atIndex:0];
-                  [encoder setVertexBuffer:uniform_buffer offset:0 atIndex:1];
-                  [encoder setFragmentBuffer:uniform_buffer offset:0 atIndex:1];
+                  [encoder setVertexBuffer:vertex_buffer offset:vertex_offset atIndex:0];
+                  [encoder setVertexBuffer:uniform_buffer offset:uniform_offset atIndex:1];
+                  [encoder setFragmentBuffer:uniform_buffer offset:uniform_offset atIndex:1];
                   [encoder setFragmentTexture:texture->texture atIndex:0];
                   [encoder setFragmentSamplerState:r_mtl_state->samplers[group_params->tex_sample_kind] atIndex:0];
                   [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:vertex_count];
                 }
               }
-            }break;
-          }
+              [encoder endEncoding];
+            }
+          }break;
+          case R_PassKind_Blur:
+          {
+            if(r_mtl_state->blur_pipeline != 0)
+            {
+              R_PassParams_Blur *params = render_pass->params_blur;
+              R_MTL_BlurUniforms uniforms = r_mtl_blur_uniforms_from_params(params, viewport_dim);
+              MTLScissorRect scissor = {0};
+              B32 has_scissor = 0;
+              if(params->clip.x0 != 0 ||
+                 params->clip.y0 != 0 ||
+                 params->clip.x1 != 0 ||
+                 params->clip.y1 != 0)
+              {
+                has_scissor = r_mtl_scissor_from_clip(params->clip, mtl_window->drawable_size, scale, &scissor);
+              }
+              else
+              {
+                scissor = (MTLScissorRect){0, 0, (NSUInteger)mtl_window->drawable_size.x, (NSUInteger)mtl_window->drawable_size.y};
+                has_scissor = 1;
+              }
+              if(has_scissor)
+              {
+                for(Axis2 axis = (Axis2)0; axis < Axis2_COUNT; axis = (Axis2)(axis + 1))
+                {
+                  id<MTLTexture> src = (axis == Axis2_X ? mtl_window->stage_color : mtl_window->stage_scratch_color);
+                  id<MTLTexture> dst = (axis == Axis2_X ? mtl_window->stage_scratch_color : mtl_window->stage_color);
+                  uniforms.direction = (axis == Axis2_X ? v2f32(1.f/Max(viewport_dim.x, 1.f), 0) : v2f32(0, 1.f/Max(viewport_dim.y, 1.f)));
+                  U64 uniform_offset = 0;
+                  id<MTLBuffer> uniform_buffer = r_mtl_upload_buffer(&uniforms, sizeof(uniforms), 256, &uniform_offset);
+
+                  MTLRenderPassDescriptor *blur_pass = [MTLRenderPassDescriptor renderPassDescriptor];
+                  blur_pass.colorAttachments[0].texture = dst;
+                  blur_pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+                  blur_pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+                  id<MTLRenderCommandEncoder> encoder = [command_buffer renderCommandEncoderWithDescriptor:blur_pass];
+                  [encoder setRenderPipelineState:r_mtl_state->blur_pipeline];
+                  [encoder setScissorRect:scissor];
+                  [encoder setVertexBuffer:uniform_buffer offset:uniform_offset atIndex:0];
+                  [encoder setFragmentBuffer:uniform_buffer offset:uniform_offset atIndex:0];
+                  [encoder setFragmentTexture:src atIndex:0];
+                  [encoder setFragmentSamplerState:r_mtl_state->samplers[R_Tex2DSampleKind_Linear] atIndex:0];
+                  [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+                  [encoder endEncoding];
+                }
+              }
+            }
+          }break;
+          case R_PassKind_Geo3D:
+          {
+            // Geo3D is still deferred for the Metal backend.
+          }break;
         }
-        scratch_end(scratch);
       }
-      [encoder endEncoding];
+
+      if(r_mtl_state->finalize_pipeline != 0)
+      {
+        R_MTL_FinalizeUniforms uniforms = {viewport_dim};
+        U64 uniform_offset = 0;
+        id<MTLBuffer> uniform_buffer = r_mtl_upload_buffer(&uniforms, sizeof(uniforms), 256, &uniform_offset);
+        MTLRenderPassDescriptor *final_pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        final_pass.colorAttachments[0].texture = drawable.texture;
+        final_pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+        final_pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        final_pass.colorAttachments[0].clearColor = MTLClearColorMake(0.06, 0.06, 0.065, 1.0);
+        id<MTLRenderCommandEncoder> encoder = [command_buffer renderCommandEncoderWithDescriptor:final_pass];
+        [encoder setRenderPipelineState:r_mtl_state->finalize_pipeline];
+        [encoder setVertexBuffer:uniform_buffer offset:uniform_offset atIndex:0];
+        [encoder setFragmentTexture:mtl_window->stage_color atIndex:0];
+        [encoder setFragmentSamplerState:r_mtl_state->samplers[R_Tex2DSampleKind_Nearest] atIndex:0];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+        [encoder endEncoding];
+      }
+      scratch_end(scratch);
       [command_buffer presentDrawable:drawable];
       [command_buffer commit];
     }
