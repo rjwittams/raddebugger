@@ -7,6 +7,8 @@
 # include "win32/demon/win32_demon.c"
 #elif OS_LINUX
 # include "linux/demon/linux_demon.c"
+#elif OS_MAC
+# include "stub/demon_stub.c"
 #else
 # error Demon layer backend not defined for this operating system.
 #endif
