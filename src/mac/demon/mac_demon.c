@@ -1897,6 +1897,17 @@ mac_dmn_thread_read_ip(MAC_DMN_Thread *thread)
         }
       }break;
 #endif
+#if ARCH_ARM64
+      case Arch_arm64:
+      {
+        arm_thread_state64_t state = {0};
+        mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
+        if(thread_get_state(thread->thread, ARM_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+        {
+          result = state.__pc;
+        }
+      }break;
+#endif
     }
   }
   return result;
@@ -1919,6 +1930,17 @@ mac_dmn_thread_read_sp(MAC_DMN_Thread *thread)
         if(thread_get_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
         {
           result = state.__rsp;
+        }
+      }break;
+#endif
+#if ARCH_ARM64
+      case Arch_arm64:
+      {
+        arm_thread_state64_t state = {0};
+        mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
+        if(thread_get_state(thread->thread, ARM_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+        {
+          result = state.__sp;
         }
       }break;
 #endif
@@ -1967,6 +1989,18 @@ mac_dmn_thread_write_ip(MAC_DMN_Thread *thread, U64 ip)
         {
           state.__rip = ip;
           result = (thread_set_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, x86_THREAD_STATE64_COUNT) == KERN_SUCCESS);
+        }
+      }break;
+#endif
+#if ARCH_ARM64
+      case Arch_arm64:
+      {
+        arm_thread_state64_t state = {0};
+        mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
+        if(thread_get_state(thread->thread, ARM_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+        {
+          state.__pc = ip;
+          result = (thread_set_state(thread->thread, ARM_THREAD_STATE64, (thread_state_t)&state, ARM_THREAD_STATE64_COUNT) == KERN_SUCCESS);
         }
       }break;
 #endif
@@ -2619,6 +2653,86 @@ mac_dmn_x64_thread_state_from_reg_block(x86_thread_state64_t *dst, X64_RegBlock 
   dst->__cs = src->cs;
   dst->__fs = src->fs;
   dst->__gs = src->gs;
+}
+#endif
+
+#if ARCH_ARM64
+internal void
+mac_dmn_arm64_reg_block_from_thread_state(ARM64_RegBlock *dst, arm_thread_state64_t *src)
+{
+  dst->x0 = src->__x[0];
+  dst->x1 = src->__x[1];
+  dst->x2 = src->__x[2];
+  dst->x3 = src->__x[3];
+  dst->x4 = src->__x[4];
+  dst->x5 = src->__x[5];
+  dst->x6 = src->__x[6];
+  dst->x7 = src->__x[7];
+  dst->x8 = src->__x[8];
+  dst->x9 = src->__x[9];
+  dst->x10 = src->__x[10];
+  dst->x11 = src->__x[11];
+  dst->x12 = src->__x[12];
+  dst->x13 = src->__x[13];
+  dst->x14 = src->__x[14];
+  dst->x15 = src->__x[15];
+  dst->x16 = src->__x[16];
+  dst->x17 = src->__x[17];
+  dst->x18 = src->__x[18];
+  dst->x19 = src->__x[19];
+  dst->x20 = src->__x[20];
+  dst->x21 = src->__x[21];
+  dst->x22 = src->__x[22];
+  dst->x23 = src->__x[23];
+  dst->x24 = src->__x[24];
+  dst->x25 = src->__x[25];
+  dst->x26 = src->__x[26];
+  dst->x27 = src->__x[27];
+  dst->x28 = src->__x[28];
+  dst->fp = src->__fp;
+  dst->lr = src->__lr;
+  dst->sp = src->__sp;
+  dst->pc = src->__pc;
+  dst->cpsr = src->__cpsr;
+}
+
+internal void
+mac_dmn_arm64_thread_state_from_reg_block(arm_thread_state64_t *dst, ARM64_RegBlock *src)
+{
+  dst->__x[0] = src->x0;
+  dst->__x[1] = src->x1;
+  dst->__x[2] = src->x2;
+  dst->__x[3] = src->x3;
+  dst->__x[4] = src->x4;
+  dst->__x[5] = src->x5;
+  dst->__x[6] = src->x6;
+  dst->__x[7] = src->x7;
+  dst->__x[8] = src->x8;
+  dst->__x[9] = src->x9;
+  dst->__x[10] = src->x10;
+  dst->__x[11] = src->x11;
+  dst->__x[12] = src->x12;
+  dst->__x[13] = src->x13;
+  dst->__x[14] = src->x14;
+  dst->__x[15] = src->x15;
+  dst->__x[16] = src->x16;
+  dst->__x[17] = src->x17;
+  dst->__x[18] = src->x18;
+  dst->__x[19] = src->x19;
+  dst->__x[20] = src->x20;
+  dst->__x[21] = src->x21;
+  dst->__x[22] = src->x22;
+  dst->__x[23] = src->x23;
+  dst->__x[24] = src->x24;
+  dst->__x[25] = src->x25;
+  dst->__x[26] = src->x26;
+  dst->__x[27] = src->x27;
+  dst->__x[28] = src->x28;
+  dst->__fp = src->fp;
+  dst->__lr = src->lr;
+  dst->__sp = src->sp;
+  dst->__pc = src->pc;
+  dst->__cpsr = src->cpsr;
 }
 #endif
 
@@ -3553,6 +3667,18 @@ dmn_thread_read_reg_block(DMN_Handle handle, void *reg_block)
           }
         }break;
 #endif
+#if ARCH_ARM64
+        case Arch_arm64:
+        {
+          arm_thread_state64_t state = {0};
+          mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
+          if(thread_get_state(thread->thread, ARM_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+          {
+            mac_dmn_arm64_reg_block_from_thread_state((ARM64_RegBlock *)reg_block, &state);
+            result = 1;
+          }
+        }break;
+#endif
       }
     }
   }
@@ -3577,6 +3703,14 @@ dmn_thread_write_reg_block(DMN_Handle handle, void *reg_block)
           x86_thread_state64_t state = {0};
           mac_dmn_x64_thread_state_from_reg_block(&state, (X64_RegBlock *)reg_block);
           result = (thread_set_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, x86_THREAD_STATE64_COUNT) == KERN_SUCCESS);
+        }break;
+#endif
+#if ARCH_ARM64
+        case Arch_arm64:
+        {
+          arm_thread_state64_t state = {0};
+          mac_dmn_arm64_thread_state_from_reg_block(&state, (ARM64_RegBlock *)reg_block);
+          result = (thread_set_state(thread->thread, ARM_THREAD_STATE64, (thread_state_t)&state, ARM_THREAD_STATE64_COUNT) == KERN_SUCCESS);
         }break;
 #endif
       }
