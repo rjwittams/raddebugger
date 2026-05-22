@@ -145,6 +145,33 @@ macho_uuid_from_bin(String8 data, MachO_Bin *bin)
   return result;
 }
 
+internal B32
+macho_uuid_is_zero(MachO_UUID uuid)
+{
+  MachO_UUID zero = {0};
+  B32 result = MemoryMatch(uuid.v, zero.v, sizeof(uuid.v));
+  return result;
+}
+
+internal B32
+macho_uuid_match(MachO_UUID a, MachO_UUID b)
+{
+  B32 result = MemoryMatch(a.v, b.v, sizeof(a.v));
+  return result;
+}
+
+internal String8
+macho_string_from_uuid(Arena *arena, MachO_UUID uuid)
+{
+  String8 result = push_str8f(arena, "%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+                              uuid.v[0], uuid.v[1], uuid.v[2], uuid.v[3],
+                              uuid.v[4], uuid.v[5],
+                              uuid.v[6], uuid.v[7],
+                              uuid.v[8], uuid.v[9],
+                              uuid.v[10], uuid.v[11], uuid.v[12], uuid.v[13], uuid.v[14], uuid.v[15]);
+  return result;
+}
+
 internal String8
 macho_dsym_path_from_executable_path(Arena *arena, String8 executable_path)
 {
