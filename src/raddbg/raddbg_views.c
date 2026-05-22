@@ -5232,7 +5232,7 @@ RD_VIEW_UI_FUNCTION_DEF(geo3d)
   //- rjf: unpack parameters
   //
   U64 count        = rd_view_setting_u64_from_name(str8_lit("count"));
-  U64 vtx_base_off = rd_view_setting_u64_from_name(str8_lit("vtx"));
+  U64 vtx_base_off = rd_view_setting_addr_from_name(str8_lit("vtx"));
   U64 vtx_size     = rd_view_setting_u64_from_name(str8_lit("vtx_size"));
   F32 yaw_target   = rd_view_setting_f32_from_name(str8_lit("yaw"));
   F32 pitch_target = rd_view_setting_f32_from_name(str8_lit("pitch"));
