@@ -1313,7 +1313,17 @@ d_entity_store_apply_events(D_EntityCtxRWStore *store, D_EventList *list)
       case D_EventKind_NewProc:
       {
         D_Entity *machine = d_entity_from_handle(d_handle_from_dmn(event->entity.machine_id, dmn_handle_zero()));
-        if(machine != &d_entity_nil)
+        D_Entity *existing_process = &d_entity_nil;
+        D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
+        for(U64 idx = 0; idx < processes.count; idx += 1)
+        {
+          if(processes.v[idx]->id == event->entity_id)
+          {
+            existing_process = processes.v[idx];
+            break;
+          }
+        }
+        if(machine != &d_entity_nil && existing_process == &d_entity_nil)
         {
           D_Entity *process = d_entity_alloc(store, machine, D_EntityKind_Process, event->arch, event->entity, (U64)event->entity_id);
           process->tls_model = event->tls_model;
@@ -6197,31 +6207,16 @@ d_ctrl_thread__detach(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   //- rjf: detach
   B32 detach_worked = dmn_ctrl_detach(ctrl_ctx, process);
   
-  //- rjf: wait for process to be dead
-  if(detach_worked)
-  {
-    DMN_RunCtrls run_ctrls = {0};
-    run_ctrls.run_entities_are_unfrozen = 1;
-    run_ctrls.run_entities_are_processes = 1;
-    run_ctrls.run_entities = &process;
-    run_ctrls.run_entity_count = 1;
-    for(B32 done = 0; done == 0;)
-    {
-      DMN_Event *event = d_ctrl_thread__next_dmn_event(scratch.arena, ctrl_ctx, msg, &run_ctrls, 0);
-      if(event->kind == DMN_EventKind_ExitProcess && dmn_handle_match(event->process, process))
-      {
-        done = 1;
-      }
-      if(event->kind == DMN_EventKind_Halt)
-      {
-        done = 1;
-      }
-    }
-  }
-  
   //- rjf: record stop
   {
     D_EventList evts = {0};
+    if(detach_worked)
+    {
+      D_Event *end_event = d_event_list_push(scratch.arena, &evts);
+      end_event->kind   = D_EventKind_EndProc;
+      end_event->msg_id = msg->msg_id;
+      end_event->entity = msg->entity;
+    }
     D_Event *event = d_event_list_push(scratch.arena, &evts);
     event->kind       = D_EventKind_Stopped;
     event->cause      = D_EventCause_Finished;
