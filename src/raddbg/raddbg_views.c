@@ -1313,10 +1313,12 @@ rd_watch_row_info_from_row(Arena *arena, EV_Row *row)
         rd_watch_cell_list_push_new(arena, &info.cells, RD_WatchCellKind_Eval, e_eval_wrapf(row->eval, "active"),
                                     .px = floor_f32(ui_top_font_size()*5.5f));
       }
-      if(entity->kind == D_EntityKind_Thread)
+      if(entity->kind == D_EntityKind_Process ||
+         entity->kind == D_EntityKind_Thread)
       {
         RD_CmdKind cmd_kind = RD_CmdKind_SelectEntity;
-        if(d_handle_match(entity->handle, rd_base_regs()->thread))
+        if(entity->kind == D_EntityKind_Thread &&
+           d_handle_match(entity->handle, rd_base_regs()->thread))
         {
           cmd_kind = RD_CmdKind_DeselectEntity;
         }
