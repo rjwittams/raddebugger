@@ -386,8 +386,20 @@ rb_thread_entry_point(void *p)
           String8 dsym_path = macho_dsym_path_from_executable_path(scratch.arena, input_file_path);
           if(dsym_path.size != 0 && file_path_exists(dsym_path))
           {
-            log_infof("Found companion dSYM for %S (%S) at %S\n", n->string, rb_file_format_display_name_table[file_format], dsym_path);
-            str8_list_push(arena, &input_file_path_tasks, dsym_path);
+            String8 dsym_data = data_from_file_path(scratch.arena, dsym_path);
+            MachO_Bin dsym_bin = macho_bin_from_data(scratch.arena, dsym_data);
+            MachO_UUID exe_uuid = macho_uuid_from_bin(file_data, &bin);
+            MachO_UUID dsym_uuid = macho_uuid_from_bin(dsym_data, &dsym_bin);
+            if(!macho_uuid_is_zero(exe_uuid) &&
+               macho_uuid_match(exe_uuid, dsym_uuid))
+            {
+              log_infof("Found companion dSYM for %S (%S) at %S with matching UUID %S\n", n->string, rb_file_format_display_name_table[file_format], dsym_path, macho_string_from_uuid(scratch.arena, exe_uuid));
+              str8_list_push(arena, &input_file_path_tasks, dsym_path);
+            }
+            else
+            {
+              log_infof("Ignoring companion dSYM for %S (%S) at %S because UUIDs do not match: executable %S, dSYM %S\n", n->string, rb_file_format_display_name_table[file_format], dsym_path, macho_string_from_uuid(scratch.arena, exe_uuid), macho_string_from_uuid(scratch.arena, dsym_uuid));
+            }
           }
         }
         scratch_end(scratch);
