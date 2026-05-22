@@ -168,6 +168,7 @@ struct D_ModuleInfo
   U64 entry_point_voff;
   UWND_Unwinder unwinder;
   void *unwind_info;
+  String8 macho_unwind_info_data;
   String8 local_debug_info_path;
   String8 dbg_name;
   Guid dbg_guid;
@@ -559,10 +560,16 @@ internal D_ModuleInfo *d_info_from_module(Access *access, D_Handle module);
 internal U64 d_entry_point_voff_from_module(D_Handle module_handle);
 internal U64 d_raddbg_attached_marker_voff_from_module(D_Handle module_handle);
 internal String8 d_initial_debug_info_path_from_module(Arena *arena, D_Handle module_handle);
+internal String8 d_macho_unwind_info_data_from_module(Arena *arena, D_Handle module_handle);
 
 ////////////////////////////////
 //~ rjf: Unwinding Functions
 
+internal String8 d_eh_frame_hdr_from_eh_frame(Arena *arena, String8 eh_frame_data, U64 eh_frame_vaddr, Arch arch, EH_PtrCtx *eh_ptr_ctx);
+internal U64 *d_unwind_reg_from_macho_reg__macho_x64(X64_RegBlock *regs, MachO_UnwindX64Reg macho_reg);
+internal B32 d_macho_compact_unwind_x64_mode_is_supported(U32 encoding);
+internal B32 d_macho_compact_unwind_x64_cfa_from_encoding(U32 encoding, X64_RegBlock *regs, U64 *cfa_out);
+internal D_UnwindStepResult d_unwind_step__macho_x64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, X64_RegBlock *regs, U64 endt_us);
 internal D_Unwind d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us);
 
 ////////////////////////////////
