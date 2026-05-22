@@ -16,6 +16,9 @@ TEST(arm64_metadata)
   T_Ok(((U8 *)info->trap_instruction.str)[1] == 0x00);
   T_Ok(((U8 *)info->trap_instruction.str)[2] == 0x20);
   T_Ok(((U8 *)info->trap_instruction.str)[3] == 0xd4);
+  T_Ok(max_ops_per_instruction_from_arch(Arch_arm64) == 1);
+  T_Ok(min_instruction_size_from_arch(Arch_arm64) == 4);
+  T_Ok(max_instruction_size_from_arch(Arch_arm64) == 4);
   
   ARM64_RegBlock regs = {0};
   regs.pc = 0x1234567887654321ull;
