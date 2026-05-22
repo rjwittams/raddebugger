@@ -2317,6 +2317,7 @@ d_macho_compact_unwind_x64_mode_is_supported(U32 encoding)
   {
     case MACHO_UNWIND_X64_MODE_RBP_FRAME:
     case MACHO_UNWIND_X64_MODE_STACK_IMMD:
+    case MACHO_UNWIND_X64_MODE_STACK_IND:
     {
       result = 1;
     }break;
@@ -2325,10 +2326,38 @@ d_macho_compact_unwind_x64_mode_is_supported(U32 encoding)
 }
 
 internal B32
-d_macho_compact_unwind_x64_cfa_from_encoding(U32 encoding, X64_RegBlock *regs, U64 *cfa_out)
+d_macho_compact_unwind_x64_frameless_stack_size_from_encoding(D_Handle process_handle, U64 module_base_vaddr, MachO_UnwindInfoLookupResult *lookup, B32 *is_stale_out, U64 endt_us, U64 *stack_size_out)
 {
   B32 result = 0;
+  U32 encoding = lookup->encoding;
   switch(encoding & MACHO_UNWIND_X64_MODE_MASK)
+  {
+    case MACHO_UNWIND_X64_MODE_STACK_IMMD:
+    {
+      *stack_size_out = ((encoding & MACHO_UNWIND_X64_FRAMELESS_STACK_SIZE) >> 16)*8;
+      result = 1;
+    }break;
+    case MACHO_UNWIND_X64_MODE_STACK_IND:
+    {
+      U64 stack_size_imm_voff = lookup->voff_range.min + ((encoding & MACHO_UNWIND_X64_FRAMELESS_STACK_SIZE) >> 16);
+      U64 stack_adjust = ((encoding & MACHO_UNWIND_X64_FRAMELESS_STACK_ADJUST) >> 13);
+      U32 stack_size_imm = 0;
+      if(d_process_memory_read_struct(process_handle, module_base_vaddr + stack_size_imm_voff, is_stale_out, &stack_size_imm, endt_us) &&
+         !*is_stale_out)
+      {
+        *stack_size_out = stack_size_imm + stack_adjust*8;
+        result = 1;
+      }
+    }break;
+  }
+  return result;
+}
+
+internal B32
+d_macho_compact_unwind_x64_cfa_from_encoding(D_Handle process_handle, U64 module_base_vaddr, MachO_UnwindInfoLookupResult *lookup, X64_RegBlock *regs, B32 *is_stale_out, U64 endt_us, U64 *cfa_out)
+{
+  B32 result = 0;
+  switch(lookup->encoding & MACHO_UNWIND_X64_MODE_MASK)
   {
     case MACHO_UNWIND_X64_MODE_RBP_FRAME:
     {
@@ -2336,10 +2365,14 @@ d_macho_compact_unwind_x64_cfa_from_encoding(U32 encoding, X64_RegBlock *regs, U
       result = 1;
     }break;
     case MACHO_UNWIND_X64_MODE_STACK_IMMD:
+    case MACHO_UNWIND_X64_MODE_STACK_IND:
     {
-      U64 stack_size = ((encoding & MACHO_UNWIND_X64_FRAMELESS_STACK_SIZE) >> 16)*8;
-      *cfa_out = regs->rsp + stack_size;
-      result = 1;
+      U64 stack_size = 0;
+      if(d_macho_compact_unwind_x64_frameless_stack_size_from_encoding(process_handle, module_base_vaddr, lookup, is_stale_out, endt_us, &stack_size))
+      {
+        *cfa_out = regs->rsp + stack_size;
+        result = 1;
+      }
     }break;
   }
   return result;
@@ -3220,12 +3253,14 @@ d_unwind_step__macho_x64(D_Handle process_handle, D_Handle module_handle, U64 mo
       }
     }break;
     case MACHO_UNWIND_X64_MODE_STACK_IMMD:
+    case MACHO_UNWIND_X64_MODE_STACK_IND:
     {
-      U64 stack_size = ((lookup.encoding & MACHO_UNWIND_X64_FRAMELESS_STACK_SIZE) >> 16)*8;
+      U64 stack_size = 0;
       U32 reg_count = ((lookup.encoding & MACHO_UNWIND_X64_FRAMELESS_STACK_REG_COUNT) >> 10);
       U32 permutation = (lookup.encoding & MACHO_UNWIND_X64_FRAMELESS_STACK_REG_PERMUTATION);
       U32 regs_saved[6] = {0};
-      if(stack_size < 8 + reg_count*8 ||
+      if(!d_macho_compact_unwind_x64_frameless_stack_size_from_encoding(process_handle, module_base_vaddr, &lookup, &is_stale, endt_us, &stack_size) ||
+         stack_size < 8 + reg_count*8 ||
          !macho_unwind_x64_saved_regs_from_permutation(reg_count, permutation, regs_saved))
       {
         is_good = 0;
@@ -3344,9 +3379,11 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
             String8 unwind_info_data = d_macho_unwind_info_data_from_module(scratch.arena, module_entity->handle);
             MachO_UnwindInfoLookupResult lookup = {0};
             U64 compact_cfa = 0;
+            B32 compact_is_stale = 0;
             if(macho_unwind_info_lookup(unwind_info_data, rip - module_entity->vaddr_range.min, &lookup) &&
                d_macho_compact_unwind_x64_mode_is_supported(lookup.encoding) &&
-               d_macho_compact_unwind_x64_cfa_from_encoding(lookup.encoding, regs_x64, &compact_cfa))
+               d_macho_compact_unwind_x64_cfa_from_encoding(process_entity->handle, module_entity->vaddr_range.min, &lookup, regs_x64, &compact_is_stale, endt_us, &compact_cfa) &&
+               !compact_is_stale)
             {
               frame_ctx_result.flags = 0;
               frame_ctx.cfa = compact_cfa;
