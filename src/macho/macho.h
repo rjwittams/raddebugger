@@ -8,14 +8,46 @@
 #define MACHO_MAGIC_64 0xfeedfacf
 #define MACHO_LC_SEGMENT_64 0x19
 #define MACHO_LC_UUID 0x1b
+#define MACHO_LC_MAIN 0x80000028
 #define MACHO_CPU_TYPE_X86_64 0x01000007
 #define MACHO_CPU_TYPE_ARM64  0x0100000c
+
+#define MACHO_UNWIND_SECTION_VERSION 1
+#define MACHO_UNWIND_SECOND_LEVEL_REGULAR 2
+#define MACHO_UNWIND_SECOND_LEVEL_COMPRESSED 3
+#define MACHO_UNWIND_INFO_COMPRESSED_ENTRY_FUNC_OFFSET(entry) ((entry) & 0x00ffffff)
+#define MACHO_UNWIND_INFO_COMPRESSED_ENTRY_ENCODING_INDEX(entry) (((entry) >> 24) & 0xff)
+
+#define MACHO_UNWIND_X64_MODE_MASK 0x0f000000
+#define MACHO_UNWIND_X64_MODE_RBP_FRAME 0x01000000
+#define MACHO_UNWIND_X64_MODE_STACK_IMMD 0x02000000
+#define MACHO_UNWIND_X64_MODE_STACK_IND 0x03000000
+#define MACHO_UNWIND_X64_MODE_DWARF 0x04000000
+#define MACHO_UNWIND_X64_RBP_FRAME_REGISTERS 0x00007fff
+#define MACHO_UNWIND_X64_RBP_FRAME_OFFSET 0x00ff0000
+#define MACHO_UNWIND_X64_FRAMELESS_STACK_SIZE 0x00ff0000
+#define MACHO_UNWIND_X64_FRAMELESS_STACK_ADJUST 0x0000e000
+#define MACHO_UNWIND_X64_FRAMELESS_STACK_REG_COUNT 0x00001c00
+#define MACHO_UNWIND_X64_FRAMELESS_STACK_REG_PERMUTATION 0x000003ff
+#define MACHO_UNWIND_X64_DWARF_SECTION_OFFSET 0x00ffffff
 
 typedef struct MachO_UUID MachO_UUID;
 struct MachO_UUID
 {
   U8 v[16];
 };
+
+typedef enum MachO_UnwindX64Reg
+{
+  MachO_UnwindX64Reg_Null,
+  MachO_UnwindX64Reg_RBX,
+  MachO_UnwindX64Reg_R12,
+  MachO_UnwindX64Reg_R13,
+  MachO_UnwindX64Reg_R14,
+  MachO_UnwindX64Reg_R15,
+  MachO_UnwindX64Reg_RBP,
+}
+MachO_UnwindX64Reg;
 
 typedef struct MachO_Header32 MachO_Header32;
 struct MachO_Header32
@@ -72,6 +104,15 @@ struct MachO_UUIDCommand
   U8 uuid[16];
 };
 
+typedef struct MachO_EntryPointCommand MachO_EntryPointCommand;
+struct MachO_EntryPointCommand
+{
+  U32 cmd;
+  U32 cmd_size;
+  U64 entryoff;
+  U64 stacksize;
+};
+
 typedef struct MachO_SegmentCommand64 MachO_SegmentCommand64;
 struct MachO_SegmentCommand64
 {
@@ -105,6 +146,58 @@ struct MachO_Section64
   U32 reserved3;
 };
 
+typedef struct MachO_UnwindInfoSectionHeader MachO_UnwindInfoSectionHeader;
+struct MachO_UnwindInfoSectionHeader
+{
+  U32 version;
+  U32 common_encodings_array_section_offset;
+  U32 common_encodings_array_count;
+  U32 personality_array_section_offset;
+  U32 personality_array_count;
+  U32 index_section_offset;
+  U32 index_count;
+};
+
+typedef struct MachO_UnwindInfoSectionHeaderIndexEntry MachO_UnwindInfoSectionHeaderIndexEntry;
+struct MachO_UnwindInfoSectionHeaderIndexEntry
+{
+  U32 function_offset;
+  U32 second_level_pages_section_offset;
+  U32 lsda_index_array_section_offset;
+};
+
+typedef struct MachO_UnwindInfoRegularSecondLevelEntry MachO_UnwindInfoRegularSecondLevelEntry;
+struct MachO_UnwindInfoRegularSecondLevelEntry
+{
+  U32 function_offset;
+  U32 encoding;
+};
+
+typedef struct MachO_UnwindInfoRegularSecondLevelPageHeader MachO_UnwindInfoRegularSecondLevelPageHeader;
+struct MachO_UnwindInfoRegularSecondLevelPageHeader
+{
+  U32 kind;
+  U16 entry_page_offset;
+  U16 entry_count;
+};
+
+typedef struct MachO_UnwindInfoCompressedSecondLevelPageHeader MachO_UnwindInfoCompressedSecondLevelPageHeader;
+struct MachO_UnwindInfoCompressedSecondLevelPageHeader
+{
+  U32 kind;
+  U16 entry_page_offset;
+  U16 entry_count;
+  U16 encodings_page_offset;
+  U16 encodings_count;
+};
+
+typedef struct MachO_UnwindInfoLookupResult MachO_UnwindInfoLookupResult;
+struct MachO_UnwindInfoLookupResult
+{
+  Rng1U64 voff_range;
+  U32 encoding;
+};
+
 typedef struct MachO_Bin MachO_Bin;
 struct MachO_Bin
 {
@@ -123,5 +216,7 @@ internal MachO_UUID macho_uuid_from_bin(String8 data, MachO_Bin *bin);
 internal String8 macho_dsym_path_from_executable_path(Arena *arena, String8 executable_path);
 internal U64 macho_base_vaddr_from_bin(String8 data, MachO_Bin *bin);
 internal U64 macho_image_size_from_bin(String8 data, MachO_Bin *bin);
+internal B32 macho_unwind_info_lookup(String8 data, U64 voff, MachO_UnwindInfoLookupResult *result_out);
+internal B32 macho_unwind_x64_saved_regs_from_permutation(U32 reg_count, U32 permutation, U32 *regs_out);
 
 #endif // MACHO_H
