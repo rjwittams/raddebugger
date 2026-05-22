@@ -156,6 +156,7 @@ struct MAC_DMN_ProcessIterState
 };
 
 typedef struct MAC_DMN_ActiveTrap MAC_DMN_ActiveTrap;
+typedef struct MAC_DMN_FlaggedTrapTask MAC_DMN_FlaggedTrapTask;
 typedef enum MAC_DMN_ActiveTrapKind
 {
   MAC_DMN_ActiveTrapKind_User,
@@ -171,6 +172,13 @@ struct MAC_DMN_ActiveTrap
   B32 good;
   DMN_Trap *trap;
   String8 swap_bytes;
+};
+
+struct MAC_DMN_FlaggedTrapTask
+{
+  MAC_DMN_FlaggedTrapTask *next;
+  DMN_Handle process;
+  DMN_TrapChunkList traps;
 };
 
 global MAC_DMN_State *mac_dmn_state = 0;
@@ -242,6 +250,9 @@ internal U64 mac_dmn_thread_read_sp(MAC_DMN_Thread *thread);
 internal U64 mac_dmn_stack_base_vaddr_from_thread(MAC_DMN_Thread *thread);
 internal B32 mac_dmn_thread_write_ip(MAC_DMN_Thread *thread, U64 ip);
 internal B32 mac_dmn_set_single_step_flag(MAC_DMN_Thread *thread, B32 is_on);
+internal B32 mac_dmn_thread_set_debug_traps(MAC_DMN_Thread *thread, DMN_TrapChunkList *traps);
+internal B32 mac_dmn_thread_clear_debug_traps(MAC_DMN_Thread *thread);
+internal DMN_Trap *mac_dmn_thread_hit_debug_trap(MAC_DMN_Thread *thread, MAC_DMN_FlaggedTrapTask *first_task);
 internal MAC_DMN_ActiveTrap *mac_dmn_active_trap_from_process_vaddr(MAC_DMN_ActiveTrap *first, DMN_Handle process, U64 vaddr);
 internal MAC_DMN_Entity *mac_dmn_thread_entity_from_active_trap(MAC_DMN_Process *process, MAC_DMN_ActiveTrap *first, MAC_DMN_ActiveTrap **active_trap_out);
 internal B32 mac_dmn_process_write_with_protect(MAC_DMN_Process *process, Rng1U64 range, void *src);
@@ -253,6 +264,7 @@ internal void mac_dmn_push_event_unload_module(Arena *arena, DMN_EventList *even
 internal void mac_dmn_push_event_handshake_complete(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity);
 internal void mac_dmn_push_event_exit_process(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, U32 exit_code);
 internal void mac_dmn_push_event_breakpoint(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, U64 instruction_pointer, U64 user_data);
+internal void mac_dmn_push_event_data_breakpoint(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, DMN_Trap *trap);
 internal void mac_dmn_push_event_single_step(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity);
 internal void mac_dmn_push_event_exception(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, S32 signo);
 internal void mac_dmn_push_event_halt(Arena *arena, DMN_EventList *events);
