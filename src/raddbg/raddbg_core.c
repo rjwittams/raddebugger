@@ -12774,6 +12774,130 @@ rd_frame(void)
           {
             String8 msg = rd_regs()->string;
             String8List msg_parts = str8_split(scratch.arena, msg, (U8 *)" ", 1, 0);
+            String8 cmd_name = str8_list_first(&msg_parts);
+            B32 handled = 0;
+
+            // rjf: IPC-only diagnostics for debugger backend smoke tests.
+            if(str8_match(cmd_name, str8_lit("read_memory"), 0) ||
+               str8_match(cmd_name, str8_lit("write_memory"), 0))
+            {
+              handled = 1;
+              String8 process_string = {0};
+              String8 vaddr_string = {0};
+              String8 size_or_data_string = {0};
+              if(msg_parts.first != 0 && msg_parts.first->next != 0)
+              {
+                process_string = msg_parts.first->next->string;
+                if(msg_parts.first->next->next != 0)
+                {
+                  vaddr_string = msg_parts.first->next->next->string;
+                  if(msg_parts.first->next->next->next != 0)
+                  {
+                    size_or_data_string = msg_parts.first->next->next->next->string;
+                  }
+                }
+              }
+              D_Entity *process = d_entity_from_handle(d_handle_from_string(process_string));
+              if(process == &d_entity_nil)
+              {
+                U64 pid = 0;
+                if(try_u64_from_str8_c_rules(process_string, &pid))
+                {
+                  D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
+                  for(U64 idx = 0; idx < processes.count; idx += 1)
+                  {
+                    if(processes.v[idx]->id == pid)
+                    {
+                      process = processes.v[idx];
+                      break;
+                    }
+                  }
+                }
+              }
+              U64 vaddr = 0;
+              B32 parsed_vaddr = try_u64_from_str8_c_rules(vaddr_string, &vaddr);
+              if(process == &d_entity_nil || process->kind != D_EntityKind_Process)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: process not found");
+              }
+              else if(!parsed_vaddr)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad address");
+              }
+              else if(str8_match(cmd_name, str8_lit("read_memory"), 0))
+              {
+                U64 size = 0;
+                if(!try_u64_from_str8_c_rules(size_or_data_string, &size) || size == 0 || size > 4096)
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad size");
+                }
+                else
+                {
+                  U8 *data = push_array(scratch.arena, U8, size);
+                  B32 is_stale = 0;
+                  D_ProcessMemorySlice slice = d_process_memory_slice_from_vaddr_range(scratch.arena, process->handle, r1u64(vaddr, vaddr+size), 1, now_time_us()+500000);
+                  B32 read_ok = (slice.data.size >= size && !slice.any_byte_bad);
+                  is_stale = slice.stale;
+                  if(read_ok)
+                  {
+                    MemoryCopy(data, slice.data.str, size);
+                    String8List bytes = {0};
+                    for(U64 idx = 0; idx < size; idx += 1)
+                    {
+                      str8_list_pushf(scratch.arena, &bytes, "%02x", data[idx]);
+                    }
+                    String8 bytes_string = str8_list_join(rd_state->cmd_output_arena, &bytes, &(StringJoin){0});
+                    str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, bytes_string);
+                  }
+                  else
+                  {
+                    str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: read failed%s", is_stale ? " (stale)" : "");
+                  }
+                }
+              }
+              else
+              {
+                String8 hex = size_or_data_string;
+                if(str8_match(str8_prefix(hex, 2), str8_lit("0x"), StringMatchFlag_CaseInsensitive))
+                {
+                  hex = str8_skip(hex, 2);
+                }
+                if(hex.size == 0 || (hex.size%2) != 0)
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad hex data");
+                }
+                else
+                {
+                  U64 size = hex.size/2;
+                  U8 *data = push_array(scratch.arena, U8, size);
+                  B32 good_hex = 1;
+                  for(U64 idx = 0; idx < size; idx += 1)
+                  {
+                    String8 byte_string = str8(hex.str + idx*2, 2);
+                    if(!char_is_digit(byte_string.str[0], 16) || !char_is_digit(byte_string.str[1], 16))
+                    {
+                      good_hex = 0;
+                      break;
+                    }
+                    data[idx] = (U8)u64_from_str8(byte_string, 16);
+                  }
+                  if(!good_hex)
+                  {
+                    str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad hex data");
+                  }
+                  else if(d_process_write(process->handle, r1u64(vaddr, vaddr+size), data))
+                  {
+                    str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "ok");
+                  }
+                  else
+                  {
+                    str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: write failed");
+                  }
+                }
+              }
+            }
+            if(!handled)
+            {
             String8List msg_cmd_line_parts = {0};
             str8_list_push(scratch.arena, &msg_cmd_line_parts, str8_lit("ipc"));
             str8_list_concat_in_place(&msg_cmd_line_parts, &msg_parts);
@@ -12807,6 +12931,7 @@ rd_frame(void)
             else
             {
               log_user_errorf("`%S` is not a command.", cmd_kind_name);
+            }
             }
           }break;
           
