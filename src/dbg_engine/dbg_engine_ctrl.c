@@ -3380,10 +3380,16 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
             MachO_UnwindInfoLookupResult lookup = {0};
             U64 compact_cfa = 0;
             B32 compact_is_stale = 0;
-            if(macho_unwind_info_lookup(unwind_info_data, rip - module_entity->vaddr_range.min, &lookup) &&
-               d_macho_compact_unwind_x64_mode_is_supported(lookup.encoding) &&
-               d_macho_compact_unwind_x64_cfa_from_encoding(process_entity->handle, module_entity->vaddr_range.min, &lookup, regs_x64, &compact_is_stale, endt_us, &compact_cfa) &&
-               !compact_is_stale)
+            B32 compact_lookup_good = macho_unwind_info_lookup(unwind_info_data, rip - module_entity->vaddr_range.min, &lookup);
+            B32 compact_supported = compact_lookup_good && d_macho_compact_unwind_x64_mode_is_supported(lookup.encoding);
+            B32 compact_cfa_good = compact_supported && d_macho_compact_unwind_x64_cfa_from_encoding(process_entity->handle, module_entity->vaddr_range.min, &lookup, regs_x64, &compact_is_stale, endt_us, &compact_cfa);
+            if(compact_is_stale)
+            {
+              frame_ctx_result.flags |= D_UnwindFlag_Stale;
+            }
+            else if(compact_lookup_good &&
+                    compact_supported &&
+                    compact_cfa_good)
             {
               frame_ctx_result.flags = 0;
               frame_ctx.cfa = compact_cfa;
