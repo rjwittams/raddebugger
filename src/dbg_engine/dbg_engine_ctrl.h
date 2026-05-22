@@ -565,6 +565,7 @@ internal U64 d_entry_point_voff_from_module(D_Handle module_handle);
 internal String8 d_initial_debug_info_path_from_module(Arena *arena, D_Handle module_handle);
 internal String8 d_raddbg_data_from_module(Arena *arena, D_Handle module_handle);
 internal String8 d_macho_unwind_info_data_from_module(Arena *arena, D_Handle module_handle);
+internal U64 d_eh_frame_vaddr_from_module(D_Handle module_handle);
 
 ////////////////////////////////
 //~ rjf: Unwinding Functions
@@ -572,6 +573,7 @@ internal String8 d_macho_unwind_info_data_from_module(Arena *arena, D_Handle mod
 //- rjf: [dwarf]
 internal D_UnwindStepResult d_unwind_step_result_from_machine_op_result(MachineOpResult s);
 internal D_UnwindStepResult d_establish_frame_unwind_context__dwarf(Arena *arena, D_Handle process_handle, D_Handle module_handle, Arch arch, void *regs, U64 endt_us, D_FrameUnwindContext *ctx_out);
+internal D_UnwindStepResult d_establish_frame_unwind_context__dwarf_from_fde_addr(Arena *arena, D_Handle process_handle, D_Handle module_handle, Arch arch, void *regs, U64 fde_addr, U64 endt_us, D_FrameUnwindContext *ctx_out);
 internal D_UnwindStepResult d_unwind_step__dwarf(D_Handle process_handle, Arch arch, void *regs, D_FrameUnwindContext *frame_ctx, U64 endt_us);
 
 //- rjf: [x64]
