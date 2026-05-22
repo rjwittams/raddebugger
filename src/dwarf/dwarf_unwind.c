@@ -258,6 +258,7 @@ dw_compute_cfa(Arch arch, DW_CFI_Row *row, void *reg_block, MachineOp_MemRead *m
         break;
       }
       *cfa_out = cfa_reg_value + row->cfa.off;
+      unwind_status = MachineOpResult_Ok;
     }break;
     case DW_CFA_Rule_Expression:
     {
@@ -360,4 +361,3 @@ dw_cfi_apply_register_rules(Arch arch, U64 cfa, DW_CFI_Row *row, void *reg_block
   scratch_end(scratch);
   return unwind_status;
 }
-
