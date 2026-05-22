@@ -13091,13 +13091,10 @@ rd_frame(void)
                 else
                 {
                   U8 *data = push_array(scratch.arena, U8, size);
-                  B32 is_stale = 0;
-                  D_ProcessMemorySlice slice = d_process_memory_slice_from_vaddr_range(scratch.arena, process->handle, r1u64(vaddr, vaddr+size), 1, now_time_us()+500000);
-                  B32 read_ok = (slice.data.size >= size && !slice.any_byte_bad);
-                  is_stale = slice.stale;
+                  U64 read_size = d_process_read(process->handle, r1u64(vaddr, vaddr+size), data);
+                  B32 read_ok = (read_size == size);
                   if(read_ok)
                   {
-                    MemoryCopy(data, slice.data.str, size);
                     String8List bytes = {0};
                     for(U64 idx = 0; idx < size; idx += 1)
                     {
@@ -13108,7 +13105,7 @@ rd_frame(void)
                   }
                   else
                   {
-                    str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: read failed%s", is_stale ? " (stale)" : "");
+                    str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: read failed");
                   }
                 }
               }

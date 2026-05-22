@@ -1455,7 +1455,18 @@ mac_dmn_set_trap(Arena *arena, DMN_Trap *trap, MAC_DMN_ActiveTrapKind kind)
   B32 good_write = 0;
   if(good_read)
   {
-    good_write = dmn_process_write(trap->process, r1u64(trap->vaddr, trap->vaddr + trap_inst.size), trap_inst.str);
+    U8 *readback_bytes = push_array(arena, U8, trap_inst.size);
+    Rng1U64 trap_range = r1u64(trap->vaddr, trap->vaddr + trap_inst.size);
+    good_write = dmn_process_write(trap->process, trap_range, trap_inst.str);
+    if(good_write && arch == Arch_arm64)
+    {
+      good_write = mac_dmn_process_sync_instruction_cache(process, trap_range);
+    }
+    if(good_write)
+    {
+      B32 good_readback = (dmn_process_read(trap->process, trap_range, readback_bytes) == trap_inst.size);
+      good_write = (good_readback && MemoryMatch(readback_bytes, trap_inst.str, trap_inst.size));
+    }
   }
   MAC_DMN_ActiveTrap *result = push_array(arena, MAC_DMN_ActiveTrap, 1);
   result->kind = kind;
@@ -1490,10 +1501,31 @@ mac_dmn_unset_trap(MAC_DMN_ActiveTrap *active_trap)
 {
   if(active_trap->good)
   {
-    dmn_process_write(active_trap->trap->process,
-                      r1u64(active_trap->trap->vaddr, active_trap->trap->vaddr + active_trap->swap_bytes.size),
-                      active_trap->swap_bytes.str);
+    MAC_DMN_Process *process = mac_dmn_process_from_handle(active_trap->trap->process);
+    Arch arch = process != 0 ? process->arch : Arch_CURRENT;
+    Rng1U64 range = r1u64(active_trap->trap->vaddr, active_trap->trap->vaddr + active_trap->swap_bytes.size);
+    B32 good_write = dmn_process_write(active_trap->trap->process, range, active_trap->swap_bytes.str);
+    if(good_write && arch == Arch_arm64)
+    {
+      mac_dmn_process_sync_instruction_cache(process, range);
+    }
   }
+}
+
+internal B32
+mac_dmn_process_sync_instruction_cache(MAC_DMN_Process *process, Rng1U64 range)
+{
+  B32 result = 0;
+  if(process != 0 && process->task != MACH_PORT_NULL)
+  {
+    U64 page_size = get_system_info()->page_size;
+    U64 min = AlignDownPow2(range.min, page_size);
+    U64 max = AlignPow2(range.max, page_size);
+    vm_machine_attribute_val_t value = MATTR_VAL_CACHE_FLUSH;
+    kern_return_t code = mach_vm_machine_attribute(process->task, min, max - min, MATTR_CACHE, &value);
+    result = (code == KERN_SUCCESS);
+  }
+  return result;
 }
 
 internal U64
@@ -1964,61 +1996,64 @@ mac_dmn_process_write_with_protect(MAC_DMN_Process *process, Rng1U64 range, void
   if(process != 0 && process->task != MACH_PORT_NULL)
   {
     U64 size = dim_1u64(range);
-    if(size <= max_U32 && mach_vm_write(process->task, range.min, (vm_offset_t)src, (mach_msg_type_number_t)size) == KERN_SUCCESS)
+    result = 1;
+    for(U64 write_off = 0; write_off < size;)
     {
-      result = 1;
-    }
-    else
-    {
-      result = 1;
-      for(U64 write_off = 0; write_off < size;)
+      mach_vm_address_t write_address = range.min + write_off;
+      mach_vm_address_t region_address = write_address;
+      mach_vm_size_t region_size = 0;
+      natural_t depth = 0;
+      vm_region_submap_info_data_64_t info = {0};
+      mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+      kern_return_t region_code = mach_vm_region_recurse(process->task, &region_address, &region_size, &depth, (vm_region_recurse_info_t)&info, &count);
+      if(region_code != KERN_SUCCESS || region_address > write_address || region_size == 0)
       {
-        mach_vm_address_t write_address = range.min + write_off;
-        mach_vm_address_t region_address = write_address;
-        mach_vm_size_t region_size = 0;
-        natural_t depth = 0;
-        vm_region_submap_info_data_64_t info = {0};
-        mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
-        kern_return_t region_code = mach_vm_region_recurse(process->task, &region_address, &region_size, &depth, (vm_region_recurse_info_t)&info, &count);
-        if(region_code != KERN_SUCCESS || region_address > write_address || region_size == 0)
-        {
-          result = 0;
-          break;
-        }
-
-        U64 region_off = write_address - region_address;
-        if(region_off >= region_size)
-        {
-          result = 0;
-          break;
-        }
-        U64 region_write_size = Min(size - write_off, region_size - region_off);
-        region_write_size = Min(region_write_size, max_U32);
-        if(region_write_size == 0)
-        {
-          result = 0;
-          break;
-        }
-
-        vm_prot_t old_protection = info.protection;
-        vm_prot_t write_protection = old_protection|VM_PROT_WRITE|VM_PROT_COPY;
-        kern_return_t protect_code = mach_vm_protect(process->task, write_address, region_write_size, 0, write_protection);
-        if(protect_code != KERN_SUCCESS)
-        {
-          result = 0;
-          break;
-        }
-
-        mach_msg_type_number_t write_size = (mach_msg_type_number_t)region_write_size;
-        kern_return_t write_code = mach_vm_write(process->task, write_address, (vm_offset_t)((U8 *)src + write_off), write_size);
-        mach_vm_protect(process->task, write_address, region_write_size, 0, old_protection);
-        if(write_code != KERN_SUCCESS)
-        {
-          result = 0;
-          break;
-        }
-        write_off += region_write_size;
+        result = 0;
+        break;
       }
+
+      U64 region_off = write_address - region_address;
+      if(region_off >= region_size)
+      {
+        result = 0;
+        break;
+      }
+      U64 region_write_size = Min(size - write_off, region_size - region_off);
+      region_write_size = Min(region_write_size, max_U32);
+      if(region_write_size == 0)
+      {
+        result = 0;
+        break;
+      }
+
+      U64 page_size = get_system_info()->page_size;
+      mach_vm_address_t protect_address = AlignDownPow2(write_address, page_size);
+      mach_vm_address_t protect_opl = AlignPow2(write_address + region_write_size, page_size);
+      protect_opl = Min(protect_opl, region_address + region_size);
+      mach_vm_size_t protect_size = protect_opl - protect_address;
+      vm_prot_t old_protection = info.protection;
+      vm_prot_t write_protection = VM_PROT_READ|VM_PROT_WRITE;
+      kern_return_t protect_code = mach_vm_protect(process->task, protect_address, protect_size, 0, write_protection);
+      if(protect_code != KERN_SUCCESS)
+      {
+        write_protection |= VM_PROT_COPY;
+        protect_code = mach_vm_protect(process->task, protect_address, protect_size, 0, write_protection);
+      }
+      if(protect_code != KERN_SUCCESS)
+      {
+        result = 0;
+        break;
+      }
+
+      mach_msg_type_number_t write_size = (mach_msg_type_number_t)region_write_size;
+      kern_return_t write_code = mach_vm_write(process->task, write_address, (vm_offset_t)((U8 *)src + write_off), write_size);
+      mach_vm_protect(process->task, protect_address, protect_size, 0, old_protection);
+      if(write_code != KERN_SUCCESS)
+      {
+        result = 0;
+        break;
+      }
+      write_off += region_write_size;
     }
   }
   return result;
