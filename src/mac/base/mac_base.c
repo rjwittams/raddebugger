@@ -685,22 +685,47 @@ semaphore_close(Semaphore semaphore)
 internal B32
 semaphore_take(Semaphore semaphore, U64 endt_us)
 {
-  // TODO(rjf): we need to use `sem_timedwait` here.
-  AssertAlways(endt_us == max_U64);
-  for(;;)
+  B32 result = 0;
+  sem_t *s = (sem_t *)semaphore.u64[0];
+  if(endt_us == max_U64)
   {
-    int err = sem_wait((sem_t*)semaphore.u64[0]);
-    if(err == 0)
+    for(;;)
     {
+      int err = sem_wait(s);
+      if(err == 0)
+      {
+        result = 1;
+        break;
+      }
+      else if(errno == EINTR || errno == EAGAIN)
+      {
+        continue;
+      }
       break;
     }
-    else if(errno == EAGAIN)
-    {
-      continue;
-    }
-    break;
   }
-  return 1;
+  else
+  {
+    for(;;)
+    {
+      int err = sem_trywait(s);
+      if(err == 0)
+      {
+        result = 1;
+        break;
+      }
+      if(errno != EAGAIN && errno != EINTR)
+      {
+        break;
+      }
+      if(now_time_us() >= endt_us)
+      {
+        break;
+      }
+      usleep(1000);
+    }
+  }
+  return result;
 }
 
 internal void
