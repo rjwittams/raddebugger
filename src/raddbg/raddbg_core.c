@@ -15864,6 +15864,19 @@ rd_frame(void)
             TxtPt pt = rd_regs()->cursor;
             U64 vaddr = rd_regs()->vaddr;
             String8 expr = rd_regs()->expr;
+            if(file_path.size == 0 && expr.size == 0 && vaddr == 0 && rd_regs()->string.size != 0)
+            {
+              String8TxtPtPair pair = str8_txt_pt_pair_from_string(rd_regs()->string);
+              if(pair.string.size != rd_regs()->string.size)
+              {
+                file_path = pair.string;
+                pt = pair.pt;
+              }
+              else
+              {
+                expr = rd_regs()->string;
+              }
+            }
             if(expr.size == 0 && vaddr != 0)
             {
               expr = push_str8f(scratch.arena, "0x%I64x", vaddr);
