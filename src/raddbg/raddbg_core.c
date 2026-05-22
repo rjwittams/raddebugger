@@ -10152,7 +10152,47 @@ rd_regs_fill_slot_from_string(RD_RegSlot slot, String8 query_expr, String8 strin
     case RD_RegSlot_Thread:
     case RD_RegSlot_CtrlEntity:
     {
-      
+      D_EntityKind entity_kind = D_EntityKind_Null;
+      switch(slot)
+      {
+        case RD_RegSlot_Machine:    {entity_kind = D_EntityKind_Machine;}break;
+        case RD_RegSlot_Module:     {entity_kind = D_EntityKind_Module;}break;
+        case RD_RegSlot_Process:    {entity_kind = D_EntityKind_Process;}break;
+        case RD_RegSlot_Thread:     {entity_kind = D_EntityKind_Thread;}break;
+        case RD_RegSlot_CtrlEntity: {entity_kind = D_EntityKind_COUNT;}break;
+        default:{}break;
+      }
+      D_Handle handle = d_handle_from_string(string);
+      D_Entity *entity = d_entity_from_handle(handle);
+      if(entity == &d_entity_nil && slot == RD_RegSlot_Process)
+      {
+        U64 pid = 0;
+        if(try_u64_from_str8_c_rules(string, &pid))
+        {
+          D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
+          for(U64 idx = 0; idx < processes.count; idx += 1)
+          {
+            if(processes.v[idx]->id == pid)
+            {
+              entity = processes.v[idx];
+              handle = entity->handle;
+              break;
+            }
+          }
+        }
+      }
+      if(entity != &d_entity_nil && (entity_kind == D_EntityKind_COUNT || entity->kind == entity_kind))
+      {
+        switch(slot)
+        {
+          case RD_RegSlot_Machine:    {rd_regs()->machine = handle;}break;
+          case RD_RegSlot_Module:     {rd_regs()->module = handle;}break;
+          case RD_RegSlot_Process:    {rd_regs()->process = handle;}break;
+          case RD_RegSlot_Thread:     {rd_regs()->thread = handle;}break;
+          case RD_RegSlot_CtrlEntity: {rd_regs()->ctrl_entity = handle;}break;
+          default:{}break;
+        }
+      }
     }break;
     
     //- rjf: cfgs
