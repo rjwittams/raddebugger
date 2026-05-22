@@ -22,6 +22,7 @@ git_hash=$(git describe --always --dirty)
 git_hash_full=$(git rev-parse HEAD)
 
 # --- Compile/Link Line Definitions -------------------------------------------
+host_os=$(uname -s)
 host_arch=$(uname -m)
 cc_host_flags=""
 if [[ "$host_arch" == "x86_64" || "$host_arch" == "amd64" ]]; then
@@ -29,10 +30,16 @@ if [[ "$host_arch" == "x86_64" || "$host_arch" == "amd64" ]]; then
 fi
 cc_cflags_gcc=""
 cc_cflags_clang=${cc_sanitize}" -fdiagnostics-absolute-paths -Wno-for-loop-analysis  -Wno-incompatible-pointer-types-discards-qualifiers -Wno-initializer-overrides -Wno-compare-distinct-pointer-types -Wno-single-bit-bitfield-constant-conversion -Wno-deprecated-declarations -Wno-writable-strings -Wno-unknown-warning-option -Wno-deprecated-register -Wno-unused-local-typedef"
+if [[ "$host_os" == "Darwin" ]]; then
+  cc_cflags_clang="$cc_cflags_clang -x objective-c"
+fi
 cc_common="$cc_host_flags -I../src/ -I../local/ -D_GNU_SOURCE -g -DBUILD_GIT_HASH=\"$git_hash\" -DBUILD_GIT_HASH_FULL=\"$git_hash_full\" -Wall -Wno-missing-braces -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-value -D_USE_MATH_DEFINES -Dstrdup=_strdup -Dgnu_printf=printf"
 cc_debug="-g -O0 -DBUILD_DEBUG=1 ${cc_common}"
 cc_release="-g -O2 -DBUILD_DEBUG=0 ${cc_common}"
 cc_link="-lpthread -lm -lrt -ldl"
+if [[ "$host_os" == "Darwin" ]]; then
+  cc_link="-lpthread -lm"
+fi
 
 # --- Per-Build Settings ------------------------------------------------------
 cc_link_dll="-fPIC"
@@ -47,6 +54,12 @@ else
   cc_font_provider="-I/usr/include/freetype2 -lfreetype"
   cc_os_gfx="-lX11 -lXext"
   cc_render="-lGL -lEGL"
+fi
+
+if [[ "$host_os" == "Darwin" ]]; then
+  cc_os_gfx="-framework Cocoa"
+  cc_render=""
+  cc_font_provider=""
 fi
 
 # --- Choose Compile/Link Lines -----------------------------------------------
