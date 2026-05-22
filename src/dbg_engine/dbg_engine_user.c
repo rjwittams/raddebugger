@@ -1729,6 +1729,37 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
     {
       // rjf: unpack command
       D_CmdParams *params = &cmd->params;
+      D_CmdParams params_copy = {0};
+      D_CmdKind cmd_kind = cmd->kind;
+      switch(cmd_kind)
+      {
+        default:{}break;
+        case D_CmdKind_FreezeThread:
+        case D_CmdKind_ThawThread:
+        case D_CmdKind_FreezeProcess:
+        case D_CmdKind_ThawProcess:
+        case D_CmdKind_FreezeMachine:
+        case D_CmdKind_ThawMachine:
+        {
+          params_copy = *params;
+          cmd_kind = ((cmd_kind == D_CmdKind_FreezeThread ||
+                       cmd_kind == D_CmdKind_FreezeProcess ||
+                       cmd_kind == D_CmdKind_FreezeMachine)
+                      ? D_CmdKind_FreezeEntity
+                      : D_CmdKind_ThawEntity);
+          switch(cmd->kind)
+          {
+            default:{}break;
+            case D_CmdKind_FreezeThread:
+            case D_CmdKind_ThawThread:  {params_copy.entity = params->thread;}break;
+            case D_CmdKind_FreezeProcess:
+            case D_CmdKind_ThawProcess: {params_copy.entity = params->process;}break;
+            case D_CmdKind_FreezeMachine:
+            case D_CmdKind_ThawMachine: {params_copy.entity = params->machine;}break;
+          }
+          params = &params_copy;
+        }break;
+      }
       
       // rjf: prep ctrl running arguments
       B32 need_run = 0;
@@ -1738,7 +1769,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
       D_TrapList run_traps = {0};
       
       // rjf: process command
-      switch(cmd->kind)
+      switch(cmd_kind)
       {
         default:{}break;
         
@@ -1824,7 +1855,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
             need_run = 1;
             run_kind = D_RunKind_Run;
             run_thread = &d_entity_nil;
-            run_flags = (cmd->kind == D_CmdKind_LaunchAndStepInto) ? D_RunFlag_StopOnEntryPoint : 0;
+            run_flags = (cmd_kind == D_CmdKind_LaunchAndStepInto) ? D_RunFlag_StopOnEntryPoint : 0;
           }
           
           // rjf: no targets -> error
@@ -1973,7 +2004,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
           else
           {
             D_TrapNet trap_net = {0};
-            switch(cmd->kind)
+            switch(cmd_kind)
             {
               default: break;
               case D_CmdKind_StepIntoInst: {trap_net.good_read = 1;}break;
@@ -2003,7 +2034,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
             {
               D_CmdParams params_copy = *params;
               params_copy.retry_idx += 1;
-              d_cmd_list_push_new(scratch.arena, &deferred_cmds, cmd->kind, &params_copy);
+              d_cmd_list_push_new(scratch.arena, &deferred_cmds, cmd_kind, &params_copy);
             }
             else if(!good_trap_net)
             {
@@ -2079,13 +2110,13 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
           D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
           if(processes.count != 0)
           {
-            D_CmdKind step_cmd_kind = (cmd->kind == D_CmdKind_StepInto
+            D_CmdKind step_cmd_kind = (cmd_kind == D_CmdKind_StepInto
                                        ? D_CmdKind_StepIntoLine
                                        : D_CmdKind_StepOverLine);
             B32 prefer_disasm = params->prefer_disasm;
             if(prefer_disasm)
             {
-              step_cmd_kind = (cmd->kind == D_CmdKind_StepInto
+              step_cmd_kind = (cmd_kind == D_CmdKind_StepInto
                                ? D_CmdKind_StepIntoInst
                                : D_CmdKind_StepOverInst);
             }
@@ -2098,20 +2129,6 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         }break;
         
         //- rjf: debug control context management operations
-        case D_CmdKind_FreezeThread:
-        case D_CmdKind_ThawThread:
-        case D_CmdKind_FreezeProcess:
-        case D_CmdKind_ThawProcess:
-        case D_CmdKind_FreezeMachine:
-        case D_CmdKind_ThawMachine:
-        {
-          D_CmdKind disptch_kind = ((cmd->kind == D_CmdKind_FreezeThread ||
-                                     cmd->kind == D_CmdKind_FreezeProcess ||
-                                     cmd->kind == D_CmdKind_FreezeMachine)
-                                    ? D_CmdKind_FreezeEntity
-                                    : D_CmdKind_ThawEntity);
-          d_push_cmd(disptch_kind, params);
-        }break;
         case D_CmdKind_FreezeLocalMachine:
         {
           D_MachineID machine_id = D_MachineID_Local;
@@ -2125,7 +2142,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         case D_CmdKind_FreezeEntity:
         case D_CmdKind_ThawEntity:
         {
-          B32 should_freeze = (cmd->kind == D_CmdKind_FreezeEntity);
+          B32 should_freeze = (cmd_kind == D_CmdKind_FreezeEntity);
           D_Entity *root = d_entity_from_handle(params->entity);
           for(D_Entity *e = root; e != &d_entity_nil; e = d_entity_rec_depth_first_pre(e, root).next)
           {
@@ -2142,8 +2159,23 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
             need_run   = 1;
             run_kind   = d_user_state->ctrl_last_run_kind;
             run_thread = d_entity_from_handle(d_user_state->ctrl_last_run_thread_handle);
-            run_flags  = d_user_state->ctrl_last_run_flags;
+            run_flags  = d_user_state->ctrl_last_run_flags|D_RunFlag_IgnoreInitialHalt;
             run_traps  = d_user_state->ctrl_last_run_traps;
+            if(run_thread == &d_entity_nil || run_thread->is_frozen)
+            {
+              run_thread = &d_entity_nil;
+              D_EntityArray threads = d_entity_array_from_kind(D_EntityKind_Thread);
+              for EachIndex(idx, threads.count)
+              {
+                D_Entity *thread = threads.v[idx];
+                if(!thread->is_frozen)
+                {
+                  run_thread = thread;
+                  break;
+                }
+              }
+            }
+            need_run = (run_thread != &d_entity_nil);
           }
         }break;
         
