@@ -6695,6 +6695,7 @@ rd_window_frame(void)
     {
       B32 draw_custom_title_bar_controls = wm_window_should_draw_custom_title_bar_controls(ws->os);
       F32 native_title_bar_left_padding = wm_window_native_title_bar_left_padding(ws->os);
+      B32 draw_self_menu_bar = !wm_application_menu_bar_is_native();
       wm_window_clear_custom_border_data(ws->os);
       wm_window_push_custom_edges(ws->os, window_edge_px);
       wm_window_push_custom_title_bar(ws->os, dim_2f32(top_bar_rect).y);
@@ -6730,9 +6731,9 @@ rd_window_frame(void)
                 ui_image(texture, R_Tex2DSampleKind_Linear, r2f32p(0, 0, texture_dim.x, texture_dim.y), v4f32(1, 1, 1, 1), 0, str8_lit(""));
               }
             }
-            
-            //- rjf: menu items
-            if(dim_2f32(top_bar_rect).x > ui_top_font_size()*60)
+
+            //- menu items
+            if(draw_self_menu_bar && dim_2f32(top_bar_rect).x > ui_top_font_size()*60)
             {
               ui_set_next_flags(UI_BoxFlag_DrawBackground);
               UI_PrefWidth(ui_children_sum(1)) UI_Row UI_PrefWidth(ui_text_dim(20, 1)) UI_GroupKey(menu_bar_group_key)
@@ -10292,8 +10293,156 @@ rd_next_view_cmd(RD_Cmd **cmd)
   return result;
 }
 
+internal void
+rd_wm_set_main_menu(void)
+{
+  typedef struct RD_AppMenuItemSpec RD_AppMenuItemSpec;
+  struct RD_AppMenuItemSpec
+  {
+    B32 separator;
+    RD_CmdKind kind;
+  };
+  typedef struct RD_AppMenuSpec RD_AppMenuSpec;
+  struct RD_AppMenuSpec
+  {
+    String8 label;
+    U64 item_count;
+    RD_AppMenuItemSpec *items;
+  };
+
+#define RD_MenuCmd(k) {0, k}
+#define RD_MenuSep()  {1, RD_CmdKind_Null}
+  RD_AppMenuItemSpec file_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_Open),
+    RD_MenuCmd(RD_CmdKind_OpenSourceFileFromDebugInfo),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_NewProject),
+    RD_MenuCmd(RD_CmdKind_OpenProject),
+    RD_MenuCmd(RD_CmdKind_OpenRecentProject),
+    RD_MenuCmd(RD_CmdKind_SaveProject),
+    RD_MenuCmd(RD_CmdKind_ProjectSettings),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_NewUser),
+    RD_MenuCmd(RD_CmdKind_OpenUser),
+    RD_MenuCmd(RD_CmdKind_SaveUser),
+    RD_MenuCmd(RD_CmdKind_UserSettings),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_Exit),
+  };
+  RD_AppMenuItemSpec window_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_OpenWindow),
+    RD_MenuCmd(RD_CmdKind_CloseWindow),
+    RD_MenuCmd(RD_CmdKind_ToggleFullscreen),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_WindowSettings),
+  };
+  RD_AppMenuItemSpec panel_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_NewPanelUp),
+    RD_MenuCmd(RD_CmdKind_NewPanelDown),
+    RD_MenuCmd(RD_CmdKind_NewPanelRight),
+    RD_MenuCmd(RD_CmdKind_NewPanelLeft),
+    RD_MenuCmd(RD_CmdKind_ClosePanel),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_NextPanel),
+    RD_MenuCmd(RD_CmdKind_PrevPanel),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_TabBarTop),
+    RD_MenuCmd(RD_CmdKind_TabBarBottom),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_ResetToDefaultPanels),
+    RD_MenuCmd(RD_CmdKind_ResetToCompactPanels),
+    RD_MenuCmd(RD_CmdKind_ResetToSimplePanels),
+  };
+  RD_AppMenuItemSpec tab_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_OpenTab),
+    RD_MenuCmd(RD_CmdKind_CloseTab),
+    RD_MenuCmd(RD_CmdKind_DuplicateTab),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_MoveTabLeft),
+    RD_MenuCmd(RD_CmdKind_MoveTabRight),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_NextTab),
+    RD_MenuCmd(RD_CmdKind_PrevTab),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_TabSettings),
+  };
+  RD_AppMenuItemSpec targets_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_AddTarget),
+    RD_MenuCmd(RD_CmdKind_LaunchAndRun),
+    RD_MenuCmd(RD_CmdKind_LaunchAndStepInto),
+  };
+  RD_AppMenuItemSpec control_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_Run),
+    RD_MenuCmd(RD_CmdKind_KillAll),
+    RD_MenuCmd(RD_CmdKind_Restart),
+    RD_MenuCmd(RD_CmdKind_Halt),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_StepInto),
+    RD_MenuCmd(RD_CmdKind_StepOver),
+    RD_MenuCmd(RD_CmdKind_StepOut),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_Attach),
+    RD_MenuCmd(RD_CmdKind_Detach),
+  };
+  RD_AppMenuItemSpec help_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_OpenPalette),
+  };
+  RD_AppMenuSpec specs[] =
+  {
+    {str8_lit_comp("File"),    ArrayCount(file_items),    file_items},
+    {str8_lit_comp("Window"),  ArrayCount(window_items),  window_items},
+    {str8_lit_comp("Panel"),   ArrayCount(panel_items),   panel_items},
+    {str8_lit_comp("Tab"),     ArrayCount(tab_items),     tab_items},
+    {str8_lit_comp("Targets"), ArrayCount(targets_items), targets_items},
+    {str8_lit_comp("Control"), ArrayCount(control_items), control_items},
+    {str8_lit_comp("Help"),    ArrayCount(help_items),    help_items},
+  };
+#undef RD_MenuSep
+#undef RD_MenuCmd
+
+  WM_MenuArray menu_array = {0};
+  menu_array.count = ArrayCount(specs);
+  menu_array.menus = push_array(rd_state->arena, WM_Menu, menu_array.count);
+  for(U64 menu_idx = 0; menu_idx < menu_array.count; menu_idx += 1)
+  {
+    RD_AppMenuSpec *spec = &specs[menu_idx];
+    WM_Menu *menu = &menu_array.menus[menu_idx];
+    menu->label = spec->label;
+    menu->item_count = spec->item_count;
+    menu->items = push_array(rd_state->arena, WM_MenuItem, menu->item_count);
+    for(U64 item_idx = 0; item_idx < menu->item_count; item_idx += 1)
+    {
+      RD_AppMenuItemSpec *item_spec = &spec->items[item_idx];
+      WM_MenuItem *item = &menu->items[item_idx];
+      if(item_spec->separator)
+      {
+        item->kind = WM_MenuItemKind_Separator;
+      }
+      else
+      {
+        RD_CmdKindInfo *info = &rd_cmd_kind_info_table[item_spec->kind];
+        item->kind = WM_MenuItemKind_Command;
+        item->command_name = info->string;
+        item->label = rd_display_from_code_name(info->string);
+        if(item->label.size == 0)
+        {
+          item->label = info->string;
+        }
+      }
+    }
+  }
+  wm_set_main_menu(menu_array);
+}
+
 ////////////////////////////////
-//~ rjf: Main Layer Top-Level Calls
+//~ Main Layer Top-Level Calls
 
 #if !defined(STBI_INCLUDE_STB_IMAGE_H)
 # define STB_IMAGE_IMPLEMENTATION
@@ -10394,8 +10543,10 @@ rd_init(CmdLine *cmdln)
       }
     }
   }
-  
-  // rjf: set up top-level config entity trees & tables
+
+  rd_wm_set_main_menu();
+
+  // set up top-level config entity trees & tables
   {
     rd_state->cfg = cfg_state_alloc();
     cfg_ctx_select(cfg_state_ctx(rd_state->cfg));
@@ -11216,9 +11367,16 @@ rd_frame(void)
         take = 1;
         rd_cmd(RD_CmdKind_Exit);
       }
-      
-      //- rjf: try menu bar operations
-      if(rd_state->alt_menu_bar_enabled)
+
+      if(!take && event->kind == WM_EventKind_MenuCommand && event->string.size != 0)
+      {
+        take = 1;
+        rd_cmd(RD_CmdKind_RunCommand, .cmd_name = event->string);
+        rd_request_frame();
+      }
+
+      //- try menu bar operations
+      if(rd_state->alt_menu_bar_enabled && !wm_application_menu_bar_is_native())
       {
         if(!take && event->kind == WM_EventKind_Press && event->key == WM_Key_Alt && event->modifiers == 0 && event->is_repeat == 0)
         {
