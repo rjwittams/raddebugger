@@ -12772,6 +12772,8 @@ rd_frame(void)
           //- rjf: external driver textual commands
           case RD_CmdKind_RunExternalDriverTextCommand:
           {
+            arena_clear(rd_state->cmd_output_arena);
+            MemoryZeroStruct(&rd_state->cmd_outputs);
             String8 msg = rd_regs()->string;
             String8List msg_parts = str8_split(scratch.arena, msg, (U8 *)" ", 1, 0);
             String8 cmd_name = str8_list_first(&msg_parts);
@@ -12791,7 +12793,7 @@ rd_frame(void)
                 D_Entity *process = processes.v[idx];
                 U64 thread_count = 0;
                 U64 module_count = 0;
-                for(D_Entity *child = process->first; child != 0; child = child->next)
+                for(D_Entity *child = process->first; child != &d_entity_nil; child = child->next)
                 {
                   if(child->kind == D_EntityKind_Thread)
                   {
