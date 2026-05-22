@@ -17,8 +17,8 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
     U64 pc = arch_ip_from_reg_block(arch_info, regs);
     
     //- rjf: find nearest FDE entry to the IP
-    U64 fde_vaddr = 0;
-    if(header->version == 1 && header->fde_count != 0)
+    U64 fde_vaddr = unwind_info->override_fde_vaddr;
+    if(fde_vaddr == 0 && header->version == 1 && header->fde_count != 0)
     {
       // rjf: binary search to find FDE number
       U64 fde_num = 0;
