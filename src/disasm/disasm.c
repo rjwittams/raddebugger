@@ -35,6 +35,10 @@ dasm_ctrl_flow_info_from_arch_vaddr_code(Arena *arena, DASM_InstFlags exit_point
   for(U64 offset = 0; offset < code.size;)
   {
     DASM_Inst inst = dasm_inst_from_code(scratch.arena, arch, vaddr+offset, str8_skip(code, offset), DASM_Syntax_Intel);
+    if(inst.size == 0)
+    {
+      break;
+    }
     U64 inst_vaddr = vaddr+offset;
     offset += inst.size;
     info.total_size += inst.size;
