@@ -183,6 +183,7 @@ struct D_ModuleImageInfoCacheNode
   U64 cfi_rebase;
   B32 is_unwind_eh;
   String8 dwarf_unwind_data;
+  String8 macho_unwind_info_data;
   EH_FrameHdr eh_frame_hdr;
   EH_PtrCtx eh_ptr_ctx;
   U64 entry_point_voff;
@@ -563,6 +564,7 @@ internal PE_IntelPdata *d_intel_pdata_from_module_voff(Arena *arena, D_Handle mo
 internal U64 d_entry_point_voff_from_module(D_Handle module_handle);
 internal String8 d_initial_debug_info_path_from_module(Arena *arena, D_Handle module_handle);
 internal String8 d_raddbg_data_from_module(Arena *arena, D_Handle module_handle);
+internal String8 d_macho_unwind_info_data_from_module(Arena *arena, D_Handle module_handle);
 
 ////////////////////////////////
 //~ rjf: Unwinding Functions
@@ -575,6 +577,10 @@ internal D_UnwindStepResult d_unwind_step__dwarf(D_Handle process_handle, Arch a
 //- rjf: [x64]
 internal U64 *d_unwind_reg_from_pe_gpr_reg__pe_x64(X64_RegBlock *regs, PE_UnwindGprRegX64 gpr_reg);
 internal D_UnwindStepResult d_unwind_step__pe_x64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, X64_RegBlock *regs, U64 endt_us);
+internal U64 *d_unwind_reg_from_macho_reg__macho_x64(X64_RegBlock *regs, MachO_UnwindX64Reg macho_reg);
+internal B32 d_macho_compact_unwind_x64_mode_is_supported(U32 encoding);
+internal B32 d_macho_compact_unwind_x64_cfa_from_encoding(U32 encoding, X64_RegBlock *regs, U64 *cfa_out);
+internal D_UnwindStepResult d_unwind_step__macho_x64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, X64_RegBlock *regs, U64 endt_us);
 
 //- rjf: abstracted full unwind
 internal D_Unwind d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us);
