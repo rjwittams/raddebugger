@@ -778,22 +778,24 @@ entry_point(CmdLine *cmd_line)
       String8 ipc_sender2main_shared_memory_name = push_str8f(scratch.arena, "_raddbg_ipc_sender2main_shared_memory_%i_", dst_pid);
       String8 ipc_sender2main_signal_semaphore_name = push_str8f(scratch.arena, "_raddbg_ipc_sender2main_signal_semaphore_%i_", dst_pid);
       String8 ipc_sender2main_lock_semaphore_name = push_str8f(scratch.arena, "_raddbg_ipc_sender2main_lock_semaphore_%i_", dst_pid);
-      SharedMemory ipc_sender2main_shared_memory = shared_memory_alloc(IPC_SHARED_MEMORY_BUFFER_SIZE, ipc_sender2main_shared_memory_name);
+      SharedMemory ipc_sender2main_shared_memory = shared_memory_open(ipc_sender2main_shared_memory_name);
       ipc_sender2main_shared_memory_base = (U8 *)shared_memory_view_open(ipc_sender2main_shared_memory, r1u64(0, IPC_SHARED_MEMORY_BUFFER_SIZE));
-      ipc_sender2main_signal_semaphore = semaphore_alloc(0, 1, ipc_sender2main_signal_semaphore_name);
-      ipc_sender2main_lock_semaphore = semaphore_alloc(1, 1, ipc_sender2main_lock_semaphore_name);
+      ipc_sender2main_signal_semaphore = semaphore_open(ipc_sender2main_signal_semaphore_name);
+      ipc_sender2main_lock_semaphore = semaphore_open(ipc_sender2main_lock_semaphore_name);
       String8 ipc_main2sender_shared_memory_name = push_str8f(scratch.arena, "_raddbg_ipc_main2sender_shared_memory_%i_", dst_pid);
       String8 ipc_main2sender_signal_semaphore_name = push_str8f(scratch.arena, "_raddbg_ipc_main2sender_signal_semaphore_%i_", dst_pid);
       String8 ipc_main2sender_lock_semaphore_name = push_str8f(scratch.arena, "_raddbg_ipc_main2sender_lock_semaphore_%i_", dst_pid);
-      SharedMemory ipc_main2sender_shared_memory = shared_memory_alloc(IPC_SHARED_MEMORY_BUFFER_SIZE, ipc_main2sender_shared_memory_name);
+      SharedMemory ipc_main2sender_shared_memory = shared_memory_open(ipc_main2sender_shared_memory_name);
       ipc_main2sender_shared_memory_base = (U8 *)shared_memory_view_open(ipc_main2sender_shared_memory, r1u64(0, IPC_SHARED_MEMORY_BUFFER_SIZE));
-      ipc_main2sender_signal_semaphore = semaphore_alloc(0, 1, ipc_main2sender_signal_semaphore_name);
-      ipc_main2sender_lock_semaphore = semaphore_alloc(1, 1, ipc_main2sender_lock_semaphore_name);
+      ipc_main2sender_signal_semaphore = semaphore_open(ipc_main2sender_signal_semaphore_name);
+      ipc_main2sender_lock_semaphore = semaphore_open(ipc_main2sender_lock_semaphore_name);
       
       //- rjf: got resources -> write message
       B32 wrote_message = 0;
       if(dst_pid != 0 &&
          ipc_sender2main_shared_memory_base != 0 &&
+         !MemoryIsZeroStruct(&ipc_sender2main_signal_semaphore) &&
+         !MemoryIsZeroStruct(&ipc_sender2main_lock_semaphore) &&
          semaphore_take(ipc_sender2main_lock_semaphore, max_U64))
       {
         wrote_message = 1;
@@ -802,9 +804,9 @@ entry_point(CmdLine *cmd_line)
         U64 buffer_max = IPC_SHARED_MEMORY_BUFFER_SIZE - sizeof(IPCInfo);
         String8List parts = {0};
         {
-          for EachIndex(idx, cmd_line->argc-1)
+          for(String8Node *n = cmd_line->inputs.first; n != 0; n = n->next)
           {
-            str8_list_push(scratch.arena, &parts, str8_cstring(cmd_line->argv[idx+1]));
+            str8_list_push(scratch.arena, &parts, n->string);
           }
         }
         StringJoin join = {str8_lit(""), str8_lit(" "), str8_lit("")};
@@ -819,6 +821,8 @@ entry_point(CmdLine *cmd_line)
       String8List outputs = {0};
       if(wrote_message &&
          ipc_main2sender_shared_memory_base != 0 &&
+         !MemoryIsZeroStruct(&ipc_main2sender_signal_semaphore) &&
+         !MemoryIsZeroStruct(&ipc_main2sender_lock_semaphore) &&
          semaphore_take(ipc_main2sender_signal_semaphore, now_time_us()+10000000))
       {
         if(semaphore_take(ipc_main2sender_lock_semaphore, max_U64))
