@@ -167,9 +167,8 @@ mac_dmn_argv_from_launch_params(Arena *arena, ProcessLaunchParams *params)
   char **argv = push_array(arena, char *, params->cmd_line.node_count + 1);
   if(params->cmd_line.first != 0)
   {
-    String8List path_parts = str8_split_path(arena, params->path);
-    str8_list_push(arena, &path_parts, params->cmd_line.first->string);
-    String8 path_to_exe = str8_path_list_join_by_style(arena, &path_parts, PathStyle_SystemAbsolute);
+    String8 path_to_exe = path_absolute_dst_from_relative_dst_src(arena, params->cmd_line.first->string, params->path);
+    path_to_exe = str8_copy(arena, path_to_exe);
     argv[0] = (char *)path_to_exe.str;
     U64 arg_idx = 1;
     for EachNode(n, String8Node, params->cmd_line.first->next)
@@ -230,7 +229,6 @@ mac_dmn_launch_traced_process(ProcessLaunchParams *params)
   if(pid == 0)
   {
     if(ptrace(PT_TRACE_ME, 0, 0, 0) != 0) { _exit(1); }
-    ptrace(PT_SIGEXC, 0, 0, 0);
     mac_dmn_apply_child_stdio(params);
     if(chdir(work_dir_path) != 0) { _exit(1); }
     execve(argv[0], argv, envp);
