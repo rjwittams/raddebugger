@@ -68,6 +68,7 @@ mac_dmn_process_entity_release(MAC_DMN_Entity *entity)
     }
 
     MAC_DMN_Process *process = &entity->process;
+    mac_dmn_process_resume_suspended_threads(process);
     for(MAC_DMN_Entity *thread_entity = process->first_thread_entity, *next = 0; thread_entity != 0; thread_entity = next)
     {
       next = thread_entity->next;
@@ -314,6 +315,11 @@ mac_dmn_thread_entity_release(MAC_DMN_Entity *entity)
 {
   if(entity != 0 && entity->kind == MAC_DMN_EntityKind_Thread)
   {
+    if(entity->thread.is_suspended_for_run)
+    {
+      thread_resume(entity->thread.thread);
+      entity->thread.is_suspended_for_run = 0;
+    }
     MAC_DMN_Process *process = entity->thread.process;
     for(MAC_DMN_Entity **ptr = &process->first_thread_entity; *ptr != 0; ptr = &(*ptr)->next)
     {
@@ -526,59 +532,107 @@ mac_dmn_refresh_initial_module(MAC_DMN_Process *process)
 }
 
 internal B32
-mac_dmn_process_should_run(MAC_DMN_Entity *process_entity, DMN_RunCtrls *ctrls)
+mac_dmn_thread_should_run(MAC_DMN_Entity *thread_entity, DMN_RunCtrls *ctrls)
 {
   B32 result = 1;
-  if(ctrls != 0 && process_entity != 0)
+  if(ctrls != 0 && thread_entity != 0 && thread_entity->kind == MAC_DMN_EntityKind_Thread)
   {
-    DMN_Handle process_handle = mac_dmn_handle_from_entity(process_entity);
-    if(ctrls->run_entities_are_processes)
+    DMN_Handle thread_handle = mac_dmn_handle_from_entity(thread_entity);
+    MAC_DMN_Process *process = thread_entity->thread.process;
+    if(!dmn_handle_match(ctrls->single_step_thread, dmn_handle_zero()))
     {
-      B32 is_listed = 0;
-      for EachIndex(idx, ctrls->run_entity_count)
-      {
-        if(dmn_handle_match(ctrls->run_entities[idx], process_handle))
-        {
-          is_listed = 1;
-          break;
-        }
-      }
-      result = ctrls->run_entities_are_unfrozen ? is_listed : !is_listed;
+      result = dmn_handle_match(ctrls->single_step_thread, thread_handle);
     }
     else if(ctrls->run_entity_count != 0)
     {
-      B32 has_listed_thread = 0;
-      MAC_DMN_Process *process = &process_entity->process;
-      for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+      B32 is_listed = 0;
+      if(ctrls->run_entities_are_processes)
       {
-        DMN_Handle thread_handle = mac_dmn_handle_from_entity(thread_entity);
-        for EachIndex(idx, ctrls->run_entity_count)
+        for(MAC_DMN_Entity *process_entity = mac_dmn_state->first_process_entity; process_entity != 0; process_entity = process_entity->next)
         {
-          if(dmn_handle_match(ctrls->run_entities[idx], thread_handle))
+          if(process_entity->kind == MAC_DMN_EntityKind_Process && &process_entity->process == process)
           {
-            has_listed_thread = 1;
+            DMN_Handle process_handle = mac_dmn_handle_from_entity(process_entity);
+            for EachIndex(idx, ctrls->run_entity_count)
+            {
+              if(dmn_handle_match(ctrls->run_entities[idx], process_handle))
+              {
+                is_listed = 1;
+                break;
+              }
+            }
             break;
           }
         }
       }
-      result = ctrls->run_entities_are_unfrozen ? has_listed_thread : !has_listed_thread;
-    }
-    if(!dmn_handle_match(ctrls->single_step_thread, dmn_handle_zero()))
-    {
-      B32 has_single_step_thread = 0;
-      MAC_DMN_Process *process = &process_entity->process;
-      for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+      else
       {
-        if(dmn_handle_match(ctrls->single_step_thread, mac_dmn_handle_from_entity(thread_entity)))
+        for EachIndex(idx, ctrls->run_entity_count)
         {
-          has_single_step_thread = 1;
-          break;
+          if(dmn_handle_match(ctrls->run_entities[idx], thread_handle))
+          {
+            is_listed = 1;
+            break;
+          }
         }
       }
-      result = has_single_step_thread;
+      result = ctrls->run_entities_are_unfrozen ? is_listed : !is_listed;
     }
   }
   return result;
+}
+
+internal B32
+mac_dmn_process_should_run(MAC_DMN_Entity *process_entity, DMN_RunCtrls *ctrls)
+{
+  B32 result = 1;
+  if(ctrls != 0 && process_entity != 0 && process_entity->kind == MAC_DMN_EntityKind_Process)
+  {
+    result = 0;
+    MAC_DMN_Process *process = &process_entity->process;
+    for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+    {
+      if(mac_dmn_thread_should_run(thread_entity, ctrls))
+      {
+        result = 1;
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+internal void
+mac_dmn_process_suspend_frozen_threads(MAC_DMN_Process *process, DMN_RunCtrls *ctrls)
+{
+  if(process != 0)
+  {
+    for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+    {
+      if(!thread_entity->thread.is_suspended_for_run &&
+         !mac_dmn_thread_should_run(thread_entity, ctrls) &&
+         thread_suspend(thread_entity->thread.thread) == KERN_SUCCESS)
+      {
+        thread_entity->thread.is_suspended_for_run = 1;
+      }
+    }
+  }
+}
+
+internal void
+mac_dmn_process_resume_suspended_threads(MAC_DMN_Process *process)
+{
+  if(process != 0)
+  {
+    for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+    {
+      if(thread_entity->thread.is_suspended_for_run)
+      {
+        thread_resume(thread_entity->thread.thread);
+        thread_entity->thread.is_suspended_for_run = 0;
+      }
+    }
+  }
 }
 
 internal MAC_DMN_ActiveTrap *
@@ -633,6 +687,53 @@ mac_dmn_thread_read_ip(MAC_DMN_Thread *thread)
         }
       }break;
 #endif
+    }
+  }
+  return result;
+}
+
+internal U64
+mac_dmn_thread_read_sp(MAC_DMN_Thread *thread)
+{
+  U64 result = 0;
+  if(thread != 0)
+  {
+    switch(thread->arch)
+    {
+      default:{}break;
+#if ARCH_X64
+      case Arch_x64:
+      {
+        x86_thread_state64_t state = {0};
+        mach_msg_type_number_t count = x86_THREAD_STATE64_COUNT;
+        if(thread_get_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+        {
+          result = state.__rsp;
+        }
+      }break;
+#endif
+    }
+  }
+  return result;
+}
+
+internal U64
+mac_dmn_stack_base_vaddr_from_thread(MAC_DMN_Thread *thread)
+{
+  U64 result = 0;
+  U64 sp = mac_dmn_thread_read_sp(thread);
+  MAC_DMN_Process *process = thread != 0 ? thread->process : 0;
+  if(process != 0 && process->task != MACH_PORT_NULL && sp != 0)
+  {
+    mach_vm_address_t address = (mach_vm_address_t)sp;
+    mach_vm_size_t size = 0;
+    natural_t depth = 0;
+    vm_region_submap_info_data_64_t info = {0};
+    mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+    if(mach_vm_region_recurse(process->task, &address, &size, &depth, (vm_region_recurse_info_t)&info, &count) == KERN_SUCCESS &&
+       address <= sp && sp < address + size)
+    {
+      result = address + size;
     }
   }
   return result;
@@ -703,6 +804,73 @@ mac_dmn_active_trap_from_process_vaddr(MAC_DMN_ActiveTrap *first, DMN_Handle pro
     {
       result = active_trap;
       break;
+    }
+  }
+  return result;
+}
+
+internal B32
+mac_dmn_process_write_with_protect(MAC_DMN_Process *process, Rng1U64 range, void *src)
+{
+  B32 result = 0;
+  if(process != 0 && process->task != MACH_PORT_NULL)
+  {
+    U64 size = dim_1u64(range);
+    if(size <= max_U32 && mach_vm_write(process->task, range.min, (vm_offset_t)src, (mach_msg_type_number_t)size) == KERN_SUCCESS)
+    {
+      result = 1;
+    }
+    else
+    {
+      result = 1;
+      for(U64 write_off = 0; write_off < size;)
+      {
+        mach_vm_address_t write_address = range.min + write_off;
+        mach_vm_address_t region_address = write_address;
+        mach_vm_size_t region_size = 0;
+        natural_t depth = 0;
+        vm_region_submap_info_data_64_t info = {0};
+        mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+        kern_return_t region_code = mach_vm_region_recurse(process->task, &region_address, &region_size, &depth, (vm_region_recurse_info_t)&info, &count);
+        if(region_code != KERN_SUCCESS || region_address > write_address || region_size == 0)
+        {
+          result = 0;
+          break;
+        }
+
+        U64 region_off = write_address - region_address;
+        if(region_off >= region_size)
+        {
+          result = 0;
+          break;
+        }
+        U64 region_write_size = Min(size - write_off, region_size - region_off);
+        region_write_size = Min(region_write_size, max_U32);
+        if(region_write_size == 0)
+        {
+          result = 0;
+          break;
+        }
+
+        vm_prot_t old_protection = info.protection;
+        vm_prot_t write_protection = old_protection|VM_PROT_WRITE|VM_PROT_COPY;
+        kern_return_t protect_code = mach_vm_protect(process->task, write_address, region_write_size, 0, write_protection);
+        if(protect_code != KERN_SUCCESS)
+        {
+          result = 0;
+          break;
+        }
+
+        mach_msg_type_number_t write_size = (mach_msg_type_number_t)region_write_size;
+        kern_return_t write_code = mach_vm_write(process->task, write_address, (vm_offset_t)((U8 *)src + write_off), write_size);
+        mach_vm_protect(process->task, write_address, region_write_size, 0, old_protection);
+        if(write_code != KERN_SUCCESS)
+        {
+          result = 0;
+          break;
+        }
+        write_off += region_write_size;
+      }
     }
   }
   return result;
@@ -780,6 +948,7 @@ mac_dmn_push_event_breakpoint(Arena *arena, DMN_EventList *events, MAC_DMN_Entit
   e->thread = mac_dmn_handle_from_entity(thread_entity);
   e->arch = thread_entity->thread.arch;
   e->instruction_pointer = instruction_pointer;
+  e->stack_pointer = mac_dmn_thread_read_sp(&thread_entity->thread);
   e->user_data = user_data;
 }
 
@@ -792,10 +961,11 @@ mac_dmn_push_event_single_step(Arena *arena, DMN_EventList *events, MAC_DMN_Enti
   e->thread = mac_dmn_handle_from_entity(thread_entity);
   e->arch = thread_entity->thread.arch;
   e->instruction_pointer = mac_dmn_thread_read_ip(&thread_entity->thread);
+  e->stack_pointer = mac_dmn_thread_read_sp(&thread_entity->thread);
 }
 
 internal void
-mac_dmn_push_event_exception(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, S32 signo)
+mac_dmn_push_event_exception(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, S32 signo)
 {
   MAC_DMN_Process *process = &process_entity->process;
   DMN_Event *e = dmn_event_list_push(arena, events);
@@ -804,9 +974,11 @@ mac_dmn_push_event_exception(Arena *arena, DMN_EventList *events, MAC_DMN_Entity
   e->arch = process->arch;
   e->signo = signo;
   e->exception_repeated = 1;
-  if(process->first_thread_entity != 0)
+  if(thread_entity != 0)
   {
-    e->thread = mac_dmn_handle_from_entity(process->first_thread_entity);
+    e->thread = mac_dmn_handle_from_entity(thread_entity);
+    e->instruction_pointer = mac_dmn_thread_read_ip(&thread_entity->thread);
+    e->stack_pointer = mac_dmn_thread_read_sp(&thread_entity->thread);
   }
 }
 
@@ -911,23 +1083,33 @@ dmn_init(void)
   Arena *arena = arena_alloc();
   mac_dmn_state = push_array(arena, MAC_DMN_State, 1);
   mac_dmn_state->arena = arena;
+  mac_dmn_state->access_mutex = mutex_alloc();
 }
 
 internal DMN_CtrlCtx *
 dmn_ctrl_begin(void)
 {
   local_persist DMN_CtrlCtx ctx = {0};
+  mac_dmn_ctrl_thread = 1;
   return &ctx;
 }
 
 internal void
 dmn_ctrl_exclusive_access_begin(void)
 {
+  MutexScope(mac_dmn_state->access_mutex)
+  {
+    mac_dmn_state->access_run_state = 1;
+  }
 }
 
 internal void
 dmn_ctrl_exclusive_access_end(void)
 {
+  MutexScope(mac_dmn_state->access_mutex)
+  {
+    mac_dmn_state->access_run_state = 0;
+  }
 }
 
 internal U32
@@ -1075,6 +1257,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
         MAC_DMN_Process *process = &entity->process;
         if(process->is_attached && mac_dmn_process_should_run(entity, ctrls))
         {
+          mac_dmn_process_suspend_frozen_threads(process, ctrls);
           errno = 0;
           if(ptrace(PT_CONTINUE, process->pid, (caddr_t)1, 0) == 0 || errno == EBUSY)
           {
@@ -1117,6 +1300,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       {
         MAC_DMN_Process *process = &process_entity->process;
         process->is_running = 0;
+        mac_dmn_process_resume_suspended_threads(process);
         mac_dmn_refresh_thread_events(arena, &result, process_entity);
         if(WIFEXITED(status))
         {
@@ -1160,12 +1344,12 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
               }
               else
               {
-                mac_dmn_push_event_exception(arena, &result, process_entity, signo);
+                mac_dmn_push_event_exception(arena, &result, process_entity, thread_entity, signo);
               }
             }
             else
             {
-              mac_dmn_push_event_exception(arena, &result, process_entity, signo);
+              mac_dmn_push_event_exception(arena, &result, process_entity, thread_entity, signo);
             }
           }
         }
@@ -1180,6 +1364,13 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       for(MAC_DMN_ActiveTrap *active_trap = first_active_trap; active_trap != 0; active_trap = active_trap->next)
       {
         mac_dmn_unset_trap(active_trap);
+      }
+      for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+      {
+        if(entity->kind == MAC_DMN_EntityKind_Process)
+        {
+          mac_dmn_process_resume_suspended_threads(&entity->process);
+        }
       }
       if(single_step_thread_entity != 0)
       {
@@ -1211,74 +1402,117 @@ dmn_halt(U64 code, U64 user_data)
 internal B32
 dmn_access_open(void)
 {
-  return 1;
+  B32 result = 0;
+  if(mac_dmn_ctrl_thread)
+  {
+    result = 1;
+  }
+  else
+  {
+    mutex_take(mac_dmn_state->access_mutex);
+    result = !mac_dmn_state->access_run_state;
+  }
+  return result;
 }
 
 internal void
 dmn_access_close(void)
 {
+  if(!mac_dmn_ctrl_thread)
+  {
+    mutex_drop(mac_dmn_state->access_mutex);
+  }
 }
 
 internal U64
 dmn_process_memory_reserve(DMN_Handle handle, U64 vaddr, U64 size)
 {
-  MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
   U64 result = 0;
-  if(process != 0 && process->task != MACH_PORT_NULL)
+  DMN_AccessScope
   {
-    mach_vm_address_t address = (mach_vm_address_t)vaddr;
-    int flags = (vaddr == 0) ? VM_FLAGS_ANYWHERE : VM_FLAGS_FIXED;
-    if(mach_vm_allocate(process->task, &address, size, flags) == KERN_SUCCESS)
+    MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
+    if(process != 0 && process->task != MACH_PORT_NULL)
     {
-      result = address;
+      mach_vm_address_t address = (mach_vm_address_t)vaddr;
+      int flags = (vaddr == 0) ? VM_FLAGS_ANYWHERE : VM_FLAGS_FIXED;
+      if(mach_vm_allocate(process->task, &address, size, flags) == KERN_SUCCESS)
+      {
+        mach_vm_protect(process->task, address, size, 0, VM_PROT_NONE);
+        result = address;
+      }
     }
   }
   return result;
 }
 
 internal void
-dmn_process_memory_commit(DMN_Handle process, U64 vaddr, U64 size)
+dmn_process_memory_commit(DMN_Handle handle, U64 vaddr, U64 size)
 {
+  DMN_AccessScope
+  {
+    MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
+    if(process != 0 && process->task != MACH_PORT_NULL)
+    {
+      mach_vm_protect(process->task, (mach_vm_address_t)vaddr, size, 0, VM_PROT_READ|VM_PROT_WRITE);
+    }
+  }
 }
 
 internal void
-dmn_process_memory_decommit(DMN_Handle process, U64 vaddr, U64 size)
+dmn_process_memory_decommit(DMN_Handle handle, U64 vaddr, U64 size)
 {
+  DMN_AccessScope
+  {
+    MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
+    if(process != 0 && process->task != MACH_PORT_NULL)
+    {
+      mach_vm_protect(process->task, (mach_vm_address_t)vaddr, size, 0, VM_PROT_NONE);
+    }
+  }
 }
 
 internal void
 dmn_process_memory_release(DMN_Handle handle, U64 vaddr, U64 size)
 {
-  MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
-  if(process != 0 && process->task != MACH_PORT_NULL)
+  DMN_AccessScope
   {
-    mach_vm_deallocate(process->task, (mach_vm_address_t)vaddr, size);
+    MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
+    if(process != 0 && process->task != MACH_PORT_NULL)
+    {
+      mach_vm_deallocate(process->task, (mach_vm_address_t)vaddr, size);
+    }
   }
 }
 
 internal void
 dmn_process_memory_protect(DMN_Handle handle, U64 vaddr, U64 size, AccessFlags flags)
 {
-  MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
-  if(process != 0 && process->task != MACH_PORT_NULL)
+  DMN_AccessScope
   {
-    mach_vm_protect(process->task, (mach_vm_address_t)vaddr, size, 0, mac_dmn_vm_prot_from_access_flags(flags));
+    MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
+    if(process != 0 && process->task != MACH_PORT_NULL)
+    {
+      mach_vm_protect(process->task, (mach_vm_address_t)vaddr, size, 0, mac_dmn_vm_prot_from_access_flags(flags));
+    }
   }
 }
 
 internal U64
 dmn_process_read(DMN_Handle handle, Rng1U64 range, void *dst)
 {
-  MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
   U64 result = 0;
-  if(process != 0 && process->task != MACH_PORT_NULL)
+  DMN_AccessScope
   {
-    mach_vm_size_t size = dim_1u64(range);
-    mach_vm_size_t bytes_read = 0;
-    kern_return_t code = mach_vm_read_overwrite(process->task, range.min, size, (mach_vm_address_t)dst, &bytes_read);
-    if(code == KERN_SUCCESS)
+    MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
+    if(process != 0 && process->task != MACH_PORT_NULL)
     {
-      result = bytes_read;
+      mach_vm_size_t size = dim_1u64(range);
+      mach_vm_size_t bytes_read = 0;
+      kern_return_t code = mach_vm_read_overwrite(process->task, range.min, size, (mach_vm_address_t)dst, &bytes_read);
+      if(code == KERN_SUCCESS)
+      {
+        result = bytes_read;
+      }
     }
   }
   return result;
@@ -1287,12 +1521,14 @@ dmn_process_read(DMN_Handle handle, Rng1U64 range, void *dst)
 internal B32
 dmn_process_write(DMN_Handle handle, Rng1U64 range, void *src)
 {
-  MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
   B32 result = 0;
-  if(process != 0 && process->task != MACH_PORT_NULL)
+  DMN_AccessScope
   {
-    mach_msg_type_number_t size = (mach_msg_type_number_t)dim_1u64(range);
-    result = (mach_vm_write(process->task, range.min, (vm_offset_t)src, size) == KERN_SUCCESS);
+    MAC_DMN_Process *process = mac_dmn_process_from_handle(handle);
+    if(process != 0 && process->task != MACH_PORT_NULL)
+    {
+      result = mac_dmn_process_write_with_protect(process, range, src);
+    }
   }
   return result;
 }
@@ -1300,11 +1536,14 @@ dmn_process_write(DMN_Handle handle, Rng1U64 range, void *src)
 internal Arch
 dmn_arch_from_thread(DMN_Handle handle)
 {
-  MAC_DMN_Thread *thread = mac_dmn_thread_from_handle(handle);
   Arch result = Arch_Null;
-  if(thread != 0)
+  DMN_AccessScope
   {
-    result = thread->arch;
+    MAC_DMN_Thread *thread = mac_dmn_thread_from_handle(handle);
+    if(thread != 0)
+    {
+      result = thread->arch;
+    }
   }
   return result;
 }
@@ -1312,7 +1551,13 @@ dmn_arch_from_thread(DMN_Handle handle)
 internal U64
 dmn_stack_base_vaddr_from_thread(DMN_Handle handle)
 {
-  return 0;
+  U64 result = 0;
+  DMN_AccessScope
+  {
+    MAC_DMN_Thread *thread = mac_dmn_thread_from_handle(handle);
+    result = mac_dmn_stack_base_vaddr_from_thread(thread);
+  }
+  return result;
 }
 
 internal U64
@@ -1324,25 +1569,28 @@ dmn_tls_root_vaddr_from_thread(DMN_Handle handle)
 internal B32
 dmn_thread_read_reg_block(DMN_Handle handle, void *reg_block)
 {
-  MAC_DMN_Thread *thread = mac_dmn_thread_from_handle(handle);
   B32 result = 0;
-  if(thread != 0)
+  DMN_AccessScope
   {
-    switch(thread->arch)
+    MAC_DMN_Thread *thread = mac_dmn_thread_from_handle(handle);
+    if(thread != 0)
     {
-      default:{}break;
-#if ARCH_X64
-      case Arch_x64:
+      switch(thread->arch)
       {
-        x86_thread_state64_t state = {0};
-        mach_msg_type_number_t count = x86_THREAD_STATE64_COUNT;
-        if(thread_get_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+        default:{}break;
+#if ARCH_X64
+        case Arch_x64:
         {
-          mac_dmn_x64_reg_block_from_thread_state((X64_RegBlock *)reg_block, &state);
-          result = 1;
-        }
-      }break;
+          x86_thread_state64_t state = {0};
+          mach_msg_type_number_t count = x86_THREAD_STATE64_COUNT;
+          if(thread_get_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+          {
+            mac_dmn_x64_reg_block_from_thread_state((X64_RegBlock *)reg_block, &state);
+            result = 1;
+          }
+        }break;
 #endif
+      }
     }
   }
   return result;
@@ -1351,21 +1599,24 @@ dmn_thread_read_reg_block(DMN_Handle handle, void *reg_block)
 internal B32
 dmn_thread_write_reg_block(DMN_Handle handle, void *reg_block)
 {
-  MAC_DMN_Thread *thread = mac_dmn_thread_from_handle(handle);
   B32 result = 0;
-  if(thread != 0)
+  DMN_AccessScope
   {
-    switch(thread->arch)
+    MAC_DMN_Thread *thread = mac_dmn_thread_from_handle(handle);
+    if(thread != 0)
     {
-      default:{}break;
-#if ARCH_X64
-      case Arch_x64:
+      switch(thread->arch)
       {
-        x86_thread_state64_t state = {0};
-        mac_dmn_x64_thread_state_from_reg_block(&state, (X64_RegBlock *)reg_block);
-        result = (thread_set_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, x86_THREAD_STATE64_COUNT) == KERN_SUCCESS);
-      }break;
+        default:{}break;
+#if ARCH_X64
+        case Arch_x64:
+        {
+          x86_thread_state64_t state = {0};
+          mac_dmn_x64_thread_state_from_reg_block(&state, (X64_RegBlock *)reg_block);
+          result = (thread_set_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, x86_THREAD_STATE64_COUNT) == KERN_SUCCESS);
+        }break;
 #endif
+      }
     }
   }
   return result;

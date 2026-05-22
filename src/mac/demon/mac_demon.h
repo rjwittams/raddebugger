@@ -60,6 +60,7 @@ struct MAC_DMN_Thread
   mach_port_t thread;
   U64 thread_id;
   Arch arch;
+  B32 is_suspended_for_run;
 };
 
 typedef struct MAC_DMN_Module MAC_DMN_Module;
@@ -92,6 +93,8 @@ struct MAC_DMN_State
   MAC_DMN_Entity *free_entity;
   MAC_DMN_Entity *first_process_entity;
   MAC_DMN_Entity *last_process_entity;
+  Mutex access_mutex;
+  B32 access_run_state;
   volatile B32 halt_requested;
   U64 halt_code;
   U64 halt_user_data;
@@ -115,6 +118,7 @@ struct MAC_DMN_ActiveTrap
 };
 
 global MAC_DMN_State *mac_dmn_state = 0;
+thread_static B32 mac_dmn_ctrl_thread = 0;
 
 internal DMN_Handle mac_dmn_handle_from_entity(MAC_DMN_Entity *entity);
 internal MAC_DMN_Entity *mac_dmn_entity_from_handle(DMN_Handle handle);
@@ -142,13 +146,19 @@ internal void mac_dmn_refresh_thread_events(Arena *arena, DMN_EventList *events,
 internal String8 mac_dmn_executable_path_from_pid(Arena *arena, pid_t pid);
 internal U64 mac_dmn_main_module_base_vaddr_from_process(MAC_DMN_Process *process, MachO_UUID expected_uuid);
 internal void mac_dmn_refresh_initial_module(MAC_DMN_Process *process);
+internal B32 mac_dmn_thread_should_run(MAC_DMN_Entity *thread_entity, DMN_RunCtrls *ctrls);
 internal B32 mac_dmn_process_should_run(MAC_DMN_Entity *process_entity, DMN_RunCtrls *ctrls);
+internal void mac_dmn_process_suspend_frozen_threads(MAC_DMN_Process *process, DMN_RunCtrls *ctrls);
+internal void mac_dmn_process_resume_suspended_threads(MAC_DMN_Process *process);
 internal MAC_DMN_ActiveTrap *mac_dmn_set_trap(Arena *arena, DMN_Trap *trap);
 internal void mac_dmn_unset_trap(MAC_DMN_ActiveTrap *active_trap);
 internal U64 mac_dmn_thread_read_ip(MAC_DMN_Thread *thread);
+internal U64 mac_dmn_thread_read_sp(MAC_DMN_Thread *thread);
+internal U64 mac_dmn_stack_base_vaddr_from_thread(MAC_DMN_Thread *thread);
 internal B32 mac_dmn_thread_write_ip(MAC_DMN_Thread *thread, U64 ip);
 internal B32 mac_dmn_set_single_step_flag(MAC_DMN_Thread *thread, B32 is_on);
 internal MAC_DMN_ActiveTrap *mac_dmn_active_trap_from_process_vaddr(MAC_DMN_ActiveTrap *first, DMN_Handle process, U64 vaddr);
+internal B32 mac_dmn_process_write_with_protect(MAC_DMN_Process *process, Rng1U64 range, void *src);
 internal void mac_dmn_push_event_create_process(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity);
 internal void mac_dmn_push_event_create_thread(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity);
 internal void mac_dmn_push_event_exit_thread(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity);
@@ -157,7 +167,7 @@ internal void mac_dmn_push_event_handshake_complete(Arena *arena, DMN_EventList 
 internal void mac_dmn_push_event_exit_process(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, U32 exit_code);
 internal void mac_dmn_push_event_breakpoint(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, U64 instruction_pointer, U64 user_data);
 internal void mac_dmn_push_event_single_step(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity);
-internal void mac_dmn_push_event_exception(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, S32 signo);
+internal void mac_dmn_push_event_exception(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, S32 signo);
 internal void mac_dmn_push_event_halt(Arena *arena, DMN_EventList *events);
 internal void mac_dmn_push_event_not_attached(Arena *arena, DMN_EventList *events);
 #if ARCH_X64
