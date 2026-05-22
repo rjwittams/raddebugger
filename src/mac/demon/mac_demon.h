@@ -12,6 +12,7 @@
 #define FileInfo MACOS_SDK_FileInfo
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <mach/machine/thread_status.h>
 #undef FileInfo
 #pragma pop_macro("FileInfo")
 #pragma pop_macro("global")
@@ -266,6 +267,10 @@ internal void mac_dmn_push_event_not_attached(Arena *arena, DMN_EventList *event
 #if ARCH_X64
 internal void mac_dmn_x64_reg_block_from_thread_state(X64_RegBlock *dst, x86_thread_state64_t *src);
 internal void mac_dmn_x64_thread_state_from_reg_block(x86_thread_state64_t *dst, X64_RegBlock *src);
+#endif
+#if ARCH_ARM64
+internal void mac_dmn_arm64_reg_block_from_thread_state(ARM64_RegBlock *dst, arm_thread_state64_t *src);
+internal void mac_dmn_arm64_thread_state_from_reg_block(arm_thread_state64_t *dst, ARM64_RegBlock *src);
 #endif
 
 #endif // MAC_DEMON_H
