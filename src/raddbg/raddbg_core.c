@@ -12892,6 +12892,37 @@ rd_frame(void)
               String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
               str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
             }
+            else if(str8_match(cmd_name, str8_lit("dump_output"), 0))
+            {
+              handled = 1;
+              U64 max_bytes = KB(16);
+              if(msg_parts.first != 0 && msg_parts.first->next != 0)
+              {
+                U64 parsed_max_bytes = 0;
+                if(try_u64_from_str8_c_rules(msg_parts.first->next->string, &parsed_max_bytes))
+                {
+                  max_bytes = parsed_max_bytes;
+                }
+              }
+              Access *access = access_open();
+              C_Key key = d_user_state->output_log_key;
+              U128 hash = c_hash_from_key(key, 0);
+              String8 data = c_data_from_hash(access, hash);
+              String8 tail = data;
+              if(tail.size > max_bytes)
+              {
+                tail = str8_skip(tail, tail.size - max_bytes);
+              }
+              String8List lines = {0};
+              str8_list_pushf(scratch.arena, &lines, "bytes:%I64u shown:%I64u", data.size, tail.size);
+              if(tail.size != 0)
+              {
+                str8_list_pushf(scratch.arena, &lines, "\n%S", tail);
+              }
+              String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+              str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+              access_close(access);
+            }
             else if(str8_match(cmd_name, str8_lit("select_process"), 0))
             {
               handled = 1;
