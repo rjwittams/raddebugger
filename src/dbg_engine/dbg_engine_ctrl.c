@@ -824,10 +824,11 @@ d_module_from_process_vaddr(D_Entity *process, U64 vaddr)
       child != &d_entity_nil;
       child = child->next)
   {
-    if(child->kind == D_EntityKind_Module && contains_1u64(child->vaddr_range, vaddr))
+    if(child->kind == D_EntityKind_Module &&
+       contains_1u64(child->vaddr_range, vaddr) &&
+       (result == &d_entity_nil || result->vaddr_range.min < child->vaddr_range.min))
     {
       result = child;
-      break;
     }
   }
   return result;
@@ -4598,12 +4599,12 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
           eh_ptr_ctx.text_vaddr = text_vaddr;
           eh_ptr_ctx.data_vaddr = eh_frame_vrange.min;
           eh_ptr_ctx.ptr_align = byte_size_from_arch(arch);
+          dwarf_unwind_data = eh_frame_data;
+          is_unwind_eh = 1;
           String8 eh_frame_hdr_data = d_eh_frame_hdr_from_eh_frame(arena, eh_frame_data, eh_frame_vrange.min, arch, &eh_ptr_ctx);
           if(eh_frame_hdr_data.size != 0)
           {
             eh_frame_hdr = eh_parse_frame_hdr(eh_frame_hdr_data, byte_size_from_arch(arch), &eh_ptr_ctx);
-            dwarf_unwind_data = eh_frame_data;
-            is_unwind_eh = 1;
           }
         }
 
