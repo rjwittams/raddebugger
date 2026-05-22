@@ -382,7 +382,7 @@ d_serialized_string_from_msg_list(Arena *arena, D_MsgList *msgs)
     for(D_MsgNode *msg_n = msgs->first; msg_n != 0; msg_n = msg_n->next)
     {
       D_Msg *msg = &msg_n->v;
-      
+
       // rjf: write flat parts
       str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->kind);
       str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->run_flags);
@@ -406,7 +406,7 @@ d_serialized_string_from_msg_list(Arena *arena, D_MsgList *msgs)
         str8_serial_push_struct(scratch.arena, &msgs_srlzed, &n->string.size);
         str8_serial_push_data(scratch.arena, &msgs_srlzed, n->string.str, n->string.size);
       }
-      
+
       // rjf: write command line string list
       str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->cmd_line_string_list.node_count);
       for(String8Node *n = msg->cmd_line_string_list.first; n != 0; n = n->next)
@@ -6075,7 +6075,7 @@ d_ctrl_thread__kill(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
               done = 1;
             }break;
             case DMN_EventKind_Error:{done = 1; cause = D_EventCause_Error;}break;
-            case DMN_EventKind_Halt: {done = 1; cause = D_EventCause_InterruptedByHalt;}break;
+            case DMN_EventKind_Halt: {}break;
           }
         }
       }
@@ -6542,6 +6542,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
     B32 spoof_mode = 0;
     D_Spoof spoof = {0};
     DMN_TrapChunkList entry_traps = {0};
+    B32 ignore_initial_halt = !!(msg->run_flags & D_RunFlag_IgnoreInitialHalt);
     for(U64 run_loop_idx = 0;; run_loop_idx += 1)
     {
       //////////////////////////
@@ -6591,6 +6592,21 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       DMN_Event *event = d_ctrl_thread__next_dmn_event(scratch.arena, ctrl_ctx, msg, &run_ctrls, run_spoof);
       log_infof("}\n\n");
       
+      if(ignore_initial_halt)
+      {
+        B32 should_ignore_event = (event->kind == DMN_EventKind_Halt);
+#if OS_MAC
+        should_ignore_event = (should_ignore_event ||
+                               (event->kind == DMN_EventKind_Exception &&
+                                event->signo == SIGSTOP));
+#endif
+        ignore_initial_halt = 0;
+        if(should_ignore_event)
+        {
+          continue;
+        }
+      }
+
       //////////////////////////
       //- rjf: determine event handling
       //
