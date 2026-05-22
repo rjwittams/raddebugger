@@ -110,9 +110,9 @@
 ////////////////////////////////
 //~ rjf: Arch Cracking
 
-#if defined(ARCH_X64)
+#if defined(ARCH_X64) || defined(ARCH_ARM64)
 # define ARCH_64BIT 1
-#elif defined(ARCH_X86)
+#elif defined(ARCH_X86) || defined(ARCH_ARM32)
 # define ARCH_32BIT 1
 #endif
 
@@ -240,8 +240,8 @@
 #if ARCH_X86
 # error You tried to build in x86 (32 bit) mode, but currently, only building in x64 (64 bit) mode is supported.
 #endif
-#if !ARCH_X64
-# error You tried to build with an unsupported architecture. Currently, only building in x64 mode is supported.
+#if !(ARCH_X64 || ARCH_ARM64)
+# error You tried to build with an unsupported architecture. Currently, only building in x64 or arm64 mode is supported.
 #endif
 
 #endif // BASE_CONTEXT_CRACKING_H
