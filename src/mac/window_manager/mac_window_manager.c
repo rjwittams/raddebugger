@@ -52,6 +52,58 @@ mac_wm_window_from_ns_window(NSWindow *ns_window)
   return result;
 }
 
+internal MAC_WM_ChromeMode
+mac_wm_chrome_mode_from_environment(void)
+{
+  MAC_WM_ChromeMode result = MAC_WM_ChromeMode_Integrated;
+  char *env = getenv("RADDBG_MAC_CHROME");
+  if(env != 0)
+  {
+    String8 string = str8_cstring(env);
+    if(str8_match(string, str8_lit("native"), 0))
+    {
+      result = MAC_WM_ChromeMode_Native;
+    }
+    else if(str8_match(string, str8_lit("custom"), 0))
+    {
+      result = MAC_WM_ChromeMode_Custom;
+    }
+    else if(str8_match(string, str8_lit("integrated"), 0))
+    {
+      result = MAC_WM_ChromeMode_Integrated;
+    }
+  }
+  return result;
+}
+
+internal B32
+mac_wm_chrome_mode_has_native_controls(MAC_WM_ChromeMode mode)
+{
+  B32 result = (mode == MAC_WM_ChromeMode_Integrated ||
+                mode == MAC_WM_ChromeMode_Native);
+  return result;
+}
+
+internal B32
+mac_wm_window_pos_is_title_bar_client_area(MAC_WM_Window *window, Vec2F32 pos)
+{
+  B32 result = 0;
+  if(window != 0)
+  {
+    for(U64 idx = 0; idx < window->title_bar_client_area_count; idx += 1)
+    {
+      Rng2F32 rect = window->title_bar_client_areas[idx];
+      if(rect.x0 <= pos.x && pos.x < rect.x1 &&
+         rect.y0 <= pos.y && pos.y < rect.y1)
+      {
+        result = 1;
+        break;
+      }
+    }
+  }
+  return result;
+}
+
 internal Rng2F32
 mac_wm_rect_from_ns_rect(NSRect rect)
 {
@@ -293,6 +345,7 @@ wm_init(void)
   mac_wm_state->gfx_info.double_click_time = 0.5f;
   mac_wm_state->gfx_info.caret_blink_time = 0.5f;
   mac_wm_state->gfx_info.default_refresh_rate = 60.f;
+  mac_wm_state->chrome_mode = mac_wm_chrome_mode_from_environment();
 
   [NSApplication sharedApplication];
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
@@ -345,19 +398,38 @@ wm_window_open(Rng2F32 rect, WM_WindowFlags flags, String8 title)
   MAC_WM_Window *window = mac_wm_window_alloc();
   Vec2F32 dim = dim_2f32(rect);
   NSRect ns_rect = NSMakeRect(rect.x0, rect.y0, dim.x, dim.y);
+  B32 custom_border = !!(flags & WM_WindowFlag_CustomBorder);
+  MAC_WM_ChromeMode chrome_mode = mac_wm_state->chrome_mode;
   NSUInteger style_mask = (NSWindowStyleMaskTitled |
                            NSWindowStyleMaskClosable |
                            NSWindowStyleMaskMiniaturizable |
                            NSWindowStyleMaskResizable);
+  if(custom_border && chrome_mode != MAC_WM_ChromeMode_Native)
+  {
+    style_mask |= NSWindowStyleMaskFullSizeContentView;
+  }
   window->ns_window = [[NSWindow alloc] initWithContentRect:ns_rect
                                                    styleMask:style_mask
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
+  window->chrome_mode = chrome_mode;
+  window->custom_border = custom_border;
   window->delegate = [MAC_WM_WindowDelegate new];
   window->delegate->window = window;
   [window->ns_window setDelegate:window->delegate];
   [window->ns_window setReleasedWhenClosed:NO];
   [window->ns_window setAcceptsMouseMovedEvents:YES];
+  if(custom_border && chrome_mode != MAC_WM_ChromeMode_Native)
+  {
+    [window->ns_window setTitleVisibility:NSWindowTitleHidden];
+    [window->ns_window setTitlebarAppearsTransparent:YES];
+  }
+  if(custom_border && chrome_mode == MAC_WM_ChromeMode_Custom)
+  {
+    [[window->ns_window standardWindowButton:NSWindowCloseButton] setHidden:YES];
+    [[window->ns_window standardWindowButton:NSWindowMiniaturizeButton] setHidden:YES];
+    [[window->ns_window standardWindowButton:NSWindowZoomButton] setHidden:YES];
+  }
   wm_window_set_title(mac_wm_handle_from_window(window), title);
   return mac_wm_handle_from_window(window);
 }
@@ -500,21 +572,77 @@ wm_window_set_monitor(WM_Window handle, WM_Monitor monitor)
 internal void
 wm_window_clear_custom_border_data(WM_Window handle)
 {
+  MAC_WM_Window *window = mac_wm_window_from_handle(handle);
+  if(window != 0)
+  {
+    window->custom_border_title_thickness = 0;
+    window->custom_border_edge_thickness = 0;
+    window->title_bar_client_area_count = 0;
+  }
 }
 
 internal void
 wm_window_push_custom_title_bar(WM_Window handle, F32 thickness)
 {
+  MAC_WM_Window *window = mac_wm_window_from_handle(handle);
+  if(window != 0)
+  {
+    window->custom_border_title_thickness = thickness;
+  }
 }
 
 internal void
 wm_window_push_custom_edges(WM_Window handle, F32 thickness)
 {
+  MAC_WM_Window *window = mac_wm_window_from_handle(handle);
+  if(window != 0)
+  {
+    window->custom_border_edge_thickness = thickness;
+  }
 }
 
 internal void
 wm_window_push_custom_title_bar_client_area(WM_Window handle, Rng2F32 rect)
 {
+  MAC_WM_Window *window = mac_wm_window_from_handle(handle);
+  if(window != 0 && window->title_bar_client_area_count < MAC_WM_TITLE_BAR_CLIENT_AREA_CAP)
+  {
+    window->title_bar_client_areas[window->title_bar_client_area_count] = rect;
+    window->title_bar_client_area_count += 1;
+  }
+}
+
+internal B32
+wm_window_should_draw_custom_title_bar_controls(WM_Window handle)
+{
+  MAC_WM_Window *window = mac_wm_window_from_handle(handle);
+  B32 result = 1;
+  if(window != 0 && window->custom_border && mac_wm_chrome_mode_has_native_controls(window->chrome_mode))
+  {
+    result = 0;
+  }
+  return result;
+}
+
+internal F32
+wm_window_native_title_bar_left_padding(WM_Window handle)
+{
+  MAC_WM_Window *window = mac_wm_window_from_handle(handle);
+  F32 result = 0;
+  if(window != 0 &&
+     window->custom_border &&
+     window->chrome_mode == MAC_WM_ChromeMode_Integrated &&
+     !wm_window_is_fullscreen(handle))
+  {
+    NSButton *close_button = [window->ns_window standardWindowButton:NSWindowCloseButton];
+    NSButton *zoom_button = [window->ns_window standardWindowButton:NSWindowZoomButton];
+    if(close_button != 0 && zoom_button != 0)
+    {
+      result = (F32)Max(NSMaxX([close_button frame]), NSMaxX([zoom_button frame])) + 16.f;
+    }
+    result = Max(result, 88.f);
+  }
+  return result;
 }
 
 internal Rng2F32
@@ -666,6 +794,7 @@ wm_get_events(Arena *arena, B32 wait)
     }
     MAC_WM_Window *window = mac_wm_window_from_ns_window([event window]);
     NSEventType type = [event type];
+    B32 send_to_nsapp = 1;
     switch(type)
     {
       default:{}break;
@@ -741,11 +870,27 @@ wm_get_events(Arena *arena, B32 wait)
         {
           key = WM_Key_MiddleMouseButton;
         }
-        WM_Event *wm_event = mac_wm_push_event(arena, &result, is_release ? WM_EventKind_Release : WM_EventKind_Press, window);
-        wm_event->modifiers = mac_wm_modifiers_from_ns_flags([event modifierFlags]);
-        wm_event->key = key;
-        wm_event->pos = mac_wm_client_pos_from_ns_point(window, [event locationInWindow]);
-        mac_wm_state->key_is_down[key] = !is_release;
+        Vec2F32 pos = mac_wm_client_pos_from_ns_point(window, [event locationInWindow]);
+        B32 handled_by_chrome = 0;
+        if(window != 0 &&
+           window->custom_border &&
+           window->chrome_mode != MAC_WM_ChromeMode_Native &&
+           type == NSEventTypeLeftMouseDown &&
+           pos.y <= window->custom_border_title_thickness &&
+           !mac_wm_window_pos_is_title_bar_client_area(window, pos))
+        {
+          [window->ns_window performWindowDragWithEvent:event];
+          handled_by_chrome = 1;
+          send_to_nsapp = 0;
+        }
+        if(!handled_by_chrome)
+        {
+          WM_Event *wm_event = mac_wm_push_event(arena, &result, is_release ? WM_EventKind_Release : WM_EventKind_Press, window);
+          wm_event->modifiers = mac_wm_modifiers_from_ns_flags([event modifierFlags]);
+          wm_event->key = key;
+          wm_event->pos = pos;
+          mac_wm_state->key_is_down[key] = !is_release;
+        }
       }break;
       case NSEventTypeMouseMoved:
       case NSEventTypeLeftMouseDragged:
@@ -764,7 +909,10 @@ wm_get_events(Arena *arena, B32 wait)
         wm_event->delta = v2f32(-(F32)[event scrollingDeltaX], -(F32)[event scrollingDeltaY]);
       }break;
     }
-    [NSApp sendEvent:event];
+    if(send_to_nsapp)
+    {
+      [NSApp sendEvent:event];
+    }
     limit = [NSDate distantPast];
   }
   for(MAC_WM_Window *window = mac_wm_state->first_window; window != 0; window = window->next)
