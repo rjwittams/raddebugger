@@ -46,7 +46,7 @@ link_render="-lGL -lEGL"
 link_font_provider="-lfreetype"
 
 if [ "$host_os" = "Darwin" ]; then
-  link_os_gfx="-framework Cocoa"
+  link_os_gfx="-framework Cocoa -framework Security"
   link_render="-framework Metal -framework QuartzCore"
   link_font_provider="-framework CoreText -framework CoreGraphics -framework CoreFoundation"
 fi

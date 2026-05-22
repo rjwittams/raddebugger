@@ -297,6 +297,33 @@ mac_dmn_launch_traced_process(ProcessLaunchParams *params)
   return pid;
 }
 
+internal OSStatus
+mac_dmn_taskport_authorization_status(void)
+{
+  OSStatus result = errAuthorizationInternal;
+  AuthorizationRef authorization = 0;
+  OSStatus create_status = AuthorizationCreate(0, kAuthorizationEmptyEnvironment,
+                                               kAuthorizationFlagDefaults,
+                                               &authorization);
+  if(create_status == errAuthorizationSuccess)
+  {
+    AuthorizationItem item = { "system.privilege.taskport", 0, 0, 0 };
+    AuthorizationRights rights = { 1, &item };
+    AuthorizationFlags flags = (kAuthorizationFlagDefaults |
+                                kAuthorizationFlagExtendRights |
+                                kAuthorizationFlagPreAuthorize);
+    result = AuthorizationCopyRights(authorization, &rights,
+                                     kAuthorizationEmptyEnvironment,
+                                     flags, 0);
+    AuthorizationFree(authorization, kAuthorizationFlagDefaults);
+  }
+  else
+  {
+    result = create_status;
+  }
+  return result;
+}
+
 internal Arch
 mac_dmn_host_arch(void)
 {
@@ -1534,8 +1561,15 @@ dmn_ctrl_exclusive_access_end(void)
 internal U32
 dmn_ctrl_launch(DMN_CtrlCtx *ctx, ProcessLaunchParams *params)
 {
-  pid_t pid = mac_dmn_launch_traced_process(params);
   U32 result = 0;
+  OSStatus auth_status = mac_dmn_taskport_authorization_status();
+  if(auth_status != errAuthorizationSuccess)
+  {
+    String8 exe = params->cmd_line.first ? params->cmd_line.first->string : str8_zero();
+    log_user_errorf("Could not launch `%S`: taskport authorization failed with OSStatus %d. On macOS, approve local debugging from the logged-in GUI session before launching targets.", exe, auth_status);
+    return result;
+  }
+  pid_t pid = mac_dmn_launch_traced_process(params);
   if(pid != 0)
   {
     mach_port_t task = MACH_PORT_NULL;
