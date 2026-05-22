@@ -142,7 +142,7 @@ arch_from_elf_machine(ELF_MachineKind e_machine)
   Arch arch = Arch_Null;
   switch (e_machine) {
   case ELF_MachineKind_None:    arch = Arch_Null;  break;
-  case ELF_MachineKind_AARCH64: arch = Arch_arm32; break;
+  case ELF_MachineKind_AARCH64: arch = Arch_arm64; break;
   case ELF_MachineKind_ARM:     arch = Arch_arm32; break;
   case ELF_MachineKind_386:     arch = Arch_x86;   break;
   case ELF_MachineKind_X86_64:  arch = Arch_x64;   break;
@@ -290,4 +290,3 @@ elf_read_symbol(MachineOp_MemRead *mem_read, void *mem_read_ud, U64 addr, ELF_Cl
   }
   return result;
 }
-
