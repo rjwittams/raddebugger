@@ -23,6 +23,12 @@
 #define MACHO_UNWIND_X64_MODE_STACK_IMMD 0x02000000
 #define MACHO_UNWIND_X64_MODE_STACK_IND 0x03000000
 #define MACHO_UNWIND_X64_MODE_DWARF 0x04000000
+#define MACHO_UNWIND_X64_RBP_FRAME_REGISTERS 0x00007fff
+#define MACHO_UNWIND_X64_RBP_FRAME_OFFSET 0x00ff0000
+#define MACHO_UNWIND_X64_FRAMELESS_STACK_SIZE 0x00ff0000
+#define MACHO_UNWIND_X64_FRAMELESS_STACK_ADJUST 0x0000e000
+#define MACHO_UNWIND_X64_FRAMELESS_STACK_REG_COUNT 0x00001c00
+#define MACHO_UNWIND_X64_FRAMELESS_STACK_REG_PERMUTATION 0x000003ff
 #define MACHO_UNWIND_X64_DWARF_SECTION_OFFSET 0x00ffffff
 
 typedef struct MachO_UUID MachO_UUID;
@@ -30,6 +36,18 @@ struct MachO_UUID
 {
   U8 v[16];
 };
+
+typedef enum MachO_UnwindX64Reg
+{
+  MachO_UnwindX64Reg_Null,
+  MachO_UnwindX64Reg_RBX,
+  MachO_UnwindX64Reg_R12,
+  MachO_UnwindX64Reg_R13,
+  MachO_UnwindX64Reg_R14,
+  MachO_UnwindX64Reg_R15,
+  MachO_UnwindX64Reg_RBP,
+}
+MachO_UnwindX64Reg;
 
 typedef struct MachO_Header32 MachO_Header32;
 struct MachO_Header32
@@ -199,5 +217,6 @@ internal String8 macho_dsym_path_from_executable_path(Arena *arena, String8 exec
 internal U64 macho_base_vaddr_from_bin(String8 data, MachO_Bin *bin);
 internal U64 macho_image_size_from_bin(String8 data, MachO_Bin *bin);
 internal B32 macho_unwind_info_lookup(String8 data, U64 voff, MachO_UnwindInfoLookupResult *result_out);
+internal B32 macho_unwind_x64_saved_regs_from_permutation(U32 reg_count, U32 permutation, U32 *regs_out);
 
 #endif // MACHO_H

@@ -346,3 +346,83 @@ macho_unwind_info_lookup(String8 data, U64 voff, MachO_UnwindInfoLookupResult *r
 
   return result;
 }
+
+internal B32
+macho_unwind_x64_saved_regs_from_permutation(U32 reg_count, U32 permutation, U32 *regs_out)
+{
+  B32 result = 0;
+  if(regs_out != 0 && reg_count <= 6)
+  {
+    U32 permuted[6] = {0};
+    switch(reg_count)
+    {
+      case 6:
+      {
+        permuted[0] = permutation / 120; permutation -= permuted[0]*120;
+        permuted[1] = permutation / 24;  permutation -= permuted[1]*24;
+        permuted[2] = permutation / 6;   permutation -= permuted[2]*6;
+        permuted[3] = permutation / 2;   permutation -= permuted[3]*2;
+        permuted[4] = permutation;
+        permuted[5] = 0;
+      }break;
+      case 5:
+      {
+        permuted[0] = permutation / 120; permutation -= permuted[0]*120;
+        permuted[1] = permutation / 24;  permutation -= permuted[1]*24;
+        permuted[2] = permutation / 6;   permutation -= permuted[2]*6;
+        permuted[3] = permutation / 2;   permutation -= permuted[3]*2;
+        permuted[4] = permutation;
+      }break;
+      case 4:
+      {
+        permuted[0] = permutation / 60; permutation -= permuted[0]*60;
+        permuted[1] = permutation / 12; permutation -= permuted[1]*12;
+        permuted[2] = permutation / 3;  permutation -= permuted[2]*3;
+        permuted[3] = permutation;
+      }break;
+      case 3:
+      {
+        permuted[0] = permutation / 20; permutation -= permuted[0]*20;
+        permuted[1] = permutation / 4;  permutation -= permuted[1]*4;
+        permuted[2] = permutation;
+      }break;
+      case 2:
+      {
+        permuted[0] = permutation / 5; permutation -= permuted[0]*5;
+        permuted[1] = permutation;
+      }break;
+      case 1:
+      {
+        permuted[0] = permutation;
+      }break;
+    }
+
+    U32 used[7] = {0};
+    result = 1;
+    for(U32 idx = 0; idx < reg_count; idx += 1)
+    {
+      U32 renum = 0;
+      B32 found = 0;
+      for(U32 reg = 1; reg < 7; reg += 1)
+      {
+        if(!used[reg])
+        {
+          if(renum == permuted[idx])
+          {
+            regs_out[idx] = reg;
+            used[reg] = 1;
+            found = 1;
+            break;
+          }
+          renum += 1;
+        }
+      }
+      if(!found)
+      {
+        result = 0;
+        break;
+      }
+    }
+  }
+  return result;
+}
