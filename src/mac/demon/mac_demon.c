@@ -70,6 +70,7 @@ mac_dmn_process_entity_release(MAC_DMN_Entity *entity)
     }
 
     MAC_DMN_Process *process = &entity->process;
+    mac_dmn_process_end_mach_exceptions(process);
     mac_dmn_process_resume_suspended_threads(process);
     for(MAC_DMN_Entity *thread_entity = process->first_thread_entity, *next = 0; thread_entity != 0; thread_entity = next)
     {
@@ -102,6 +103,21 @@ mac_dmn_process_from_handle(DMN_Handle handle)
   if(entity != 0 && entity->kind == MAC_DMN_EntityKind_Process)
   {
     result = &entity->process;
+  }
+  return result;
+}
+
+internal MAC_DMN_Entity *
+mac_dmn_process_entity_from_exception_port(mach_port_t exception_port)
+{
+  MAC_DMN_Entity *result = 0;
+  for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+  {
+    if(entity->kind == MAC_DMN_EntityKind_Process && entity->process.exception_port == exception_port)
+    {
+      result = entity;
+      break;
+    }
   }
   return result;
 }
@@ -351,6 +367,240 @@ mac_dmn_thread_id_from_port(mach_port_t thread)
   if(thread_info(thread, THREAD_IDENTIFIER_INFO, (thread_info_t)&info, &count) == KERN_SUCCESS)
   {
     result = info.thread_id;
+  }
+  return result;
+}
+
+internal kern_return_t
+mac_dmn_exception_port_info_save(MAC_DMN_ExceptionPortInfo *info, task_t task)
+{
+  MemoryZeroStruct(info);
+  info->mask = EXC_MASK_ALL;
+  info->count = ArrayCount(info->ports);
+  kern_return_t result = task_get_exception_ports(task, info->mask, info->masks, &info->count,
+                                                  info->ports, info->behaviors, info->flavors);
+  if(result != KERN_SUCCESS)
+  {
+    MemoryZeroStruct(info);
+  }
+  return result;
+}
+
+internal kern_return_t
+mac_dmn_exception_port_info_restore(MAC_DMN_ExceptionPortInfo *info, task_t task)
+{
+  kern_return_t result = KERN_SUCCESS;
+  for(mach_msg_type_number_t idx = 0; idx < info->count; idx += 1)
+  {
+    result = task_set_exception_ports(task, info->masks[idx], info->ports[idx],
+                                      info->behaviors[idx], info->flavors[idx]);
+    if(result != KERN_SUCCESS)
+    {
+      break;
+    }
+  }
+  MemoryZeroStruct(info);
+  return result;
+}
+
+internal B32
+mac_dmn_process_begin_mach_exceptions(MAC_DMN_Process *process)
+{
+  B32 result = 0;
+  if(process != 0 && process->task != MACH_PORT_NULL)
+  {
+    mach_port_t self = mach_task_self();
+    if(mac_dmn_state->exception_port_set == MACH_PORT_NULL)
+    {
+      mach_port_allocate(self, MACH_PORT_RIGHT_PORT_SET, &mac_dmn_state->exception_port_set);
+    }
+    if(mac_dmn_state->exception_port_set != MACH_PORT_NULL &&
+       mach_port_allocate(self, MACH_PORT_RIGHT_RECEIVE, &process->exception_port) == KERN_SUCCESS &&
+       mach_port_insert_right(self, process->exception_port, process->exception_port, MACH_MSG_TYPE_MAKE_SEND) == KERN_SUCCESS &&
+       mach_port_move_member(self, process->exception_port, mac_dmn_state->exception_port_set) == KERN_SUCCESS &&
+       mac_dmn_exception_port_info_save(&process->exception_port_info, process->task) == KERN_SUCCESS &&
+       process->exception_port_info.mask != 0 &&
+       task_set_exception_ports(process->task, process->exception_port_info.mask, process->exception_port,
+                                EXCEPTION_DEFAULT|MACH_EXCEPTION_CODES, THREAD_STATE_NONE) == KERN_SUCCESS)
+    {
+      process->uses_mach_exceptions = 1;
+      result = 1;
+    }
+    else
+    {
+      mac_dmn_process_end_mach_exceptions(process);
+    }
+  }
+  return result;
+}
+
+internal void
+mac_dmn_process_end_mach_exceptions(MAC_DMN_Process *process)
+{
+  if(process != 0)
+  {
+    if(process->pending_exception.is_valid)
+    {
+      mac_dmn_process_reply_pending_exception(process, 0);
+    }
+    if(process->uses_mach_exceptions)
+    {
+      mac_dmn_exception_port_info_restore(&process->exception_port_info, process->task);
+    }
+    if(process->exception_port != MACH_PORT_NULL)
+    {
+      mach_port_t self = mach_task_self();
+      mach_port_move_member(self, process->exception_port, MACH_PORT_NULL);
+      mach_port_deallocate(self, process->exception_port);
+      process->exception_port = MACH_PORT_NULL;
+    }
+    process->uses_mach_exceptions = 0;
+  }
+}
+
+internal S32
+mac_dmn_soft_signal_from_exception_message(MAC_DMN_ExceptionMessage *message)
+{
+  S32 result = 0;
+  if(message != 0 &&
+     message->exception == EXC_SOFTWARE &&
+     message->code_count == 2 &&
+     message->code[0] == EXC_SOFT_SIGNAL)
+  {
+    result = (S32)message->code[1];
+  }
+  return result;
+}
+
+internal B32
+mac_dmn_process_reply_pending_exception(MAC_DMN_Process *process, S32 signal)
+{
+  B32 result = 1;
+  if(process != 0 && process->pending_exception.is_valid)
+  {
+    MAC_DMN_ExceptionMessage *message = &process->pending_exception;
+    S32 soft_signal = mac_dmn_soft_signal_from_exception_message(message);
+    if(soft_signal != 0)
+    {
+      ptrace(PT_THUPDATE, process->pid, (caddr_t)((uintptr_t)message->thread), signal);
+    }
+    kern_return_t send_result = mach_msg(&message->reply.Head,
+                                         MACH_SEND_MSG|MACH_SEND_INTERRUPT,
+                                         message->reply.Head.msgh_size,
+                                         0,
+                                         MACH_PORT_NULL,
+                                         MACH_MSG_TIMEOUT_NONE,
+                                         MACH_PORT_NULL);
+    result = (send_result == KERN_SUCCESS);
+    MemoryZeroStruct(message);
+  }
+  return result;
+}
+
+internal B32
+mac_dmn_process_stop_for_detach(MAC_DMN_Process *process)
+{
+  B32 result = 1;
+  if(process != 0 && process->is_running)
+  {
+    result = 0;
+    kill(process->pid, SIGSTOP);
+    if(process->uses_mach_exceptions)
+    {
+      for(U64 attempt = 0; attempt < 500; attempt += 1)
+      {
+        MAC_DMN_ExceptionMessage exception_message = {0};
+        if(mac_dmn_exception_message_receive(&exception_message, 10))
+        {
+          MAC_DMN_Entity *entity = mac_dmn_process_entity_from_exception_port(exception_message.request.hdr.msgh_local_port);
+          if(entity != 0 && &entity->process == process)
+          {
+            process->pending_exception = exception_message;
+            S32 signo = mac_dmn_soft_signal_from_exception_message(&process->pending_exception);
+            result = (signo == SIGSTOP || signo == 0);
+            break;
+          }
+          else if(entity != 0 && !entity->process.pending_exception.is_valid)
+          {
+            entity->process.pending_exception = exception_message;
+          }
+        }
+      }
+    }
+    else
+    {
+      int status = 0;
+      pid_t wait_id = 0;
+      do
+      {
+        wait_id = waitpid(process->pid, &status, 0);
+      }
+      while(wait_id < 0 && errno == EINTR);
+      result = (wait_id == process->pid && WIFSTOPPED(status));
+    }
+    if(result)
+    {
+      process->is_running = 0;
+    }
+  }
+  return result;
+}
+
+#pragma pack(push, 4)
+typedef struct MAC_DMN_RequestMachExceptionRaise
+{
+  mach_msg_header_t Head;
+  mach_msg_body_t msgh_body;
+  mach_msg_port_descriptor_t thread;
+  mach_msg_port_descriptor_t task;
+  NDR_record_t NDR;
+  exception_type_t exception;
+  mach_msg_type_number_t codeCnt;
+  mach_exception_data_type_t code[2];
+}
+MAC_DMN_RequestMachExceptionRaise;
+#pragma pack(pop)
+
+internal B32
+mac_dmn_exception_message_receive(MAC_DMN_ExceptionMessage *message, mach_msg_timeout_t timeout)
+{
+  B32 result = 0;
+  if(message != 0 && mac_dmn_state->exception_port_set != MACH_PORT_NULL)
+  {
+    MemoryZeroStruct(message);
+    mach_msg_option_t options = MACH_RCV_MSG|MACH_RCV_INTERRUPT;
+    if(timeout != MACH_MSG_TIMEOUT_NONE)
+    {
+      options |= MACH_RCV_TIMEOUT;
+    }
+    kern_return_t receive_result = mach_msg(&message->request.hdr, options, 0, sizeof(message->request.data),
+                                            mac_dmn_state->exception_port_set, timeout, MACH_PORT_NULL);
+    if(receive_result == KERN_SUCCESS)
+    {
+      mach_msg_header_t *head = &message->request.hdr;
+      if(head->msgh_id == 2405 && head->msgh_size >= sizeof(MAC_DMN_RequestMachExceptionRaise))
+      {
+        MAC_DMN_RequestMachExceptionRaise *request = (MAC_DMN_RequestMachExceptionRaise *)head;
+        message->thread = request->thread.name;
+        message->task = request->task.name;
+        message->exception = request->exception;
+        message->code_count = Min(request->codeCnt, ArrayCount(message->code));
+        for(mach_msg_type_number_t idx = 0; idx < message->code_count; idx += 1)
+        {
+          message->code[idx] = request->code[idx];
+        }
+        message->reply.Head.msgh_bits = MACH_MSGH_BITS(MACH_MSGH_BITS_REMOTE(head->msgh_bits), 0);
+        message->reply.Head.msgh_size = sizeof(message->reply);
+        message->reply.Head.msgh_remote_port = head->msgh_remote_port;
+        message->reply.Head.msgh_local_port = MACH_PORT_NULL;
+        message->reply.Head.msgh_reserved = 0;
+        message->reply.Head.msgh_id = head->msgh_id + 100;
+        message->reply.NDR = NDR_record;
+        message->reply.RetCode = KERN_SUCCESS;
+        message->is_valid = 1;
+        result = 1;
+      }
+    }
   }
   return result;
 }
@@ -1824,16 +2074,48 @@ dmn_ctrl_attach(DMN_CtrlCtx *ctx, U32 pid)
   kern_return_t task_result = task_for_pid(mach_task_self(), (int)pid, &task);
   if(task_result == KERN_SUCCESS && task != MACH_PORT_NULL)
   {
-    int ptrace_result = ptrace(PT_ATTACHEXC, (pid_t)pid, 0, 0);
-    if(ptrace_result == 0 || errno == EBUSY)
+    MAC_DMN_Entity *entity = mac_dmn_process_entity_alloc((pid_t)pid, task, 1, 1);
+    MAC_DMN_Process *process = &entity->process;
+    B32 did_ptrace_attach = 0;
+    if(mac_dmn_process_begin_mach_exceptions(process))
     {
-      mac_dmn_process_entity_alloc((pid_t)pid, task, ptrace_result == 0, 1);
-      result = 1;
+      int ptrace_result = ptrace(PT_ATTACHEXC, (pid_t)pid, 0, 0);
+      if(ptrace_result == 0 || errno == EBUSY)
+      {
+        if(ptrace_result != 0)
+        {
+          result = 1;
+        }
+        else
+        {
+          did_ptrace_attach = 1;
+        }
+        if(did_ptrace_attach && mac_dmn_exception_message_receive(&process->pending_exception, 5000))
+        {
+          MAC_DMN_Entity *stop_entity = mac_dmn_process_entity_from_exception_port(process->pending_exception.request.hdr.msgh_local_port);
+          result = (stop_entity == entity);
+        }
+        else if(did_ptrace_attach)
+        {
+          log_user_errorf("Could not attach to pid %u: timed out waiting for Mach attach exception.", pid);
+        }
+      }
+      else
+      {
+        log_user_errorf("Could not attach to pid %u: ptrace(PT_ATTACHEXC) failed with errno %d.", pid, errno);
+      }
     }
     else
     {
-      log_user_errorf("Could not attach to pid %u: ptrace(PT_ATTACHEXC) failed with errno %d.", pid, errno);
-      mach_port_deallocate(mach_task_self(), task);
+      log_user_errorf("Could not attach to pid %u: failed to install Mach exception port.", pid);
+    }
+    if(result == 0)
+    {
+      if(did_ptrace_attach)
+      {
+        ptrace(PT_DETACH, (pid_t)pid, (caddr_t)1, 0);
+      }
+      mac_dmn_process_entity_release(entity);
     }
   }
   else
@@ -1865,7 +2147,9 @@ dmn_ctrl_detach(DMN_CtrlCtx *ctx, DMN_Handle handle)
     MAC_DMN_Process *process = &entity->process;
     if(process->is_attached)
     {
-      ptrace(PT_DETACH, process->pid, 0, 0);
+      mac_dmn_process_stop_for_detach(process);
+      ptrace(PT_DETACH, process->pid, (caddr_t)1, 0);
+      mac_dmn_process_end_mach_exceptions(process);
     }
     mac_dmn_process_entity_release(entity);
     result = 1;
@@ -2019,6 +2303,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
         if(process->is_attached && mac_dmn_process_should_run(entity, ctrls))
         {
           mac_dmn_process_suspend_frozen_threads(process, ctrls);
+          mac_dmn_process_reply_pending_exception(process, 0);
           errno = 0;
           int ptrace_op = PT_CONTINUE;
           if(single_step_thread_entity != 0 && single_step_thread_entity->thread.process == process)
@@ -2046,11 +2331,38 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
     {
       int status = 0;
       pid_t wait_id = 0;
-      do
+      MAC_DMN_Entity *exception_process_entity = 0;
+      B32 got_mach_exception = 0;
+      S32 mach_exception_signo = 0;
+      for(;;)
       {
-        wait_id = waitpid(-1, &status, 0);
+        MAC_DMN_ExceptionMessage exception_message = {0};
+        if(mac_dmn_exception_message_receive(&exception_message, 10))
+        {
+          exception_process_entity = mac_dmn_process_entity_from_exception_port(exception_message.request.hdr.msgh_local_port);
+          if(exception_process_entity != 0)
+          {
+            MAC_DMN_Process *process = &exception_process_entity->process;
+            process->pending_exception = exception_message;
+            mach_exception_signo = mac_dmn_soft_signal_from_exception_message(&process->pending_exception);
+            if(mach_exception_signo == 0 && process->pending_exception.exception == EXC_BREAKPOINT)
+            {
+              mach_exception_signo = SIGTRAP;
+            }
+            got_mach_exception = 1;
+            break;
+          }
+        }
+        do
+        {
+          wait_id = waitpid(-1, &status, WNOHANG);
+        }
+        while(wait_id < 0 && errno == EINTR);
+        if(wait_id != 0)
+        {
+          break;
+        }
       }
-      while(wait_id < 0 && errno == EINTR);
 
       for(MAC_DMN_ActiveTrap *active_trap = first_active_trap; active_trap != 0; active_trap = active_trap->next)
       {
@@ -2069,7 +2381,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
         }
       }
 
-      MAC_DMN_Entity *process_entity = mac_dmn_process_entity_from_pid(wait_id);
+      MAC_DMN_Entity *process_entity = got_mach_exception ? exception_process_entity : mac_dmn_process_entity_from_pid(wait_id);
       if(process_entity != 0)
       {
         MAC_DMN_Process *process = &process_entity->process;
@@ -2078,19 +2390,19 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
         DMN_EventList result_before_auto_refresh = result;
         mac_dmn_refresh_thread_events(arena, &result, process_entity);
         mac_dmn_refresh_module_events(arena, &result, process_entity);
-        if(WIFEXITED(status))
+        if(!got_mach_exception && WIFEXITED(status))
         {
           mac_dmn_push_event_exit_process(arena, &result, process_entity, (U32)WEXITSTATUS(status));
           mac_dmn_process_entity_release(process_entity);
         }
-        else if(WIFSIGNALED(status))
+        else if(!got_mach_exception && WIFSIGNALED(status))
         {
           mac_dmn_push_event_exit_process(arena, &result, process_entity, (U32)WTERMSIG(status));
           mac_dmn_process_entity_release(process_entity);
         }
-        else if(WIFSTOPPED(status))
+        else if(got_mach_exception || WIFSTOPPED(status))
         {
-          S32 signo = WSTOPSIG(status);
+          S32 signo = got_mach_exception ? mach_exception_signo : WSTOPSIG(status);
           if(mac_dmn_state->halt_requested && signo == SIGSTOP)
           {
             mac_dmn_push_event_halt(arena, &result);
@@ -2116,6 +2428,11 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
             if(thread_entity == 0 && single_step_thread_entity != 0 && single_step_thread_entity->thread.process == process)
             {
               thread_entity = single_step_thread_entity;
+            }
+            if(thread_entity == 0 && got_mach_exception && process->pending_exception.thread != MACH_PORT_NULL)
+            {
+              U64 thread_id = mac_dmn_thread_id_from_port(process->pending_exception.thread);
+              thread_entity = mac_dmn_thread_entity_from_thread_id(process, thread_id);
             }
             if(thread_entity == 0)
             {
