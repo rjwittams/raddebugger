@@ -292,6 +292,11 @@ internal U64 mac_dmn_stack_base_vaddr_from_thread(MAC_DMN_Thread *thread);
 internal B32 mac_dmn_thread_write_ip(MAC_DMN_Thread *thread, U64 ip);
 internal B32 mac_dmn_thread_skip_past_trap_instruction(MAC_DMN_Thread *thread);
 internal B32 mac_dmn_set_single_step_flag(MAC_DMN_Thread *thread, B32 is_on);
+#if ARCH_ARM64
+internal B32 mac_dmn_arm64_debug_state_regs_from_trap(DMN_Trap *trap, U64 *wvr_out, U64 *wcr_out);
+internal U64 mac_dmn_arm64_debug_trap_idx_from_state(arm_debug_state64_t *state, U64 fault_vaddr, U64 slot_count);
+internal U64 mac_dmn_arm64_supported_watchpoint_count(void);
+#endif
 internal B32 mac_dmn_thread_set_debug_traps(MAC_DMN_Thread *thread, DMN_TrapChunkList *traps);
 internal B32 mac_dmn_thread_clear_debug_traps(MAC_DMN_Thread *thread);
 internal B32 mac_dmn_process_set_debug_traps(MAC_DMN_Process *process, DMN_TrapChunkList *traps);
@@ -322,6 +327,8 @@ internal void mac_dmn_x64_thread_state_from_reg_block(x86_thread_state64_t *dst,
 #if ARCH_ARM64
 internal void mac_dmn_arm64_reg_block_from_thread_state(ARM64_RegBlock *dst, arm_thread_state64_t *src);
 internal void mac_dmn_arm64_thread_state_from_reg_block(arm_thread_state64_t *dst, ARM64_RegBlock *src);
+internal void mac_dmn_arm64_reg_block_from_neon_state(ARM64_RegBlock *dst, arm_neon_state64_t *src);
+internal void mac_dmn_arm64_neon_state_from_reg_block(arm_neon_state64_t *dst, ARM64_RegBlock *src);
 #endif
 
 #endif // MAC_DEMON_H
