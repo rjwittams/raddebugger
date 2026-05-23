@@ -838,7 +838,11 @@ internal DI_Key
 d_dbgi_key_from_module(D_Entity *module)
 {
   D_Entity *debug_info_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
-  DI_Key dbgi_key = di_key_from_path_timestamp(debug_info_path->string, debug_info_path->timestamp);
+  DI_Key dbgi_key = {0};
+  if(debug_info_path != &d_entity_nil && debug_info_path->string.size != 0)
+  {
+    dbgi_key = di_key_from_path_timestamp(debug_info_path->string, debug_info_path->timestamp);
+  }
   return dbgi_key;
 }
 
@@ -3963,16 +3967,26 @@ d_ctrl_thread__entry_point(void *p)
             String8 path = msg->path;
             D_Entity *module = d_entity_from_handle(msg->entity);
             D_Entity *debug_info_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
-            DI_Key old_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, debug_info_path->timestamp);
-            di_close(old_dbgi_key, 0);
+            if(debug_info_path == &d_entity_nil) MutexScopeW(d_ctrl_state->ctrl_thread_entity_ctx_rw_mutex)
+            {
+              debug_info_path = d_entity_alloc(d_ctrl_state->ctrl_thread_entity_store, module, D_EntityKind_DebugInfoPath, Arch_Null, d_handle_zero(), 0);
+            }
+            if(debug_info_path->string.size != 0)
+            {
+              DI_Key old_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, debug_info_path->timestamp);
+              di_close(old_dbgi_key, 0);
+            }
             MutexScopeW(d_ctrl_state->ctrl_thread_entity_ctx_rw_mutex)
             {
               d_entity_equip_string(d_ctrl_state->ctrl_thread_entity_store, debug_info_path, path_normalized_from_string(scratch.arena, path));
             }
             U64 new_dbgi_timestamp = properties_from_file_path(path).modified;
             debug_info_path->timestamp = new_dbgi_timestamp;
-            DI_Key new_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, new_dbgi_timestamp);
-            di_open(new_dbgi_key);
+            if(debug_info_path->string.size != 0)
+            {
+              DI_Key new_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, new_dbgi_timestamp);
+              di_open(new_dbgi_key);
+            }
             D_EventList evts = {0};
             D_Event *evt = d_event_list_push(scratch.arena, &evts);
             evt->kind       = D_EventKind_ModuleDebugInfoPathChange;
@@ -4228,6 +4242,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
   Guid rdi_dbg_guid = {0};
   String8 exe_dbg_path = {0};
   String8 rdi_dbg_path = {0};
+  String8List image_dbg_path_candidates = {0};
   String8 raddbg_data = {0};
   Rng1U64 raddbg_section_voff_range = {0};
   Rng1U64 raddbg_is_attached_section_voff_range = {0};
@@ -4526,10 +4541,29 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
       entry_point_voff = e_entry - vaddr_range.min;
     }
     
-    // TODO: is there a way to detect DWARF in runtime ELF?
-    if(1)
+    if(path.size != 0)
     {
-      exe_dbg_path = path;
+      str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S.rdi", str8_chop_last_dot(path));
+      str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S.rdi", path);
+
+      String8 file_data = data_from_file_path(scratch.arena, path);
+      if(file_data.size != 0)
+      {
+        ELF_Bin file_bin = elf_bin_from_data(scratch.arena, file_data);
+        if(dw_is_dwarf_present_from_elf_bin(file_data, &file_bin))
+        {
+          str8_list_push(scratch.arena, &image_dbg_path_candidates, path);
+        }
+
+        ELF_GnuDebugLink debug_link = elf_gnu_debug_link_from_bin(file_data, &file_bin);
+        if(debug_link.path.size != 0)
+        {
+          String8 exe_folder = str8_chop_last_slash(path);
+          str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S/%S", exe_folder, debug_link.path);
+          str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S/.debug/%S", exe_folder, debug_link.path);
+          str8_list_push(scratch.arena, &image_dbg_path_candidates, debug_link.path);
+        }
+      }
     }
     elf_exit:;
   }
@@ -4642,7 +4676,32 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
 
         if(path.size != 0)
         {
-          exe_dbg_path = path;
+          str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S.rdi", str8_chop_last_dot(path));
+          str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S.rdi", path);
+
+          String8 file_data = data_from_file_path(scratch.arena, path);
+          if(file_data.size != 0)
+          {
+            MachO_Bin file_bin = macho_bin_from_data(scratch.arena, file_data);
+            if(dw_is_dwarf_present_from_macho_bin(file_data, &file_bin))
+            {
+              str8_list_push(scratch.arena, &image_dbg_path_candidates, path);
+            }
+
+            String8 dsym_path = macho_dsym_path_from_executable_path(scratch.arena, path);
+            if(dsym_path.size != 0 && file_path_exists(dsym_path))
+            {
+              String8 dsym_data = data_from_file_path(scratch.arena, dsym_path);
+              MachO_Bin dsym_bin = macho_bin_from_data(scratch.arena, dsym_data);
+              MachO_UUID exe_uuid = macho_uuid_from_bin(file_data, &file_bin);
+              MachO_UUID dsym_uuid = macho_uuid_from_bin(dsym_data, &dsym_bin);
+              if(!macho_uuid_is_zero(exe_uuid) &&
+                 macho_uuid_match(exe_uuid, dsym_uuid))
+              {
+                str8_list_push(scratch.arena, &image_dbg_path_candidates, dsym_path);
+              }
+            }
+          }
         }
       }
     }
@@ -4674,6 +4733,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
     {
       str8_list_push(scratch.arena, &dbg_path_candidates, path);
     }
+    str8_list_concat_in_place(&dbg_path_candidates, &image_dbg_path_candidates);
     if(pdb_dbg_path.size != 0)
     {
       str8_list_pushf(scratch.arena, &dbg_path_candidates, "%S/%S", exe_folder, pdb_dbg_path);
@@ -5163,17 +5223,20 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
       out_evt1->string     = module_path;
       out_evt1->tls_index  = event->tls_index;
       out_evt1->tls_offset = event->tls_offset;
-      D_Event *out_evt2 = d_event_list_push(scratch.arena, &evts);
       String8 initial_debug_info_path = d_initial_debug_info_path_from_module(scratch.arena, module_handle);
-      U64 debug_info_timestamp = properties_from_file_path(initial_debug_info_path).modified;
-      out_evt2->kind       = D_EventKind_ModuleDebugInfoPathChange;
-      out_evt2->msg_id     = msg->msg_id;
-      out_evt2->entity     = module_handle;
-      out_evt2->parent     = process_handle;
-      out_evt2->timestamp  = debug_info_timestamp;
-      out_evt2->string     = initial_debug_info_path;
-      DI_Key initial_dbgi_key = di_key_from_path_timestamp(initial_debug_info_path, debug_info_timestamp);
-      di_open(initial_dbgi_key);
+      if(initial_debug_info_path.size != 0)
+      {
+        D_Event *out_evt2 = d_event_list_push(scratch.arena, &evts);
+        U64 debug_info_timestamp = properties_from_file_path(initial_debug_info_path).modified;
+        out_evt2->kind       = D_EventKind_ModuleDebugInfoPathChange;
+        out_evt2->msg_id     = msg->msg_id;
+        out_evt2->entity     = module_handle;
+        out_evt2->parent     = process_handle;
+        out_evt2->timestamp  = debug_info_timestamp;
+        out_evt2->string     = initial_debug_info_path;
+        DI_Key initial_dbgi_key = di_key_from_path_timestamp(initial_debug_info_path, debug_info_timestamp);
+        di_open(initial_dbgi_key);
+      }
     }break;
     case DMN_EventKind_ExitProcess:
     {
@@ -5395,6 +5458,7 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
         {
           if(mod->kind != D_EntityKind_Module) { continue; }
           DI_Key dbgi_key = d_dbgi_key_from_module(mod);
+          B32 dbgi_key_is_good = !di_key_match(dbgi_key, di_key_zero());
           
           //- rjf: try to obtain this module's RDI
           RDI_Parsed *rdi = di_rdi_from_key(scope->access, dbgi_key, 0, 0);
@@ -5405,6 +5469,10 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
           //
           B32 rdi_is_necessary = 1;
           if(user_bps->count == 0)
+          {
+            rdi_is_necessary = 0;
+          }
+          else if(!dbgi_key_is_good)
           {
             rdi_is_necessary = 0;
           }
@@ -5667,14 +5735,17 @@ d_ctrl_thread__launch(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   file_close(stdin_handle);
   
   //- rjf: record (id -> entry points), so that we know custom entry points for this PID
-  D_EntityCtxRWStore *entity_ctx_rw_store = d_ctrl_state->ctrl_thread_entity_store;
-  MutexScopeW(d_ctrl_state->ctrl_thread_entity_ctx_rw_mutex)
+  if(id != 0)
   {
-    for(String8Node *n = msg->entry_points.first; n != 0; n = n->next)
+    D_EntityCtxRWStore *entity_ctx_rw_store = d_ctrl_state->ctrl_thread_entity_store;
+    MutexScopeW(d_ctrl_state->ctrl_thread_entity_ctx_rw_mutex)
     {
-      String8 string = n->string;
-      D_Entity *entry = d_entity_alloc(entity_ctx_rw_store, entity_ctx_rw_store->ctx.root, D_EntityKind_EntryPoint, Arch_Null, d_handle_zero(), (U64)id);
-      d_entity_equip_string(entity_ctx_rw_store, entry, string);
+      for(String8Node *n = msg->entry_points.first; n != 0; n = n->next)
+      {
+        String8 string = n->string;
+        D_Entity *entry = d_entity_alloc(entity_ctx_rw_store, entity_ctx_rw_store->ctx.root, D_EntityKind_EntryPoint, Arch_Null, d_handle_zero(), (U64)id);
+        d_entity_equip_string(entity_ctx_rw_store, entry, string);
+      }
     }
   }
   
@@ -6010,11 +6081,14 @@ d_ctrl_thread__open_crash_dump(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
     Rng1U64 vaddr_range = dump_modules[idx].vaddr_range;
     d_ctrl_thread__module_open(process, module_handle, vaddr_range, dump_modules[idx].path, r1u64(0, 0), 0);
     
-    // rjf: open debug info
     String8 initial_debug_info_path = d_initial_debug_info_path_from_module(scratch.arena, module_handle);
-    U64 debug_info_timestamp = properties_from_file_path(initial_debug_info_path).modified;
-    DI_Key initial_dbgi_key = di_key_from_path_timestamp(initial_debug_info_path, debug_info_timestamp);
-    di_open(initial_dbgi_key);
+    U64 debug_info_timestamp = 0;
+    if(initial_debug_info_path.size != 0)
+    {
+      debug_info_timestamp = properties_from_file_path(initial_debug_info_path).modified;
+      DI_Key initial_dbgi_key = di_key_from_path_timestamp(initial_debug_info_path, debug_info_timestamp);
+      di_open(initial_dbgi_key);
+    }
     
     // rjf: push module load event
     {
@@ -6031,6 +6105,7 @@ d_ctrl_thread__open_crash_dump(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
     }
     
     // rjf: push debug info initial path set event
+    if(initial_debug_info_path.size != 0)
     {
       D_Event *evt = d_event_list_push(scratch.arena, &evts);
       evt->kind       = D_EventKind_ModuleDebugInfoPathChange;
