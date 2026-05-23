@@ -5554,4 +5554,3 @@ int decode_iclass_mortlach_contig_qstore(context *ctx, Instruction *dec)
 {
 	return st1q_za_p_rrr(ctx, dec);
 }
-
