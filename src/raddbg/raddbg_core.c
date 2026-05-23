@@ -10588,8 +10588,11 @@ rd_init(CmdLine *cmdln)
       {
         String8 arg = str8_cstring(cmdln->argv[idx]);
         B32 is_flag = (str8_match(str8_prefix(arg, 1), str8_lit("-"), 0) ||
-                       str8_match(str8_prefix(arg, 1), str8_lit("--"), 0) ||
-                       str8_match(str8_prefix(arg, 1), str8_lit("/"), 0));
+                       str8_match(str8_prefix(arg, 1), str8_lit("--"), 0)
+#if OS_WINDOWS
+                       || str8_match(str8_prefix(arg, 1), str8_lit("/"), 0)
+#endif
+                       );
         B32 is_cfg = 0;
         if(!is_flag && !after_first_non_flag)
         {
@@ -10675,9 +10678,11 @@ rd_init(CmdLine *cmdln)
       CFG_Node *exe    = cfg_node_new(rd_state->cfg, target, str8_lit("executable"));
       CFG_Node *args   = cfg_node_new(rd_state->cfg, target, str8_lit("arguments"));
       CFG_Node *wdir   = cfg_node_new(rd_state->cfg, target, str8_lit("working_directory"));
+      CFG_Node *enabled = cfg_node_new(rd_state->cfg, target, str8_lit("enabled"));
       cfg_node_new(rd_state->cfg, exe, executable_name_string);
       cfg_node_new(rd_state->cfg, args, arguments_string);
       cfg_node_new(rd_state->cfg, wdir, working_directory_string);
+      cfg_node_new(rd_state->cfg, enabled, str8_lit("1"));
       rd_cmd(RD_CmdKind_SelectTarget, .cfg = target->id);
     }
     scratch_end(scratch2);
