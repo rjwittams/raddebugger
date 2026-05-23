@@ -537,12 +537,15 @@ cond_var_wait(CondVar cv, Mutex mutex, U64 endt_us)
 {
   if(MemoryIsZeroStruct(&cv)) { return 0; }
   if(MemoryIsZeroStruct(&mutex)) { return 0; }
+  U64 now_us = now_time_us();
+  if(endt_us <= now_us) { return 0; }
   MAC_Entity *cv_entity = (MAC_Entity *)cv.u64[0];
   MAC_Entity *mutex_entity = (MAC_Entity *)mutex.u64[0];
-  struct timespec endt_timespec;
-  endt_timespec.tv_sec = endt_us/Million(1);
-  endt_timespec.tv_nsec = Thousand(1) * (endt_us - (endt_us/Million(1))*Million(1));
-  int wait_result = pthread_cond_timedwait(&cv_entity->cv.cond_handle, &mutex_entity->mutex_handle, &endt_timespec);
+  U64 wait_us = endt_us - now_us;
+  struct timespec wait_timespec;
+  wait_timespec.tv_sec = wait_us/Million(1);
+  wait_timespec.tv_nsec = Thousand(1) * (wait_us - (wait_us/Million(1))*Million(1));
+  int wait_result = pthread_cond_timedwait_relative_np(&cv_entity->cv.cond_handle, &mutex_entity->mutex_handle, &wait_timespec);
   B32 result = (wait_result != ETIMEDOUT);
   return result;
 }
@@ -550,23 +553,23 @@ cond_var_wait(CondVar cv, Mutex mutex, U64 endt_us)
 internal B32
 cond_var_wait_rw(CondVar cv, RWMutex mutex_rw, B32 write_mode, U64 endt_us)
 {
-  // TODO: because pthread does not supply cv/rw natively, I had to hack
-  // this together, but this would probably just be a lot better if we just
-  // implemented the primitives ourselves with e.g. futexes
-  //
+  // pthread condition variables cannot wait directly on pthread rwlocks, so this
+  // path uses a private mutex while temporarily releasing the rwlock.
   if(MemoryIsZeroStruct(&cv)) { return 0; }
   if(MemoryIsZeroStruct(&mutex_rw)) { return 0; }
   MAC_Entity *cv_entity = (MAC_Entity *)cv.u64[0];
   MAC_Entity *rw_mutex_entity = (MAC_Entity *)mutex_rw.u64[0];
-  struct timespec endt_timespec;
-  endt_timespec.tv_sec = endt_us/Million(1);
-  endt_timespec.tv_nsec = Thousand(1) * (endt_us - (endt_us/Million(1))*Million(1));
   B32 result = 0;
   pthread_mutex_lock(&cv_entity->cv.rwlock_mutex_handle);
   pthread_rwlock_unlock(&rw_mutex_entity->rwmutex_handle);
   for(;;)
   {
-    int wait_result = pthread_cond_timedwait(&cv_entity->cv.cond_handle, &cv_entity->cv.rwlock_mutex_handle, &endt_timespec);
+    U64 now_us = now_time_us();
+    U64 wait_us = endt_us > now_us ? endt_us - now_us : 0;
+    struct timespec wait_timespec;
+    wait_timespec.tv_sec = wait_us/Million(1);
+    wait_timespec.tv_nsec = Thousand(1) * (wait_us - (wait_us/Million(1))*Million(1));
+    int wait_result = pthread_cond_timedwait_relative_np(&cv_entity->cv.cond_handle, &cv_entity->cv.rwlock_mutex_handle, &wait_timespec);
     if(wait_result != ETIMEDOUT)
     {
       if(write_mode)
@@ -876,10 +879,14 @@ file_read(File file, Rng1U64 rng, void *out_data)
   for(;total_num_bytes_left_to_read > 0;)
   {
     int read_result = pread(fd, (U8 *)out_data + total_num_bytes_read, total_num_bytes_left_to_read, rng.min + total_num_bytes_read);
-    if(read_result >= 0)
+    if(read_result > 0)
     {
       total_num_bytes_read += read_result;
       total_num_bytes_left_to_read -= read_result;
+    }
+    else if(read_result == 0)
+    {
+      break;
     }
     else if(errno != EINTR)
     {

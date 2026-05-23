@@ -139,6 +139,28 @@ mac_wm_push_menu_command(String8 command_name)
 }
 
 internal B32
+mac_wm_window_pos_is_native_title_bar_control_area(MAC_WM_Window *window, Vec2F32 pos)
+{
+  B32 result = 0;
+  if(window != 0 &&
+     window->custom_border &&
+     window->chrome_mode == MAC_WM_ChromeMode_Integrated &&
+     !wm_window_is_fullscreen(mac_wm_handle_from_window(window)) &&
+     0 <= pos.y && pos.y <= window->custom_border_title_thickness)
+  {
+    F32 width = 88.f;
+    NSButton *close_button = [window->ns_window standardWindowButton:NSWindowCloseButton];
+    NSButton *zoom_button = [window->ns_window standardWindowButton:NSWindowZoomButton];
+    if(close_button != 0 && zoom_button != 0)
+    {
+      width = Max(width, (F32)Max(NSMaxX([close_button frame]), NSMaxX([zoom_button frame])) + 16.f);
+    }
+    result = (0 <= pos.x && pos.x < width);
+  }
+  return result;
+}
+
+internal B32
 mac_wm_window_pos_is_title_bar_client_area(MAC_WM_Window *window, Vec2F32 pos)
 {
   B32 result = 0;
@@ -933,6 +955,7 @@ wm_get_events(Arena *arena, B32 wait)
            window->chrome_mode != MAC_WM_ChromeMode_Native &&
            type == NSEventTypeLeftMouseDown &&
            pos.y <= window->custom_border_title_thickness &&
+           !mac_wm_window_pos_is_native_title_bar_control_area(window, pos) &&
            !mac_wm_window_pos_is_title_bar_client_area(window, pos))
         {
           [window->ns_window performWindowDragWithEvent:event];
