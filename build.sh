@@ -51,7 +51,7 @@ link_render="-lGL -lEGL"
 link_font_provider="-lfreetype"
 
 if [ "$host_os" = "Darwin" ]; then
-  link_os_gfx="-framework Cocoa"
+  link_os_gfx="-framework Cocoa -framework Security"
   link_render="-framework Metal -framework QuartzCore"
   link_font_provider="-framework CoreText -framework CoreGraphics -framework CoreFoundation"
 fi
@@ -84,8 +84,16 @@ fi
 
 # --- Build Everything (@build_targets) ---------------------------------------
 cd build
-if [ -v raddbg ];                then didbuild=1 && $compile ../src/raddbg/raddbg_main.c                                    $compile_link $link_os_gfx $link_render $link_font_provider $out raddbg; fi
-if [ -v bundle ];                then didbuild=1; if [ "$host_os" != "Darwin" ]; then echo "[ERROR] bundle target is only supported on Darwin."; exit 1; fi; $compile ../src/raddbg/raddbg_main.c $compile_link $link_os_gfx $link_render $link_font_provider $out raddbg; rm -rf "RAD Debugger.app"; mkdir -p "RAD Debugger.app/Contents/MacOS" "RAD Debugger.app/Contents/Resources"; cp ../src/mac/raddbg_Info.plist "RAD Debugger.app/Contents/Info.plist"; cp ../src/mac/raddbg.icns "RAD Debugger.app/Contents/Resources/raddbg.icns"; cp raddbg "RAD Debugger.app/Contents/MacOS/raddbg"; chmod +x "RAD Debugger.app/Contents/MacOS/raddbg"; fi
+sign_raddbg_debug()
+{
+  if [ "$host_os" = "Darwin" ]; then
+    codesign_identity="${RADDBG_CODESIGN_IDENTITY:--}"
+    codesign_entitlements="${RADDBG_CODESIGN_ENTITLEMENTS:-../src/mac/raddbg_debug.entitlements}"
+    codesign --force --sign "$codesign_identity" --entitlements "$codesign_entitlements" "$1"
+  fi
+}
+if [ -v raddbg ];                then didbuild=1 && $compile ../src/raddbg/raddbg_main.c                                    $compile_link $link_os_gfx $link_render $link_font_provider $out raddbg; sign_raddbg_debug raddbg; fi
+if [ -v bundle ];                then didbuild=1; if [ "$host_os" != "Darwin" ]; then echo "[ERROR] bundle target is only supported on Darwin."; exit 1; fi; $compile ../src/raddbg/raddbg_main.c $compile_link $link_os_gfx $link_render $link_font_provider $out raddbg; sign_raddbg_debug raddbg; rm -rf "RAD Debugger.app"; mkdir -p "RAD Debugger.app/Contents/MacOS" "RAD Debugger.app/Contents/Resources"; cp ../src/mac/raddbg_Info.plist "RAD Debugger.app/Contents/Info.plist"; cp ../src/mac/raddbg.icns "RAD Debugger.app/Contents/Resources/raddbg.icns"; cp raddbg "RAD Debugger.app/Contents/MacOS/raddbg"; chmod +x "RAD Debugger.app/Contents/MacOS/raddbg"; sign_raddbg_debug "RAD Debugger.app/Contents/MacOS/raddbg"; sign_raddbg_debug "RAD Debugger.app"; fi
 if [ -v radbin ];                then didbuild=1 && $compile ../src/radbin/radbin_main.c                                    $compile_link $out radbin; fi
 if [ -v radlink ];               then didbuild=1 && $compile ../src/linker/lnk.c                                            $compile_link $out radlink; fi
 cd ..
