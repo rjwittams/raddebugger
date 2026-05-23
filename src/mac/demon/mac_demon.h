@@ -105,6 +105,7 @@ struct MAC_DMN_Thread
   Arch arch;
   B32 is_suspended_for_run;
   B32 is_stepping_over_dyld_notification;
+  B32 is_stepping_over_debug_trap;
   U64 dyld_notification_step_vaddr;
 };
 
