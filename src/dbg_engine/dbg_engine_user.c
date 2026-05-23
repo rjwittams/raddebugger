@@ -1866,6 +1866,10 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
           }
           else
           {
+            if(was_running)
+            {
+              d_halt();
+            }
             D_Msg *msg = d_msg_list_push(scratch.arena, &ctrl_msgs);
             msg->kind = D_MsgKind_Kill;
             msg->exit_code = 1;
@@ -1899,6 +1903,11 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         }break;
         case D_CmdKind_KillAll:
         {
+          B32 was_running = d_ctrl_targets_running();
+          if(was_running)
+          {
+            d_halt();
+          }
           D_Msg *msg = d_msg_list_push(scratch.arena, &ctrl_msgs);
           msg->kind = D_MsgKind_KillAll;
           msg->exit_code = 1;
