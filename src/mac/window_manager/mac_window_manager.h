@@ -113,6 +113,7 @@ internal MAC_WM_ChromeMode mac_wm_chrome_mode_from_environment(void);
 internal MAC_WM_MenuMode mac_wm_menu_mode_from_environment(void);
 internal B32 mac_wm_chrome_mode_has_native_controls(MAC_WM_ChromeMode mode);
 internal void mac_wm_push_menu_command(String8 command_name);
+internal B32 mac_wm_window_pos_is_native_title_bar_control_area(MAC_WM_Window *window, Vec2F32 pos);
 internal B32 mac_wm_window_pos_is_title_bar_client_area(MAC_WM_Window *window, Vec2F32 pos);
 internal Rng2F32 mac_wm_rect_from_ns_rect(NSRect rect);
 internal Vec2F32 mac_wm_client_pos_from_ns_point(MAC_WM_Window *window, NSPoint point);
