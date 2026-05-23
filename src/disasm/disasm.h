@@ -180,6 +180,7 @@ struct DASM_Info
 //~ rjf: Instruction Decoding/Disassembling Type Functions
 
 internal DASM_Inst dasm_inst_from_code(Arena *arena, Arch arch, U64 vaddr, String8 code, DASM_Syntax syntax);
+internal U64 dasm_invalid_inst_size_from_arch_vaddr_code(Arch arch, U64 vaddr, String8 code);
 
 ////////////////////////////////
 //~ rjf: Control Flow Analysis
