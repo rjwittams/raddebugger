@@ -232,6 +232,11 @@ TEST(arm64_disasm_basic)
   U8 short_code[] = {0x1f, 0x20, 0x03};
   DASM_Inst short_inst = dasm_inst_from_code(arena, Arch_arm64, 0x1000, str8_array_fixed(short_code), DASM_Syntax_Intel);
   T_Ok(short_inst.size == 0);
+
+  U8 invalid_code[] = {0xcf, 0xfa, 0xed, 0xfe, 0x1f, 0x20, 0x03, 0xd5};
+  T_Ok(dasm_invalid_inst_size_from_arch_vaddr_code(Arch_arm64, 0x1000, str8_array_fixed(invalid_code)) == 4);
+  T_Ok(dasm_invalid_inst_size_from_arch_vaddr_code(Arch_arm64, 0x1001, str8_array_fixed(invalid_code)) == 3);
+  T_Ok(dasm_invalid_inst_size_from_arch_vaddr_code(Arch_x64, 0x1000, str8_array_fixed(invalid_code)) == 0);
 }
 
 TEST(arm64_disasm_registers_and_stack)

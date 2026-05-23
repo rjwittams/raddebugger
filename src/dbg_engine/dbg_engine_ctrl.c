@@ -838,7 +838,11 @@ internal DI_Key
 d_dbgi_key_from_module(D_Entity *module)
 {
   D_Entity *debug_info_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
-  DI_Key dbgi_key = di_key_from_path_timestamp(debug_info_path->string, debug_info_path->timestamp);
+  DI_Key dbgi_key = {0};
+  if(debug_info_path != &d_entity_nil && debug_info_path->string.size != 0)
+  {
+    dbgi_key = di_key_from_path_timestamp(debug_info_path->string, debug_info_path->timestamp);
+  }
   return dbgi_key;
 }
 
@@ -3455,87 +3459,177 @@ d_macho_compact_unwind_arm64_cfa_from_encoding(MachO_UnwindInfoLookupResult *loo
   return result;
 }
 
+internal B32
+d_unwind_arm64_cfa_from_frame_pointer(ARM64_RegBlock *regs, U64 *cfa_out)
+{
+  B32 result = 0;
+  if(regs->fp != 0)
+  {
+    *cfa_out = regs->fp + 16;
+    result = 1;
+  }
+  return result;
+}
+
+internal B32
+d_unwind_arm64_cfa_from_link_register(ARM64_RegBlock *regs, U64 *cfa_out)
+{
+  B32 result = 0;
+  if(regs->lr != 0)
+  {
+    *cfa_out = regs->sp;
+    result = 1;
+  }
+  return result;
+}
+
 internal D_UnwindStepResult
-d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, ARM64_RegBlock *regs, U64 endt_us)
+d_unwind_step__link_register_arm64(ARM64_RegBlock *regs)
+{
+  B32 is_good = 0;
+  if(regs->lr != 0)
+  {
+    U64 caller_pc = regs->lr >= 4 ? regs->lr - 4 : regs->lr;
+    if(caller_pc != regs->pc)
+    {
+      regs->pc = caller_pc;
+      regs->lr = 0;
+      is_good = 1;
+    }
+  }
+  
+  D_UnwindStepResult result = {0};
+  if(!is_good) {result.flags |= D_UnwindFlag_Error;}
+  return result;
+}
+
+internal D_UnwindStepResult
+d_unwind_step__frame_pointer_arm64(D_Handle process_handle, ARM64_RegBlock *regs, U64 endt_us)
+{
+  B32 is_good = 0;
+  B32 is_stale = 0;
+  U64 frame_record[2] = {0};
+  U64 frame_fp = regs->fp;
+  if(frame_fp != 0)
+  {
+    B32 read = d_process_memory_read(process_handle, r1u64(frame_fp, frame_fp + sizeof(frame_record)), &is_stale, frame_record, endt_us);
+    if(read && !is_stale)
+    {
+      U64 caller_fp = frame_record[0];
+      U64 caller_lr = frame_record[1];
+      if((caller_fp == 0 || caller_fp > frame_fp) && caller_lr != 0)
+      {
+        regs->fp = caller_fp;
+        regs->lr = caller_lr;
+        regs->sp = frame_fp + 16;
+        regs->pc = caller_lr >= 4 ? caller_lr - 4 : caller_lr;
+        is_good = 1;
+      }
+    }
+  }
+  
+  D_UnwindStepResult result = {0};
+  if(!is_good) {result.flags |= D_UnwindFlag_Error;}
+  if(is_stale) {result.flags |= D_UnwindFlag_Stale;}
+  return result;
+}
+
+internal D_UnwindStepResult
+d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, ARM64_RegBlock *regs, B32 prefer_entry_lr, U64 endt_us)
 {
   B32 is_good = 0;
   B32 is_stale = 0;
   Temp scratch = scratch_begin(0, 0);
 
-  String8 unwind_info_data = d_macho_unwind_info_data_from_module(scratch.arena, module_handle);
-  MachO_UnwindInfoLookupResult lookup = {0};
-  if(macho_unwind_info_lookup(unwind_info_data, regs->pc - module_base_vaddr, &lookup))
+  if(prefer_entry_lr)
   {
-    switch(lookup.encoding & MACHO_UNWIND_ARM64_MODE_MASK)
+    D_UnwindStepResult lr_result = d_unwind_step__link_register_arm64(regs);
+    is_good = !(lr_result.flags & D_UnwindFlag_Error);
+  }
+  if(!is_good)
+  {
+    String8 unwind_info_data = d_macho_unwind_info_data_from_module(scratch.arena, module_handle);
+    MachO_UnwindInfoLookupResult lookup = {0};
+    if(macho_unwind_info_lookup(unwind_info_data, regs->pc - module_base_vaddr, &lookup))
     {
-      case MACHO_UNWIND_ARM64_MODE_FRAMELESS:
+      switch(lookup.encoding & MACHO_UNWIND_ARM64_MODE_MASK)
       {
-        U64 stack_size = ((lookup.encoding & MACHO_UNWIND_ARM64_FRAMELESS_STACK_SIZE_MASK) >> 12)*16;
-        if(regs->lr != 0)
+        case MACHO_UNWIND_ARM64_MODE_FRAMELESS:
         {
-          U64 caller_pc = regs->lr >= 4 ? regs->lr - 4 : regs->lr;
-          if(caller_pc != regs->pc)
+          U64 stack_size = ((lookup.encoding & MACHO_UNWIND_ARM64_FRAMELESS_STACK_SIZE_MASK) >> 12)*16;
+          if(regs->lr != 0)
           {
-            regs->pc = caller_pc;
-            regs->lr = 0;
-            regs->sp += stack_size;
-            is_good = 1;
-          }
-        }
-      }break;
-      case MACHO_UNWIND_ARM64_MODE_FRAME:
-      {
-        U64 frame_record[2] = {0};
-        if(regs->fp != 0)
-        {
-          U64 frame_fp = regs->fp;
-          B32 read = d_process_memory_read(process_handle, r1u64(frame_fp, frame_fp + sizeof(frame_record)), &is_stale, frame_record, endt_us);
-          if(read && !is_stale)
-          {
-            U64 caller_fp = frame_record[0];
-            U64 caller_lr = frame_record[1];
-            if((caller_fp == 0 || caller_fp > frame_fp) && caller_lr != 0)
+            U64 caller_pc = regs->lr >= 4 ? regs->lr - 4 : regs->lr;
+            if(caller_pc != regs->pc)
             {
-              D_MachOCompactArm64FrameRegSlot slots[18] = {0};
-              U64 slot_count = d_macho_compact_unwind_arm64_frame_saved_reg_slots_from_encoding(lookup.encoding, slots, ArrayCount(slots));
-              U64 saved_values[18] = {0};
-              U64 cfa = frame_fp + 16;
-              B32 saved_regs_good = 1;
-              if(slot_count > ArrayCount(slots))
+              regs->pc = caller_pc;
+              regs->lr = 0;
+              regs->sp += stack_size;
+              is_good = 1;
+            }
+          }
+        }break;
+        case MACHO_UNWIND_ARM64_MODE_FRAME:
+        {
+          U64 frame_record[2] = {0};
+          if(regs->fp != 0)
+          {
+            U64 frame_fp = regs->fp;
+            B32 read = d_process_memory_read(process_handle, r1u64(frame_fp, frame_fp + sizeof(frame_record)), &is_stale, frame_record, endt_us);
+            if(read && !is_stale)
+            {
+              U64 caller_fp = frame_record[0];
+              U64 caller_lr = frame_record[1];
+              if((caller_fp == 0 || caller_fp > frame_fp) && caller_lr != 0)
               {
-                saved_regs_good = 0;
-                break;
-              }
-              for(U64 slot_idx = 0; slot_idx < slot_count; slot_idx += 1)
-              {
-                U64 value = 0;
-                U64 addr = cfa + (S64)slots[slot_idx].cfa_off;
-                if(!d_process_memory_read_struct(process_handle, addr, &is_stale, &value, endt_us) ||
-                   is_stale)
+                D_MachOCompactArm64FrameRegSlot slots[18] = {0};
+                U64 slot_count = d_macho_compact_unwind_arm64_frame_saved_reg_slots_from_encoding(lookup.encoding, slots, ArrayCount(slots));
+                U64 saved_values[18] = {0};
+                U64 cfa = frame_fp + 16;
+                B32 saved_regs_good = 1;
+                if(slot_count > ArrayCount(slots))
                 {
                   saved_regs_good = 0;
                   break;
                 }
-                saved_values[slot_idx] = value;
+                for(U64 slot_idx = 0; slot_idx < slot_count; slot_idx += 1)
+                {
+                  U64 value = 0;
+                  U64 addr = cfa + (S64)slots[slot_idx].cfa_off;
+                  if(!d_process_memory_read_struct(process_handle, addr, &is_stale, &value, endt_us) ||
+                     is_stale)
+                  {
+                    saved_regs_good = 0;
+                    break;
+                  }
+                  saved_values[slot_idx] = value;
+                }
+                if(is_stale || saved_regs_good == 0)
+                {
+                  break;
+                }
+                for(U64 slot_idx = 0; slot_idx < slot_count; slot_idx += 1)
+                {
+                  d_macho_compact_unwind_arm64_write_reg_slot(regs, &slots[slot_idx], saved_values[slot_idx]);
+                }
+                regs->fp = caller_fp;
+                regs->lr = caller_lr;
+                regs->sp = frame_fp + 16;
+                regs->pc = caller_lr >= 4 ? caller_lr - 4 : caller_lr;
+                is_good = 1;
               }
-              if(is_stale || saved_regs_good == 0)
-              {
-                break;
-              }
-              for(U64 slot_idx = 0; slot_idx < slot_count; slot_idx += 1)
-              {
-                d_macho_compact_unwind_arm64_write_reg_slot(regs, &slots[slot_idx], saved_values[slot_idx]);
-              }
-              regs->fp = caller_fp;
-              regs->lr = caller_lr;
-              regs->sp = frame_fp + 16;
-              regs->pc = caller_lr >= 4 ? caller_lr - 4 : caller_lr;
-              is_good = 1;
             }
           }
-        }
-      }break;
+        }break;
+      }
     }
+  }
+
+  if(!is_good && !is_stale)
+  {
+    D_UnwindStepResult fallback_result = d_unwind_step__frame_pointer_arm64(process_handle, regs, endt_us);
+    is_good = !(fallback_result.flags & D_UnwindFlag_Error);
+    is_stale = !!(fallback_result.flags & D_UnwindFlag_Stale);
   }
 
   scratch_end(scratch);
@@ -3655,11 +3749,23 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
             MachO_UnwindInfoLookupResult lookup = {0};
             U64 compact_cfa = 0;
             B32 compact_lookup_good = macho_unwind_info_lookup(unwind_info_data, rip - module_entity->vaddr_range.min, &lookup);
+            U64 lr_vaddr = regs_arm64->lr >= 4 ? regs_arm64->lr - 4 : regs_arm64->lr;
+            B32 lr_module_good = (d_module_from_process_vaddr(process_entity, lr_vaddr) != &d_entity_nil);
+            B32 prefer_entry_lr = (frame_node_count == 0 &&
+                                   regs_arm64->lr != 0 &&
+                                   lr_module_good &&
+                                   (!compact_lookup_good ||
+                                    rip - module_entity->vaddr_range.min - lookup.voff_range.min < 16));
             B32 compact_dwarf = (compact_lookup_good &&
                                  (lookup.encoding & MACHO_UNWIND_ARM64_MODE_MASK) == MACHO_UNWIND_ARM64_MODE_DWARF);
             B32 compact_supported = compact_lookup_good && d_macho_compact_unwind_arm64_mode_is_supported(lookup.encoding);
             B32 compact_cfa_good = compact_supported && d_macho_compact_unwind_arm64_cfa_from_encoding(&lookup, regs_arm64, &compact_cfa);
-            if(compact_dwarf)
+            if(prefer_entry_lr && d_unwind_arm64_cfa_from_link_register(regs_arm64, &compact_cfa))
+            {
+              frame_ctx_result.flags = 0;
+              frame_ctx.cfa = compact_cfa;
+            }
+            else if(compact_dwarf)
             {
               U64 eh_frame_vaddr = d_eh_frame_vaddr_from_module(module_entity->handle);
               if(eh_frame_vaddr != 0)
@@ -3680,6 +3786,11 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
             else if(compact_lookup_good &&
                     compact_supported &&
                     compact_cfa_good)
+            {
+              frame_ctx_result.flags = 0;
+              frame_ctx.cfa = compact_cfa;
+            }
+            else if(d_unwind_arm64_cfa_from_frame_pointer(regs_arm64, &compact_cfa))
             {
               frame_ctx_result.flags = 0;
               frame_ctx.cfa = compact_cfa;
@@ -3705,7 +3816,6 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
       
       // rjf: unwind one step
       D_UnwindStepResult step_result = {0};
-      B32 stop_after_step = 0;
       switch(process_entity->target_os)
       {
         default:{}break;
@@ -3735,13 +3845,18 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
             }break;
             case Arch_arm64:
             {
-              step_result = d_unwind_step__macho_arm64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, regs_block, endt_us);
-              if(!(step_result.flags & (D_UnwindFlag_Error|D_UnwindFlag_Stale)))
-              {
-                U64 new_rip = arch_ip_from_reg_block(arch_info, regs_block);
-                D_Entity *new_module_entity = d_module_from_process_vaddr(process_entity, new_rip);
-                stop_after_step = (new_rip != 0 && new_module_entity != module_entity);
-              }
+              ARM64_RegBlock *regs_arm64 = regs_block;
+              String8 unwind_info_data = d_macho_unwind_info_data_from_module(scratch.arena, module_entity->handle);
+              MachO_UnwindInfoLookupResult lookup = {0};
+              B32 compact_lookup_good = macho_unwind_info_lookup(unwind_info_data, rip - module_entity->vaddr_range.min, &lookup);
+              U64 lr_vaddr = regs_arm64->lr >= 4 ? regs_arm64->lr - 4 : regs_arm64->lr;
+              B32 lr_module_good = (d_module_from_process_vaddr(process_entity, lr_vaddr) != &d_entity_nil);
+              B32 prefer_entry_lr = (frame_node_count == 1 &&
+                                     regs_arm64->lr != 0 &&
+                                     lr_module_good &&
+                                     (!compact_lookup_good ||
+                                      rip - module_entity->vaddr_range.min - lookup.voff_range.min < 16));
+              step_result = d_unwind_step__macho_arm64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, regs_block, prefer_entry_lr, endt_us);
             }break;
           }
           if((step_result.flags & D_UnwindFlag_Error) && frame_ctx.cfi_row != 0)
@@ -3754,7 +3869,6 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
       // stop unwinding on errors or stale data
       unwind.flags |= step_result.flags;
       if(unwind.flags & (D_UnwindFlag_Stale|D_UnwindFlag_Error) ||
-         stop_after_step ||
          (arch_sp_from_reg_block(arch_info, regs_block) == rsp && arch_ip_from_reg_block(arch_info, regs_block) == rip))
       {
         break;
@@ -4213,16 +4327,26 @@ d_ctrl_thread__entry_point(void *p)
             String8 path = msg->path;
             D_Entity *module = d_entity_from_handle(msg->entity);
             D_Entity *debug_info_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
-            DI_Key old_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, debug_info_path->timestamp);
-            di_close(old_dbgi_key, 0);
+            if(debug_info_path == &d_entity_nil) MutexScopeW(d_ctrl_state->ctrl_thread_entity_ctx_rw_mutex)
+            {
+              debug_info_path = d_entity_alloc(d_ctrl_state->ctrl_thread_entity_store, module, D_EntityKind_DebugInfoPath, Arch_Null, d_handle_zero(), 0);
+            }
+            if(debug_info_path->string.size != 0)
+            {
+              DI_Key old_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, debug_info_path->timestamp);
+              di_close(old_dbgi_key, 0);
+            }
             MutexScopeW(d_ctrl_state->ctrl_thread_entity_ctx_rw_mutex)
             {
               d_entity_equip_string(d_ctrl_state->ctrl_thread_entity_store, debug_info_path, path_normalized_from_string(scratch.arena, path));
             }
             U64 new_dbgi_timestamp = properties_from_file_path(path).modified;
             debug_info_path->timestamp = new_dbgi_timestamp;
-            DI_Key new_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, new_dbgi_timestamp);
-            di_open(new_dbgi_key);
+            if(debug_info_path->string.size != 0)
+            {
+              DI_Key new_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, new_dbgi_timestamp);
+              di_open(new_dbgi_key);
+            }
             D_EventList evts = {0};
             D_Event *evt = d_event_list_push(scratch.arena, &evts);
             evt->kind       = D_EventKind_ModuleDebugInfoPathChange;
@@ -4478,6 +4602,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
   Guid rdi_dbg_guid = {0};
   String8 exe_dbg_path = {0};
   String8 rdi_dbg_path = {0};
+  String8List image_dbg_path_candidates = {0};
   String8 raddbg_data = {0};
   Rng1U64 raddbg_section_voff_range = {0};
   Rng1U64 raddbg_is_attached_section_voff_range = {0};
@@ -4776,10 +4901,29 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
       entry_point_voff = e_entry - vaddr_range.min;
     }
     
-    // TODO: is there a way to detect DWARF in runtime ELF?
-    if(1)
+    if(path.size != 0)
     {
-      exe_dbg_path = path;
+      str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S.rdi", str8_chop_last_dot(path));
+      str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S.rdi", path);
+
+      String8 file_data = data_from_file_path(scratch.arena, path);
+      if(file_data.size != 0)
+      {
+        ELF_Bin file_bin = elf_bin_from_data(scratch.arena, file_data);
+        if(dw_is_dwarf_present_from_elf_bin(file_data, &file_bin))
+        {
+          str8_list_push(scratch.arena, &image_dbg_path_candidates, path);
+        }
+
+        ELF_GnuDebugLink debug_link = elf_gnu_debug_link_from_bin(file_data, &file_bin);
+        if(debug_link.path.size != 0)
+        {
+          String8 exe_folder = str8_chop_last_slash(path);
+          str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S/%S", exe_folder, debug_link.path);
+          str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S/.debug/%S", exe_folder, debug_link.path);
+          str8_list_push(scratch.arena, &image_dbg_path_candidates, debug_link.path);
+        }
+      }
     }
     elf_exit:;
   }
@@ -4892,7 +5036,32 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
 
         if(path.size != 0)
         {
-          exe_dbg_path = path;
+          str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S.rdi", str8_chop_last_dot(path));
+          str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S.rdi", path);
+
+          String8 file_data = data_from_file_path(scratch.arena, path);
+          if(file_data.size != 0)
+          {
+            MachO_Bin file_bin = macho_bin_from_data(scratch.arena, file_data);
+            if(dw_is_dwarf_present_from_macho_bin(file_data, &file_bin))
+            {
+              str8_list_push(scratch.arena, &image_dbg_path_candidates, path);
+            }
+
+            String8 dsym_path = macho_dsym_path_from_executable_path(scratch.arena, path);
+            if(dsym_path.size != 0 && file_path_exists(dsym_path))
+            {
+              String8 dsym_data = data_from_file_path(scratch.arena, dsym_path);
+              MachO_Bin dsym_bin = macho_bin_from_data(scratch.arena, dsym_data);
+              MachO_UUID exe_uuid = macho_uuid_from_bin(file_data, &file_bin);
+              MachO_UUID dsym_uuid = macho_uuid_from_bin(dsym_data, &dsym_bin);
+              if(!macho_uuid_is_zero(exe_uuid) &&
+                 macho_uuid_match(exe_uuid, dsym_uuid))
+              {
+                str8_list_push(scratch.arena, &image_dbg_path_candidates, dsym_path);
+              }
+            }
+          }
         }
       }
     }
@@ -4924,6 +5093,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
     {
       str8_list_push(scratch.arena, &dbg_path_candidates, path);
     }
+    str8_list_concat_in_place(&dbg_path_candidates, &image_dbg_path_candidates);
     if(pdb_dbg_path.size != 0)
     {
       str8_list_pushf(scratch.arena, &dbg_path_candidates, "%S/%S", exe_folder, pdb_dbg_path);
@@ -5413,17 +5583,20 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
       out_evt1->string     = module_path;
       out_evt1->tls_index  = event->tls_index;
       out_evt1->tls_offset = event->tls_offset;
-      D_Event *out_evt2 = d_event_list_push(scratch.arena, &evts);
       String8 initial_debug_info_path = d_initial_debug_info_path_from_module(scratch.arena, module_handle);
-      U64 debug_info_timestamp = properties_from_file_path(initial_debug_info_path).modified;
-      out_evt2->kind       = D_EventKind_ModuleDebugInfoPathChange;
-      out_evt2->msg_id     = msg->msg_id;
-      out_evt2->entity     = module_handle;
-      out_evt2->parent     = process_handle;
-      out_evt2->timestamp  = debug_info_timestamp;
-      out_evt2->string     = initial_debug_info_path;
-      DI_Key initial_dbgi_key = di_key_from_path_timestamp(initial_debug_info_path, debug_info_timestamp);
-      di_open(initial_dbgi_key);
+      if(initial_debug_info_path.size != 0)
+      {
+        D_Event *out_evt2 = d_event_list_push(scratch.arena, &evts);
+        U64 debug_info_timestamp = properties_from_file_path(initial_debug_info_path).modified;
+        out_evt2->kind       = D_EventKind_ModuleDebugInfoPathChange;
+        out_evt2->msg_id     = msg->msg_id;
+        out_evt2->entity     = module_handle;
+        out_evt2->parent     = process_handle;
+        out_evt2->timestamp  = debug_info_timestamp;
+        out_evt2->string     = initial_debug_info_path;
+        DI_Key initial_dbgi_key = di_key_from_path_timestamp(initial_debug_info_path, debug_info_timestamp);
+        di_open(initial_dbgi_key);
+      }
     }break;
     case DMN_EventKind_ExitProcess:
     {
@@ -5645,6 +5818,7 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
         {
           if(mod->kind != D_EntityKind_Module) { continue; }
           DI_Key dbgi_key = d_dbgi_key_from_module(mod);
+          B32 dbgi_key_is_good = !di_key_match(dbgi_key, di_key_zero());
           
           //- rjf: try to obtain this module's RDI
           RDI_Parsed *rdi = di_rdi_from_key(scope->access, dbgi_key, 0, 0);
@@ -5655,6 +5829,10 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
           //
           B32 rdi_is_necessary = 1;
           if(user_bps->count == 0)
+          {
+            rdi_is_necessary = 0;
+          }
+          else if(!dbgi_key_is_good)
           {
             rdi_is_necessary = 0;
           }
@@ -6263,11 +6441,14 @@ d_ctrl_thread__open_crash_dump(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
     Rng1U64 vaddr_range = dump_modules[idx].vaddr_range;
     d_ctrl_thread__module_open(process, module_handle, vaddr_range, dump_modules[idx].path, r1u64(0, 0), 0);
     
-    // rjf: open debug info
     String8 initial_debug_info_path = d_initial_debug_info_path_from_module(scratch.arena, module_handle);
-    U64 debug_info_timestamp = properties_from_file_path(initial_debug_info_path).modified;
-    DI_Key initial_dbgi_key = di_key_from_path_timestamp(initial_debug_info_path, debug_info_timestamp);
-    di_open(initial_dbgi_key);
+    U64 debug_info_timestamp = 0;
+    if(initial_debug_info_path.size != 0)
+    {
+      debug_info_timestamp = properties_from_file_path(initial_debug_info_path).modified;
+      DI_Key initial_dbgi_key = di_key_from_path_timestamp(initial_debug_info_path, debug_info_timestamp);
+      di_open(initial_dbgi_key);
+    }
     
     // rjf: push module load event
     {
@@ -6284,6 +6465,7 @@ d_ctrl_thread__open_crash_dump(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
     }
     
     // rjf: push debug info initial path set event
+    if(initial_debug_info_path.size != 0)
     {
       D_Event *evt = d_event_list_push(scratch.arena, &evts);
       evt->kind       = D_EventKind_ModuleDebugInfoPathChange;

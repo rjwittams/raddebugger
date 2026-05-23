@@ -341,9 +341,7 @@ rd_code_view_build(Arena *arena, RD_CodeViewState *cv, RD_CodeViewBuildFlags fla
     if(!dasm_lines) ProfScope("find all src -> dasm info for source code")
     {
       String8 file_path = rd_regs()->file_path;
-      D_Entity *module = d_entity_from_handle(rd_regs()->module);
-      DI_Key dbgi_key = d_dbgi_key_from_module(module);
-      D_LineListArray lines_array = d_lines_array_from_dbgi_key_file_path_line_range(scratch.arena, dbgi_key, file_path, visible_line_num_range, 8);
+      D_LineListArray lines_array = d_lines_array_from_file_path_line_range(scratch.arena, file_path, visible_line_num_range, 8);
       if(lines_array.count != 0)
       {
         MemoryCopy(code_slice_params.line_infos, lines_array.v, sizeof(D_LineList)*lines_array.count);
@@ -2229,9 +2227,7 @@ RD_VIEW_UI_FUNCTION_DEF(text)
   //
   if(rd_regs()->file_path.size != 0)
   {
-    D_Entity *module = d_entity_from_handle(rd_regs()->module);
-    DI_Key dbgi_key = d_dbgi_key_from_module(module);
-    rd_regs()->lines = d_lines_from_dbgi_key_file_path_line_num(rd_frame_arena(), dbgi_key, rd_regs()->file_path, rd_regs()->cursor.line, 8);
+    rd_regs()->lines = d_lines_from_file_path_line_num(rd_frame_arena(), rd_regs()->file_path, rd_regs()->cursor.line, 8);
   }
   
   //////////////////////////////
@@ -2445,8 +2441,9 @@ RD_VIEW_UI_FUNCTION_DEF(disasm)
     else
     {
       auto_selected = 1;
-      auto_space = rd_eval_space_from_ctrl_entity(d_entity_from_handle(rd_regs()->process), D_EvalSpaceKind_Entity);
-      eval = e_eval_from_stringf("(reg:rip & (~(0x4000 - 1)))");
+      D_Entity *process = d_entity_from_handle(rd_regs()->process);
+      auto_space = rd_eval_space_from_ctrl_entity(process, D_EvalSpaceKind_Entity);
+      eval = e_eval_from_stringf("(reg:%S & (~(0x4000 - 1)))", rd_ip_register_name_from_arch(process->arch));
     }
   }
   

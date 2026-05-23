@@ -4830,6 +4830,27 @@ rd_arch_from_eval(E_Eval eval)
   return arch;
 }
 
+internal String8
+rd_ip_register_name_from_arch(Arch arch)
+{
+  if(arch == Arch_Null)
+  {
+    arch = Arch_CURRENT;
+  }
+  String8 result = str8_lit("rip");
+  ARCH_Info *arch_info = arch_info_from_arch(arch);
+  if(arch_info != &arch_info_nil &&
+     arch_info->instruction_pointer_reg_code < arch_info->reg_code_count)
+  {
+    String8 name = arch_info->reg_code_name_table[arch_info->instruction_pointer_reg_code];
+    if(name.size != 0)
+    {
+      result = name;
+    }
+  }
+  return result;
+}
+
 //- rjf: pushing/attaching view resources
 
 internal void *
@@ -12901,9 +12922,23 @@ rd_frame(void)
                   if(module->kind != D_EntityKind_Module) { continue; }
                   String8 module_handle = d_string_from_handle(scratch.arena, module->handle);
                   String8 module_name = module->string.size != 0 ? str8_skip_last_slash(module->string) : str8_lit("???");
+                  D_Entity *debug_info_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
+                  String8 debug_info_path_string = debug_info_path != &d_entity_nil ? debug_info_path->string : str8_zero();
+                  U64 debug_info_timestamp = debug_info_path != &d_entity_nil ? debug_info_path->timestamp : 0;
+                  FileProperties debug_info_props = properties_from_file_path(debug_info_path_string);
+                  DI_Key dbgi_key = d_dbgi_key_from_module(module);
+                  RDI_Parsed *rdi = &rdi_parsed_nil;
+                  Access *access = access_open();
+                  {
+                    rdi = di_rdi_from_key(access, dbgi_key, 0, 0);
+                  }
+                  access_close(access);
                   str8_list_pushf(scratch.arena, &lines, "\n  module#%I64u handle:%S range:[0x%I64x,0x%I64x) name:%S path:%S",
                                   module_idx, module_handle, module->vaddr_range.min, module->vaddr_range.max,
                                   module_name, module->string);
+                  str8_list_pushf(scratch.arena, &lines, " debug_info:{path:%S timestamp:%I64u exists:%u size:%I64u rdi_raw_size:%I64u}",
+                                  debug_info_path_string, debug_info_timestamp, debug_info_props.modified != 0,
+                                  debug_info_props.size, rdi->raw_data_size);
                   module_idx += 1;
                 }
               }
@@ -13034,6 +13069,208 @@ rd_frame(void)
                   str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
                 }
               }
+            }
+            else if(str8_match(cmd_name, str8_lit("dump_selected_context"), 0))
+            {
+              handled = 1;
+              Access *access = access_open();
+              D_Entity *thread = d_entity_from_handle(rd_base_regs()->thread);
+              D_Entity *process = d_entity_from_handle(rd_base_regs()->process);
+              D_Entity *stored_module = d_entity_from_handle(rd_base_regs()->module);
+              U64 unwind_count = rd_base_regs()->unwind_count;
+              U64 inline_depth = rd_base_regs()->inline_depth;
+              U64 frame_ip_vaddr = d_query_cached_rip_from_thread_unwind(thread, unwind_count);
+              D_Entity *frame_module = d_module_from_process_vaddr(process, frame_ip_vaddr);
+              U64 frame_voff = frame_module != &d_entity_nil ? d_voff_from_vaddr(frame_module, frame_ip_vaddr) : 0;
+              DI_Key frame_dbgi_key = d_dbgi_key_from_module(frame_module);
+              D_LineList frame_lines = d_lines_from_dbgi_key_voff(scratch.arena, frame_dbgi_key, frame_voff);
+              String8List lines = {0};
+              str8_list_pushf(scratch.arena, &lines, "thread:%S process:%S unwind:%I64u inline:%I64u",
+                              d_string_from_handle(scratch.arena, rd_base_regs()->thread),
+                              d_string_from_handle(scratch.arena, rd_base_regs()->process),
+                              unwind_count, inline_depth);
+              str8_list_pushf(scratch.arena, &lines, "\nstored_module:%S name:%S range:[0x%I64x,0x%I64x)",
+                              d_string_from_handle(scratch.arena, rd_base_regs()->module),
+                              stored_module != &d_entity_nil ? str8_skip_last_slash(stored_module->string) : str8_lit("???"),
+                              stored_module != &d_entity_nil ? stored_module->vaddr_range.min : 0,
+                              stored_module != &d_entity_nil ? stored_module->vaddr_range.max : 0);
+              str8_list_pushf(scratch.arena, &lines, "\nframe_ip:0x%I64x frame_module:%S name:%S voff:0x%I64x lines:%I64u",
+                              frame_ip_vaddr,
+                              frame_module != &d_entity_nil ? d_string_from_handle(scratch.arena, frame_module->handle) : str8_lit("$0"),
+                              frame_module != &d_entity_nil ? str8_skip_last_slash(frame_module->string) : str8_lit("???"),
+                              frame_voff, frame_lines.count);
+              for(D_LineNode *n = frame_lines.first; n != 0; n = n->next)
+              {
+                str8_list_pushf(scratch.arena, &lines, "\n  line file:%S pt:%I64d:%I64d voff:[0x%I64x,0x%I64x)",
+                                n->v.file_path, n->v.pt.line, n->v.pt.column,
+                                n->v.voff_range.min, n->v.voff_range.max);
+              }
+              String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+              str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+              access_close(access);
+            }
+            else if(str8_match(cmd_name, str8_lit("dump_disasm_views"), 0))
+            {
+              handled = 1;
+              Access *access = access_open();
+              String8List lines = {0};
+              U64 disasm_count = 0;
+              for(RD_WindowState *ws = rd_state->first_window_state; ws != &rd_nil_window_state; ws = ws->order_next)
+              {
+                CFG_Node *window = cfg_node_from_id(ws->cfg_id);
+                CFG_PanelTree panel_tree = cfg_panel_tree_from_cfg(scratch.arena, window);
+                for(CFG_PanelNode *panel = panel_tree.root;
+                    panel != &cfg_nil_panel_node;
+                    panel = cfg_panel_node_rec__depth_first_pre(panel_tree.root, panel).next)
+                {
+                  if(panel->first != &cfg_nil_panel_node) { continue; }
+                  for(CFG_NodePtrNode *tab_n = panel->tabs.first; tab_n != 0; tab_n = tab_n->next)
+                  {
+                    CFG_Node *tab = tab_n->v;
+                    if(rd_cfg_is_project_filtered(tab) || !str8_match(tab->string, str8_lit("disasm"), 0))
+                    {
+                      continue;
+                    }
+                    disasm_count += 1;
+                    RD_RegsScope(.window = ws->cfg_id, .panel = panel->cfg->id, .tab = tab->id, .view = tab->id)
+                    {
+                      String8 expr = rd_expr_from_cfg(tab);
+                      E_Eval eval = e_eval_from_string(expr);
+                      B32 auto_selected = 0;
+                      E_Space auto_space = {0};
+                      if(eval.expr == &e_expr_nil)
+                      {
+                        D_Entity *selected_process = d_entity_from_handle(rd_regs()->process);
+                        auto_selected = 1;
+                        auto_space = rd_eval_space_from_ctrl_entity(selected_process, D_EvalSpaceKind_Entity);
+                        eval = e_eval_from_stringf("(reg:%S & (~(0x4000 - 1)))", rd_ip_register_name_from_arch(selected_process->arch));
+                      }
+                      E_Space space = auto_selected ? auto_space : eval.space;
+                      Rng1U64 range = rd_space_range_from_eval(eval);
+                      Arch arch = rd_arch_from_eval(eval);
+                      D_Entity *space_entity = rd_ctrl_entity_from_eval_space(space);
+                      D_Entity *dasm_module = &d_entity_nil;
+                      DI_Key dbgi_key = {0};
+                      U64 base_vaddr = 0;
+                      if(space_entity->kind == D_EntityKind_Process)
+                      {
+                        if(arch == Arch_Null) { arch = space_entity->arch; }
+                        dasm_module = d_module_from_process_vaddr(space_entity, range.min);
+                        dbgi_key = d_dbgi_key_from_module(dasm_module);
+                        base_vaddr = dasm_module != &d_entity_nil ? dasm_module->vaddr_range.min : 0;
+                      }
+                      C_Key dasm_key = rd_key_from_eval_space_range(space, range, 0);
+                      U128 dasm_data_hash = {0};
+                      DASM_Params dasm_params = {0};
+                      dasm_params.vaddr = range.min;
+                      dasm_params.arch = arch;
+                      dasm_params.base_vaddr = base_vaddr;
+                      dasm_params.dbgi_key = dbgi_key;
+                      DASM_Info dasm_info = dasm_info_from_key_params(access, dasm_key, &dasm_params, &dasm_data_hash);
+                      U128 dasm_text_hash = {0};
+                      TXT_TextInfo dasm_text_info = txt_text_info_from_key_lang(access, dasm_info.text_key, txt_lang_kind_from_arch(arch), &dasm_text_hash);
+                      B32 is_loading = (dasm_text_info.lines_count == 0 && dim_1u64(range) != 0 && eval.msgs.max_kind == E_MsgKind_Null && (space.kind != D_EvalSpaceKind_Entity || space_entity != &d_entity_nil));
+                      B32 has_disasm = (dasm_text_info.lines_count != 0 && dasm_info.lines.count != 0);
+                      str8_list_pushf(scratch.arena, &lines,
+                                      "%Sview#%I64u tab:%I64u selected:%u expr:%S auto:%u range:[0x%I64x,0x%I64x) dim:0x%I64x arch:%S eval_msg:%u space_kind:%u space_entity:%S module:%S module_range:[0x%I64x,0x%I64x) base:0x%I64x text_lines:%I64u dasm_lines:%I64u loading:%u has:%u",
+                                      disasm_count == 1 ? str8_lit("") : str8_lit("\n"),
+                                      disasm_count, tab->id, panel->selected_tab == tab, expr, auto_selected,
+                                      range.min, range.max, dim_1u64(range), string_from_arch(arch),
+                                      eval.msgs.max_kind, space.kind,
+                                      space_entity != &d_entity_nil ? d_string_from_handle(scratch.arena, space_entity->handle) : str8_lit("$0"),
+                                      dasm_module != &d_entity_nil ? str8_skip_last_slash(dasm_module->string) : str8_lit("???"),
+                                      dasm_module != &d_entity_nil ? dasm_module->vaddr_range.min : 0,
+                                      dasm_module != &d_entity_nil ? dasm_module->vaddr_range.max : 0,
+                                      base_vaddr, dasm_text_info.lines_count, dasm_info.lines.count, is_loading, has_disasm);
+                    }
+                  }
+                }
+              }
+              if(disasm_count == 0)
+              {
+                str8_list_push(scratch.arena, &lines, str8_lit("disasm_views:0"));
+              }
+              String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+              str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+              access_close(access);
+            }
+            else if(str8_match(cmd_name, str8_lit("dump_code_views"), 0))
+            {
+              handled = 1;
+              String8List lines = {0};
+              D_Entity *selected_thread = d_entity_from_handle(rd_base_regs()->thread);
+              D_Entity *selected_process = d_entity_ancestor_from_kind(selected_thread, D_EntityKind_Process);
+              D_Entity *selected_module = d_entity_from_handle(rd_base_regs()->module);
+              DI_Key selected_dbgi_key = d_dbgi_key_from_module(selected_module);
+              str8_list_pushf(scratch.arena, &lines, "selected_thread:%S selected_process:%S selected_module:%S name:%S",
+                              d_string_from_handle(scratch.arena, rd_base_regs()->thread),
+                              selected_process != &d_entity_nil ? d_string_from_handle(scratch.arena, selected_process->handle) : str8_lit("$0"),
+                              selected_module != &d_entity_nil ? d_string_from_handle(scratch.arena, selected_module->handle) : str8_lit("$0"),
+                              selected_module != &d_entity_nil ? str8_skip_last_slash(selected_module->string) : str8_lit("???"));
+              for(RD_WindowState *ws = rd_state->first_window_state; ws != &rd_nil_window_state; ws = ws->order_next)
+              {
+                CFG_Node *window = cfg_node_from_id(ws->cfg_id);
+                CFG_PanelTree panel_tree = cfg_panel_tree_from_cfg(scratch.arena, window);
+                for(CFG_PanelNode *panel = panel_tree.root;
+                    panel != &cfg_nil_panel_node;
+                    panel = cfg_panel_node_rec__depth_first_pre(panel_tree.root, panel).next)
+                {
+                  if(panel->first != &cfg_nil_panel_node) { continue; }
+                  for(CFG_NodePtrNode *tab_n = panel->tabs.first; tab_n != 0; tab_n = tab_n->next)
+                  {
+                    CFG_Node *tab = tab_n->v;
+                    if(rd_cfg_is_project_filtered(tab)) { continue; }
+                    if(!(str8_match(tab->string, str8_lit("text"), 0) ||
+                         str8_match(tab->string, str8_lit("pending"), 0) ||
+                         str8_match(tab->string, str8_lit("disasm"), 0)))
+                    {
+                      continue;
+                    }
+                    RD_RegsScope(.window = ws->cfg_id, .panel = panel->cfg->id, .tab = tab->id, .view = tab->id)
+                    {
+                      String8 expr = rd_expr_from_cfg(tab);
+                      B32 panel_focused = (panel == panel_tree.focused);
+                      B32 tab_selected = (panel->selected_tab == tab);
+                      str8_list_pushf(scratch.arena, &lines, "\nwindow:%I64u panel:%I64u focused:%u tab:%I64u kind:%S selected:%u expr:%S",
+                                      ws->cfg_id, panel->cfg->id, panel_focused, tab->id, tab->string, tab_selected, expr);
+                      if(str8_match(tab->string, str8_lit("text"), 0) || str8_match(tab->string, str8_lit("pending"), 0))
+                      {
+                        String8 file_path = rd_file_path_from_eval_string(scratch.arena, expr);
+                        S64 cursor_line = rd_view_setting_value_from_name(str8_lit("cursor_line")).s64;
+                        S64 cursor_column = rd_view_setting_value_from_name(str8_lit("cursor_column")).s64;
+                        if(cursor_line == 0) { cursor_line = 1; }
+                        if(cursor_column == 0) { cursor_column = 1; }
+                        D_LineList selected_lines = d_lines_from_dbgi_key_file_path_line_num(scratch.arena, selected_dbgi_key, file_path, cursor_line, 8);
+                        D_LineList all_lines = d_lines_from_file_path_line_num(scratch.arena, file_path, cursor_line, 8);
+                        U64 first_vaddr = 0;
+                        String8 first_module_name = str8_lit("???");
+                        if(all_lines.first != 0)
+                        {
+                          D_EntityList modules = d_modules_from_dbgi_key(scratch.arena, all_lines.first->v.dbgi_key);
+                          D_Entity *module = d_module_from_thread_candidates(selected_thread, &modules);
+                          if(module != &d_entity_nil)
+                          {
+                            first_vaddr = d_vaddr_from_voff(module, all_lines.first->v.voff_range.min);
+                            first_module_name = str8_skip_last_slash(module->string);
+                          }
+                        }
+                        str8_list_pushf(scratch.arena, &lines,
+                                        " file:%S cursor:%I64d:%I64d selected_module_lines:%I64u all_lines:%I64u first_vaddr:0x%I64x first_module:%S",
+                                        file_path, cursor_line, cursor_column, selected_lines.count, all_lines.count,
+                                        first_vaddr, first_module_name);
+                        for(D_LineNode *n = all_lines.first; n != 0; n = n->next)
+                        {
+                          str8_list_pushf(scratch.arena, &lines, "\n  line file:%S pt:%I64d:%I64d voff:[0x%I64x,0x%I64x)",
+                                          n->v.file_path, n->v.pt.line, n->v.pt.column,
+                                          n->v.voff_range.min, n->v.voff_range.max);
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+              String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+              str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
             }
             else if(str8_match(cmd_name, str8_lit("dump_output"), 0))
             {
@@ -16797,8 +17034,13 @@ rd_frame(void)
             }
             if(frame)
             {
+              ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
+              D_Entity *process = d_entity_ancestor_from_kind(thread, D_EntityKind_Process);
+              U64 frame_ip_vaddr = arch_ip_from_reg_block(arch_info, frame->regs);
+              D_Entity *module = d_module_from_process_vaddr(process, frame_ip_vaddr);
               rd_state->base_regs.v.unwind_count = rd_regs()->unwind_count;
               rd_state->base_regs.v.inline_depth = rd_regs()->inline_depth;
+              rd_state->base_regs.v.module = module->handle;
             }
             rd_cmd(RD_CmdKind_FindThread, .thread = thread->handle, .unwind_count = rd_state->base_regs.v.unwind_count, .inline_depth = rd_state->base_regs.v.inline_depth);
             access_close(access);
