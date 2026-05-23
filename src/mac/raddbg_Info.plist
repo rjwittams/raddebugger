@@ -10,6 +10,8 @@
   <string>raddbg</string>
   <key>CFBundleIdentifier</key>
   <string>com.radgametools.raddbg</string>
+  <key>CFBundleIconFile</key>
+  <string>raddbg</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
