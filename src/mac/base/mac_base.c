@@ -2,7 +2,7 @@
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
 ////////////////////////////////
-//~ rjf: Helpers
+//~ Helpers
 
 internal DateTime
 mac_date_time_from_tm(tm in, U32 msec)
@@ -88,7 +88,7 @@ mac_safe_call_sig_handler(int x)
 }
 
 ////////////////////////////////
-//~ rjf: Entities
+//~ Entities
 
 internal MAC_Entity *
 mac_entity_alloc(MAC_EntityKind kind)
@@ -123,7 +123,7 @@ mac_entity_release(MAC_Entity *entity)
 }
 
 ////////////////////////////////
-//~ rjf: Thread Entry Point
+//~ Thread Entry Point
 
 internal void *
 mac_thread_entry_point(void *ptr)
@@ -136,7 +136,7 @@ mac_thread_entry_point(void *ptr)
 }
 
 ////////////////////////////////
-//~ rjf: @per_os_impl Platform Time Functions
+//~ @per_os_impl Platform Time Functions
 
 internal U64
 now_time_us(void)
@@ -168,12 +168,12 @@ now_time_universal(void)
 internal DateTime
 universal_from_local_time(DateTime *dt)
 {
-  // rjf: local DateTime -> universal time_t
+  // local DateTime -> universal time_t
   tm local_tm = mac_tm_from_date_time(*dt);
   local_tm.tm_isdst = -1;
   time_t universal_t = mktime(&local_tm);
-  
-  // rjf: universal time_t -> DateTime
+
+  // universal time_t -> DateTime
   tm universal_tm = {0};
   gmtime_r(&universal_t, &universal_tm);
   DateTime result = mac_date_time_from_tm(universal_tm, 0);
@@ -183,14 +183,14 @@ universal_from_local_time(DateTime *dt)
 internal DateTime
 local_from_universal_time(DateTime *dt)
 {
-  // rjf: universal DateTime -> local time_t
+  // universal DateTime -> local time_t
   tm universal_tm = mac_tm_from_date_time(*dt);
   universal_tm.tm_isdst = -1;
   time_t universal_t = timegm(&universal_tm);
   tm local_tm = {0};
   localtime_r(&universal_t, &local_tm);
-  
-  // rjf: local tm -> DateTime
+
+  // local tm -> DateTime
   DateTime result = mac_date_time_from_tm(local_tm, 0);
   return result;
 }
@@ -202,7 +202,7 @@ sleep_ms(U32 ms)
 }
 
 ////////////////////////////////
-//~ rjf: @per_os_impl Platform GUID Functions
+//~ @per_os_impl Platform GUID Functions
 
 internal Guid
 make_guid(void)
@@ -217,9 +217,9 @@ make_guid(void)
 }
 
 ////////////////////////////////
-//~ rjf: @per_os_impl Platform Memory Allocation
+//~ @per_os_impl Platform Memory Allocation
 
-//- rjf: basic
+//- basic
 
 internal void *
 reserve_memory(U64 size)
@@ -252,7 +252,7 @@ release_memory(void *ptr, U64 size)
   munmap(ptr, size);
 }
 
-//- rjf: large pages
+//- large pages
 
 internal void *
 reserve_memory_large(U64 size)
@@ -273,7 +273,7 @@ commit_memory_large(void *ptr, U64 size)
 }
 
 ////////////////////////////////
-//~ rjf: @os_hooks Shared Memory
+//~ @os_hooks Shared Memory
 
 internal SharedMemory
 shared_memory_alloc(U64 size, String8 name)
@@ -334,7 +334,7 @@ shared_memory_view_close(SharedMemory handle, void *ptr, Rng1U64 range)
 }
 
 ////////////////////////////////
-//~ rjf: @per_os_impl System Info
+//~ @per_os_impl System Info
 
 internal SystemInfo *
 get_system_info(void)
@@ -343,7 +343,7 @@ get_system_info(void)
 }
 
 ////////////////////////////////
-//~ rjf: @per_os_impl Current Thread Info
+//~ @per_os_impl Current Thread Info
 
 internal U32
 tid(void)
@@ -364,7 +364,7 @@ set_platform_thread_name(String8 name)
 }
 
 ////////////////////////////////
-//~ rjf: @per_os_impl Thread Functions
+//~ @per_os_impl Thread Functions
 
 internal Thread
 thread_launch(ThreadEntryPointFunctionType *f, void *p)
@@ -404,9 +404,9 @@ thread_detach(Thread thread)
 }
 
 ////////////////////////////////
-//~ rjf: @per_os_impl Synchronization Primitive Functions
+//~ @per_os_impl Synchronization Primitive Functions
 
-//- rjf: recursive mutexes
+//- recursive mutexes
 
 internal Mutex
 mutex_alloc(void)
@@ -447,7 +447,7 @@ mutex_drop(Mutex mutex)
   pthread_mutex_unlock(&entity->mutex_handle);
 }
 
-//- rjf: reader/writer mutexes
+//- reader/writer mutexes
 
 internal RWMutex
 rw_mutex_alloc(void)
@@ -495,7 +495,7 @@ rw_mutex_drop(RWMutex mutex, B32 write_mode)
   pthread_rwlock_unlock(&entity->rwmutex_handle);
 }
 
-//- rjf: condition variables
+//- condition variables
 
 internal CondVar
 cond_var_alloc(void)
@@ -550,7 +550,7 @@ cond_var_wait(CondVar cv, Mutex mutex, U64 endt_us)
 internal B32
 cond_var_wait_rw(CondVar cv, RWMutex mutex_rw, B32 write_mode, U64 endt_us)
 {
-  // TODO(rjf): because pthread does not supply cv/rw natively, I had to hack
+  // TODO: because pthread does not supply cv/rw natively, I had to hack
   // this together, but this would probably just be a lot better if we just
   // implemented the primitives ourselves with e.g. futexes
   //
@@ -613,7 +613,7 @@ cond_var_broadcast(CondVar cv)
   pthread_cond_broadcast(&cv_entity->cv.cond_handle);
 }
 
-//- rjf: cross-process semaphores
+//- cross-process semaphores
 
 internal Semaphore
 semaphore_alloc(U32 initial_count, U32 max_count, String8 name)
@@ -685,7 +685,7 @@ semaphore_close(Semaphore semaphore)
 internal B32
 semaphore_take(Semaphore semaphore, U64 endt_us)
 {
-  // TODO(rjf): we need to use `sem_timedwait` here.
+  // TODO: we need to use `sem_timedwait` here.
   AssertAlways(endt_us == max_U64);
   for(;;)
   {
@@ -724,7 +724,7 @@ semaphore_drop(Semaphore semaphore)
   }
 }
 
-//- rjf: barriers
+//- barriers
 
 internal Barrier
 barrier_alloc(U64 count)
@@ -779,18 +779,18 @@ barrier_wait(Barrier barrier)
 }
 
 ////////////////////////////////
-//~ rjf: @per_os_impl Safe Calls
+//~ @per_os_impl Safe Calls
 
 internal void
 safe_call(ThreadEntryPointFunctionType *func, ThreadEntryPointFunctionType *fail_handler, void *ptr)
 {
-  // rjf: push handler to chain
+  // push handler to chain
   MAC_SafeCallChain chain = {0};
   SLLStackPush(mac_safe_call_chain, &chain);
   chain.fail_handler = fail_handler;
   chain.ptr = ptr;
-  
-  // rjf: set up sig handler info
+
+  // set up sig handler info
   struct sigaction new_act = {0};
   new_act.sa_handler = mac_safe_call_sig_handler;
   int signals_to_handle[] =
@@ -798,17 +798,17 @@ safe_call(ThreadEntryPointFunctionType *func, ThreadEntryPointFunctionType *fail
     SIGILL, SIGFPE, SIGSEGV, SIGBUS, SIGTRAP,
   };
   struct sigaction og_act[ArrayCount(signals_to_handle)] = {0};
-  
-  // rjf: attach handler info for all signals
+
+  // attach handler info for all signals
   for(U32 i = 0; i < ArrayCount(signals_to_handle); i += 1)
   {
     sigaction(signals_to_handle[i], &new_act, &og_act[i]);
   }
-  
-  // rjf: call function
+
+  // call function
   func(ptr);
-  
-  // rjf: reset handler info for all signals
+
+  // reset handler info for all signals
   for(U32 i = 0; i < ArrayCount(signals_to_handle); i += 1)
   {
     sigaction(signals_to_handle[i], &og_act[i], 0);
@@ -816,9 +816,9 @@ safe_call(ThreadEntryPointFunctionType *func, ThreadEntryPointFunctionType *fail
 }
 
 ////////////////////////////////
-//~ rjf: @per_os_impl File System (Implemented Per-OS)
+//~ @per_os_impl File System (Implemented Per-OS)
 
-//- rjf: files
+//- files
 
 internal File
 file_open(AccessFlags flags, String8 path)
@@ -1081,7 +1081,7 @@ properties_from_file_path(String8 path)
   return props;
 }
 
-//- rjf: file maps
+//- file maps
 
 internal FileMap
 file_map_open(AccessFlags flags, File file)
@@ -1093,7 +1093,7 @@ file_map_open(AccessFlags flags, File file)
 internal void
 file_map_close(FileMap map)
 {
-  // NOTE(rjf): nothing to do; `map` handles are the same as `file` handles in
+  // NOTE: nothing to do; `map` handles are the same as `file` handles in
   // the mac implementation (on Windows they require separate handles)
 }
 
@@ -1120,7 +1120,7 @@ file_map_view_close(FileMap map, void *ptr, Rng1U64 range)
   munmap(ptr, dim_1u64(range));
 }
 
-//- rjf: directory iteration
+//- directory iteration
 
 internal FileIter *
 file_iter_begin(Arena *arena, String8 path, FileIterFlags flags)
@@ -1143,11 +1143,11 @@ file_iter_next(Arena *arena, FileIter *iter, FileInfo *info_out)
   MAC_FileIter *mac_iter = (MAC_FileIter *)iter->memory;
   for(;mac_iter->dir != 0;)
   {
-    // rjf: get next entry
+    // get next entry
     mac_iter->dp = readdir(mac_iter->dir);
     good = (mac_iter->dp != 0);
-    
-    // rjf: unpack entry info
+
+    // unpack entry info
     struct stat st = {0};
     int stat_result = 0;
     if(good)
@@ -1157,8 +1157,8 @@ file_iter_next(Arena *arena, FileIter *iter, FileInfo *info_out)
       stat_result = stat((char *)full_path.str, &st);
       scratch_end(scratch);
     }
-    
-    // rjf: determine if filtered
+
+    // determine if filtered
     B32 filtered = 0;
     if(good)
     {
@@ -1167,8 +1167,8 @@ file_iter_next(Arena *arena, FileIter *iter, FileInfo *info_out)
                   (mac_iter->dp->d_name[0] == '.' && mac_iter->dp->d_name[1] == 0) ||
                   (mac_iter->dp->d_name[0] == '.' && mac_iter->dp->d_name[1] == '.' && mac_iter->dp->d_name[2] == 0));
     }
-    
-    // rjf: output & exit, if good & unfiltered
+
+    // output & exit, if good & unfiltered
     if(good && !filtered)
     {
       info_out->name = push_str8_copy(arena, str8_cstring(mac_iter->dp->d_name));
@@ -1178,8 +1178,8 @@ file_iter_next(Arena *arena, FileIter *iter, FileInfo *info_out)
       }
       break;
     }
-    
-    // rjf: exit if not good
+
+    // exit if not good
     if(!good)
     {
       break;
@@ -1198,7 +1198,7 @@ file_iter_end(FileIter *iter)
   }
 }
 
-//- rjf: directory creation
+//- directory creation
 
 internal B32
 make_directory(String8 path)
@@ -1215,7 +1215,7 @@ make_directory(String8 path)
 }
 
 ////////////////////////////////
-//~ rjf: @per_os_impl Aborting
+//~ @per_os_impl Aborting
 
 internal void
 abort_self(S32 exit_code)
@@ -1224,7 +1224,7 @@ abort_self(S32 exit_code)
 }
 
 ////////////////////////////////
-//~ rjf: @per_os_impl Process Info
+//~ @per_os_impl Process Info
 
 internal ProcessInfo *
 get_process_info(void)
@@ -1248,7 +1248,7 @@ get_process_start_time_unix(void)
 }
 
 ////////////////////////////////
-//~ rjf: @per_os_impl Child Processes
+//~ @per_os_impl Child Processes
 
 internal Process
 process_launch(ProcessLaunchParams *params)
@@ -1266,7 +1266,7 @@ process_launch(ProcessLaunchParams *params)
     if(attr_init_code == 0)
     {
       Temp scratch = scratch_begin(0, 0);
-      
+
       // package argv
       char **argv = push_array(scratch.arena, char *, params->cmd_line.node_count + 1);
       {
@@ -1281,7 +1281,7 @@ process_launch(ProcessLaunchParams *params)
           arg_idx += 1;
         }
       }
-      
+
       // package envp
       char **envp = 0;
       if(params->inherit_env)
@@ -1298,7 +1298,7 @@ process_launch(ProcessLaunchParams *params)
           env_idx += 1;
         }
       }
-      
+
       // spawn process
       pid_t pid = 0;
       int spawn_code = posix_spawn(&pid, argv[0], &file_actions, &attr, argv, envp);
@@ -1306,12 +1306,12 @@ process_launch(ProcessLaunchParams *params)
       {
         handle.u64[0] = (U64)pid;
       }
-      
+
       // clean up attributes
       int attr_destroy_code = posix_spawnattr_destroy(&attr);
       scratch_end(scratch);
     }
-    
+
     // clean up file actions
     int file_actions_destroy_code = posix_spawn_file_actions_destroy(&file_actions);
   }
@@ -1374,7 +1374,7 @@ process_kill(Process process)
 }
 
 ////////////////////////////////
-//~ rjf: @per_os_impl Dynamically-Loaded Libraries
+//~ @per_os_impl Dynamically-Loaded Libraries
 
 internal Library
 library_open(String8 path)
@@ -1406,7 +1406,7 @@ library_load_proc(Library lib, String8 name)
 }
 
 ////////////////////////////////
-//~ rjf: Entry Point
+//~ Entry Point
 
 internal void
 mac_signal_handler(int sig, siginfo_t *info, void *arg)
@@ -1419,10 +1419,10 @@ mac_signal_handler(int sig, siginfo_t *info, void *arg)
       sleep(UINT32_MAX);
     }
   }
-  
+
   local_persist void *ips[4096];
   int ips_count = backtrace(ips, ArrayCount(ips));
-  
+
   fprintf(stderr, "A fatal signal was received: %s (%d). The process is terminating.\n", strsignal(sig), sig);
   fprintf(stderr, "Create a new issue with this report at %s.\n\n", BUILD_ISSUES_LINK_STRING_LITERAL);
   fprintf(stderr, "Callstack:\n");
@@ -1430,7 +1430,7 @@ mac_signal_handler(int sig, siginfo_t *info, void *arg)
   {
     Dl_info info = {0};
     dladdr(ips[i], &info);
-    
+
     char cmd[2048];
     snprintf(cmd, sizeof(cmd), "llvm-symbolizer --relative-address -f -e %s %lu", info.dli_fname, (unsigned long)ips[i] - (unsigned long)info.dli_fbase);
     FILE *f = popen(cmd, "r");
@@ -1444,12 +1444,12 @@ mac_signal_handler(int sig, siginfo_t *info, void *arg)
         String8 module = str8_skip_last_slash(str8_cstring(info.dli_fname));
         String8 file   = str8_skip_last_slash(str8_cstring_capped(file_name, file_name + sizeof(file_name)));
         if(file.size > 0) file.size -= 1;
-        
+
         B32 no_func = str8_match(func, str8_lit("??"), StringMatchFlag_RightSideSloppy);
         B32 no_file = str8_match(file, str8_lit("??"), StringMatchFlag_RightSideSloppy);
         if(no_func) { func = str8_zero(); }
         if(no_file) { file = str8_zero(); }
-        
+
         fprintf(stderr, "%llu. [0x%016lx] %.*s%s%.*s %.*s\n", i+1, (unsigned long)ips[i], (int)module.size, module.str, (!no_func || !no_file) ? ", " : "", (int)func.size, func.str, (int)file.size, file.str);
       }
       pclose(f);
@@ -1460,7 +1460,7 @@ mac_signal_handler(int sig, siginfo_t *info, void *arg)
     }
   }
   fprintf(stderr, "\nVersion: %s%s\n\n", BUILD_VERSION_STRING_LITERAL, BUILD_GIT_HASH_STRING_LITERAL_APPEND);
-  
+
   _exit(1);
 }
 
@@ -1479,10 +1479,10 @@ main(int argc, char **argv)
     sigaction(SIGSEGV, &handler, NULL);
     sigaction(SIGQUIT, &handler, NULL);
   }
-  
-  //- rjf: set up OS layer
+
+  //- set up OS layer
   {
-    //- rjf: get statically-allocated system/process info
+    //- get statically-allocated system/process info
     {
       SystemInfo *info = &mac_state.system_info;
       info->logical_processor_count = (U32)sysconf(_SC_NPROCESSORS_ONLN);
@@ -1494,16 +1494,16 @@ main(int argc, char **argv)
       ProcessInfo *info = &mac_state.process_info;
       info->pid = (U32)getpid();
     }
-    
-    //- rjf: set up thread context
+
+    //- set up thread context
     TCTX *tctx = tctx_alloc();
     tctx_select(tctx);
-    
-    //- rjf: set up dynamically allocated state
+
+    //- set up dynamically allocated state
     mac_state.arena = arena_alloc();
     mac_state.entity_arena = arena_alloc();
     pthread_mutex_init(&mac_state.entity_mutex, 0);
-    
+
     // cache default environment
     {
       U64 env_count = 0;
@@ -1517,13 +1517,13 @@ main(int argc, char **argv)
       mac_state.default_env_count = env_count;
       mac_state.default_env       = default_env;
     }
-    
-    //- rjf: grab dynamically allocated system info
+
+    //- grab dynamically allocated system info
     {
       Temp scratch = scratch_begin(0, 0);
       SystemInfo *info = &mac_state.system_info;
-      
-      // rjf: get machine name
+
+      // get machine name
       B32 got_final_result = 0;
       U8 *buffer = 0;
       int size = 0;
@@ -1539,8 +1539,8 @@ main(int argc, char **argv)
           break;
         }
       }
-      
-      // rjf: save name to info
+
+      // save name to info
       if(got_final_result && size > 0)
       {
         info->machine_name.size = size;
@@ -1548,18 +1548,18 @@ main(int argc, char **argv)
         MemoryCopy(info->machine_name.str, buffer, info->machine_name.size);
         info->machine_name.str[info->machine_name.size] = 0;
       }
-      
+
       scratch_end(scratch);
     }
-    
-    //- rjf: grab dynamically allocated process info
+
+    //- grab dynamically allocated process info
     {
       Temp scratch = scratch_begin(0, 0);
       ProcessInfo *info = &mac_state.process_info;
-      
-      // rjf: grab binary path
+
+      // grab binary path
       {
-        // rjf: get self string
+        // get self string
         B32 got_final_result = 0;
         U8 *buffer = 0;
         int size = 0;
@@ -1576,8 +1576,8 @@ main(int argc, char **argv)
             break;
           }
         }
-        
-        // rjf: save
+
+        // save
         if(got_final_result && size > 0)
         {
           String8 full_name = str8(buffer, size);
@@ -1585,22 +1585,22 @@ main(int argc, char **argv)
           info->binary_path = push_str8_copy(mac_state.arena, name_chopped);
         }
       }
-      
-      // rjf: grab initial directory
+
+      // grab initial directory
       {
         info->initial_path = get_current_path(mac_state.arena);
       }
-      
-      // rjf: grab home directory
+
+      // grab home directory
       {
         char *home = getenv("HOME");
         info->user_program_data_path = str8_cstring(home);
       }
-      
+
       scratch_end(scratch);
     }
   }
-  
-  //- rjf: call into "real" entry point
+
+  //- call into "real" entry point
   main_thread_base_entry_point(argc, argv);
 }
