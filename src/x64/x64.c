@@ -7,7 +7,7 @@
 #include "x64/generated/x64.meta.c"
 
 ////////////////////////////////
-//~ rjf: Includes
+//~ Includes
 
 #if (COMPILER_CLANG || COMPILER_GCC) && ARCH_X64
 # include <cpuid.h>
