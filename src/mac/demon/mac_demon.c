@@ -706,46 +706,56 @@ internal B32
 mac_dmn_process_stop_for_detach(MAC_DMN_Process *process)
 {
   B32 result = 1;
-  if(process != 0 && process->is_running)
+  if(process != 0)
   {
-    result = 0;
-    kill(process->pid, SIGSTOP);
-    if(process->uses_mach_exceptions)
+    S32 pending_signal = mac_dmn_soft_signal_from_exception_message(&process->pending_exception);
+    if(process->pending_exception.is_valid && pending_signal != SIGSTOP)
     {
-      for(U64 attempt = 0; attempt < 500; attempt += 1)
+      mac_dmn_process_reply_pending_exception(process, 0);
+      ptrace(PT_CONTINUE, process->pid, (caddr_t)1, 0);
+      process->is_running = 1;
+    }
+    if(process->is_running)
+    {
+      result = 0;
+      kill(process->pid, SIGSTOP);
+      if(process->uses_mach_exceptions)
       {
-        MAC_DMN_ExceptionMessage exception_message = {0};
-        if(mac_dmn_exception_message_receive(&exception_message, 10))
+        for(U64 attempt = 0; attempt < 500; attempt += 1)
         {
-          MAC_DMN_Entity *entity = mac_dmn_process_entity_from_exception_port(exception_message.request.hdr.msgh_local_port);
-          if(entity != 0 && &entity->process == process)
+          MAC_DMN_ExceptionMessage exception_message = {0};
+          if(mac_dmn_exception_message_receive(&exception_message, 10))
           {
-            process->pending_exception = exception_message;
-            S32 signo = mac_dmn_soft_signal_from_exception_message(&process->pending_exception);
-            result = (signo == SIGSTOP || signo == 0);
-            break;
-          }
-          else if(entity != 0 && !entity->process.pending_exception.is_valid)
-          {
-            entity->process.pending_exception = exception_message;
+            MAC_DMN_Entity *entity = mac_dmn_process_entity_from_exception_port(exception_message.request.hdr.msgh_local_port);
+            if(entity != 0 && &entity->process == process)
+            {
+              process->pending_exception = exception_message;
+              S32 signo = mac_dmn_soft_signal_from_exception_message(&process->pending_exception);
+              result = (signo == SIGSTOP || signo == 0);
+              break;
+            }
+            else if(entity != 0 && !entity->process.pending_exception.is_valid)
+            {
+              entity->process.pending_exception = exception_message;
+            }
           }
         }
       }
-    }
-    else
-    {
-      int status = 0;
-      pid_t wait_id = 0;
-      do
+      else
       {
-        wait_id = waitpid(process->pid, &status, 0);
+        int status = 0;
+        pid_t wait_id = 0;
+        do
+        {
+          wait_id = waitpid(process->pid, &status, 0);
+        }
+        while(wait_id < 0 && errno == EINTR);
+        result = (wait_id == process->pid && WIFSTOPPED(status));
       }
-      while(wait_id < 0 && errno == EINTR);
-      result = (wait_id == process->pid && WIFSTOPPED(status));
-    }
-    if(result)
-    {
-      process->is_running = 0;
+      if(result)
+      {
+        process->is_running = 0;
+      }
     }
   }
   return result;
