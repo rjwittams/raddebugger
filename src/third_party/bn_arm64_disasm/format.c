@@ -455,7 +455,7 @@ uint32_t get_indexed_element(const InstructionOperand *operand, char *outBuffer,
 		get_register_name(operand->reg[1]),
 		optional_comma_and
 	  ) >= outBufferSize)
-	  	return FAILED_TO_DISASSEMBLE_OPERAND;
+		return FAILED_TO_DISASSEMBLE_OPERAND;
 
 	return DISASM_SUCCESS;
 }

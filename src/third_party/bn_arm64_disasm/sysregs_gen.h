@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 
-enum SystemReg 
+enum SystemReg
 {
 	SYSREG_NONE=0,
 	REG_EDSCR                      =4 /* 4 */,  // S0_0_c0_c0_4 at min EL0: EDSCR
