@@ -307,8 +307,8 @@ dasm_artifact_create(String8 key, B32 *cancel_signal, B32 *retry_out, U64 *gen_o
                 U64 endt_us = max_U64;
                 U128 hash = {0};
                 TXT_TextInfo text_info = txt_text_info_from_key_lang(access, key, lang_kind, &hash);
-                stale = (stale || u128_match(hash, u128_zero()));
-                if(0 < line->line_num && line->line_num < text_info.lines_count)
+                if(!u128_match(hash, u128_zero()) &&
+                   0 < line->line_num && line->line_num <= text_info.lines_count)
                 {
                   String8 data = c_data_from_hash(access, hash);
                   String8 line_text = str8_skip_chop_whitespace(str8_substr(data, text_info.lines_ranges[line->line_num-1]));

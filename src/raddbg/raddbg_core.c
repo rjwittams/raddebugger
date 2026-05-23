@@ -17034,8 +17034,13 @@ rd_frame(void)
             }
             if(frame)
             {
+              ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
+              D_Entity *process = d_entity_ancestor_from_kind(thread, D_EntityKind_Process);
+              U64 frame_ip_vaddr = arch_ip_from_reg_block(arch_info, frame->regs);
+              D_Entity *module = d_module_from_process_vaddr(process, frame_ip_vaddr);
               rd_state->base_regs.v.unwind_count = rd_regs()->unwind_count;
               rd_state->base_regs.v.inline_depth = rd_regs()->inline_depth;
+              rd_state->base_regs.v.module = module->handle;
             }
             rd_cmd(RD_CmdKind_FindThread, .thread = thread->handle, .unwind_count = rd_state->base_regs.v.unwind_count, .inline_depth = rd_state->base_regs.v.inline_depth);
             access_close(access);
