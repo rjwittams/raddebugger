@@ -116,6 +116,7 @@ struct MAC_DMN_Thread
   B32 is_suspended_for_run;
   B32 is_stepping_over_dyld_notification;
   B32 is_stepping_over_dyld_bootstrap;
+  B32 is_stepping_over_debug_trap;
   U64 dyld_notification_step_vaddr;
   U64 dyld_bootstrap_step_vaddr;
 };
@@ -280,6 +281,7 @@ internal B32 mac_dmn_process_is_stepping_over_dyld_notification(MAC_DMN_Process 
 internal B32 mac_dmn_process_is_stepping_over_dyld_bootstrap(MAC_DMN_Process *process, U64 vaddr);
 internal MAC_DMN_Entity *mac_dmn_thread_entity_stepping_over_dyld_notification(MAC_DMN_Process *process);
 internal MAC_DMN_Entity *mac_dmn_thread_entity_stepping_over_dyld_bootstrap(MAC_DMN_Process *process);
+internal MAC_DMN_Entity *mac_dmn_thread_entity_stepping_over_debug_trap(MAC_DMN_Process *process);
 internal void mac_dmn_process_set_dyld_notification_single_step_flags(MAC_DMN_Process *process, B32 is_on);
 internal void mac_dmn_process_set_dyld_bootstrap_single_step_flags(MAC_DMN_Process *process, B32 is_on);
 internal MAC_DMN_ActiveTrap *mac_dmn_set_trap(Arena *arena, DMN_Trap *trap, MAC_DMN_ActiveTrapKind kind);
