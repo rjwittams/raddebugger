@@ -13101,6 +13101,69 @@ rd_frame(void)
                 str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "ok");
               }
             }
+            else if(str8_match(cmd_name, str8_lit("add_watchpoint"), 0))
+            {
+              handled = 1;
+              String8 vaddr_string = {0};
+              String8 size_string = {0};
+              String8 read_string = {0};
+              String8 write_string = {0};
+              if(msg_parts.first != 0 && msg_parts.first->next != 0)
+              {
+                String8Node *arg = msg_parts.first->next;
+                vaddr_string = arg->string;
+                if((arg = arg->next) != 0)
+                {
+                  size_string = arg->string;
+                  if((arg = arg->next) != 0)
+                  {
+                    read_string = arg->string;
+                    if((arg = arg->next) != 0)
+                    {
+                      write_string = arg->string;
+                    }
+                  }
+                }
+              }
+              U64 vaddr = 0;
+              U64 size = 0;
+              U64 read = 0;
+              U64 write = 1;
+              B32 parsed_vaddr = try_u64_from_str8_c_rules(vaddr_string, &vaddr);
+              B32 parsed_size = try_u64_from_str8_c_rules(size_string, &size);
+              if(read_string.size != 0)
+              {
+                try_u64_from_str8_c_rules(read_string, &read);
+              }
+              if(write_string.size != 0)
+              {
+                try_u64_from_str8_c_rules(write_string, &write);
+              }
+              if(!parsed_vaddr || !parsed_size || size == 0)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: usage add_watchpoint <vaddr> <size> [read] [write]");
+              }
+              else
+              {
+                CFG_Node *user = cfg_node_child_from_string(cfg_node_root(), str8_lit("user"));
+                CFG_Node *bp = cfg_node_new(rd_state->cfg, user, str8_lit("breakpoint"));
+                CFG_Node *project = cfg_node_new(rd_state->cfg, bp, str8_lit("project"));
+                cfg_node_new(rd_state->cfg, project, rd_state->project_path);
+                CFG_Node *label = cfg_node_new(rd_state->cfg, bp, str8_lit("label"));
+                cfg_node_new(rd_state->cfg, label, str8_lit("ipc watchpoint"));
+                CFG_Node *address_location = cfg_node_new(rd_state->cfg, bp, str8_lit("address_location"));
+                cfg_node_new(rd_state->cfg, address_location, push_str8f(scratch.arena, "0x%I64x", vaddr));
+                CFG_Node *address_range_size = cfg_node_new(rd_state->cfg, bp, str8_lit("address_range_size"));
+                cfg_node_new(rd_state->cfg, address_range_size, push_str8f(scratch.arena, "%I64u", size));
+                CFG_Node *break_on_read = cfg_node_new(rd_state->cfg, bp, str8_lit("break_on_read"));
+                cfg_node_new(rd_state->cfg, break_on_read, read ? str8_lit("1") : str8_lit("0"));
+                CFG_Node *break_on_write = cfg_node_new(rd_state->cfg, bp, str8_lit("break_on_write"));
+                cfg_node_new(rd_state->cfg, break_on_write, write ? str8_lit("1") : str8_lit("0"));
+                CFG_Node *enabled = cfg_node_new(rd_state->cfg, bp, str8_lit("enabled"));
+                cfg_node_new(rd_state->cfg, enabled, str8_lit("1"));
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "$%I64x", bp->id);
+              }
+            }
             else if(str8_match(cmd_name, str8_lit("open_geo3d"), 0))
             {
               handled = 1;

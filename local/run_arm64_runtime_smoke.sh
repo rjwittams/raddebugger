@@ -31,10 +31,15 @@ target:
 
 breakpoint:
 {
-  label: "watch_value write"
-  address_location: "watch_value"
-  address_range_size: 8
-  break_on_write: 1
+  label: "vector ready"
+  address_location: "smoke_vector_ready"
+  enabled: 1
+}
+
+breakpoint:
+{
+  label: "unwind leaf"
+  address_location: "smoke_unwind_c"
   enabled: 1
 }
 EOF
@@ -91,6 +96,40 @@ wait_for_stop()
   return 1
 }
 
+thread_rip()
+{
+  awk 'match($0, / rip:0x[0-9a-fA-F]+ /) { print substr($0, RSTART+5, RLENGTH-6); exit }'
+}
+
+hex_to_dec()
+{
+  local hex="${1#0x}"
+  hex="${hex#0X}"
+  printf '%u' "$((16#$hex))"
+}
+
+symbol_vaddr()
+{
+  local symbol="$1"
+  nm -m "$target" | awk -v symbol="_$symbol" '$NF == symbol { print $1; exit }'
+}
+
+text_vmaddr()
+{
+  otool -l "$target" | awk '/segname __TEXT/{seen=1} seen && /vmaddr/{print $2; exit}'
+}
+
+module_base_from_threads()
+{
+  awk 'match($0, / rip:0x[0-9a-fA-F]+ module:arm64_runtime_smoke\+0x[0-9a-fA-F]+/) {
+         text = substr($0, RSTART, RLENGTH)
+         sub(/^ rip:/, "", text)
+         sub(/ module:arm64_runtime_smoke\+/, " ", text)
+         print text
+         exit
+       }'
+}
+
 expect_contains()
 {
   local haystack="$1"
@@ -106,7 +145,20 @@ expect_contains()
 wait_for_ipc || exit 1
 
 ipc run >/dev/null || true
-wait_for_stop || exit $?
+vector_stop="$(wait_for_stop)" || exit $?
+printf '%s\n' "$vector_stop"
+vector_rip="$(printf '%s\n' "$vector_stop" | thread_rip)"
+module_base_parts="$(printf '%s\n' "$vector_stop" | module_base_from_threads)"
+if [[ -z "$module_base_parts" ]]; then
+  echo "error: failed to parse module base from stopped thread" >&2
+  exit 1
+fi
+module_rip="${module_base_parts%% *}"
+module_off="${module_base_parts##* }"
+module_base="$(printf '0x%x' "$(( $(hex_to_dec "$module_rip") - $(hex_to_dec "$module_off") ))")"
+vector_stack="$(ipc dump_call_stack)"
+printf '%s\n' "$vector_stack"
+expect_contains "$vector_stack" "smoke_vector_stop" "vector stop frame" || exit 1
 
 regs="$(ipc dump_registers q0 q8 q31)"
 printf '%s\n' "$regs"
@@ -114,17 +166,40 @@ expect_contains "$regs" "q0:11111111111111111111111111111111" "q0 vector value" 
 expect_contains "$regs" "q8:88888888888888888888888888888888" "q8 vector value" || exit 1
 expect_contains "$regs" "q31:31313131313131313131313131313131" "q31 vector value" || exit 1
 
+watch_symbol="$(symbol_vaddr watch_value)"
+text_base="$(text_vmaddr)"
+if [[ -z "$watch_symbol" || -z "$text_base" || -z "$module_base" ]]; then
+  echo "error: failed to compute runtime watch_value address" >&2
+  exit 1
+fi
+watch_addr="$(printf '0x%x' "$(( $(hex_to_dec "$module_base") + $(hex_to_dec "$watch_symbol") - $(hex_to_dec "$text_base") ))")"
+watch_add="$(ipc add_watchpoint "$watch_addr" 8 0 1)"
+printf '%s\n' "$watch_add"
+expect_contains "$watch_add" "$" "watchpoint add result" || exit 1
+
 ipc run >/dev/null || true
 watch_stop="$(wait_for_stop)" || exit $?
 printf '%s\n' "$watch_stop"
-expect_contains "$watch_stop" "last_stop:{cause:" "watchpoint stop context" || exit 1
+watch_rip="$(printf '%s\n' "$watch_stop" | thread_rip)"
+expect_contains "$watch_stop" "last_stop:{cause:4" "watchpoint stop context" || exit 1
+if [[ "$watch_rip" == "$vector_rip" ]]; then
+  echo "error: watchpoint phase did not advance past vector stop" >&2
+  exit 1
+fi
 
 ipc run >/dev/null || true
 unwind_stop="$(wait_for_stop)" || exit $?
 printf '%s\n' "$unwind_stop"
+unwind_rip="$(printf '%s\n' "$unwind_stop" | thread_rip)"
+if [[ "$unwind_rip" == "$vector_rip" || "$unwind_rip" == "$watch_rip" ]]; then
+  echo "error: unwind phase did not reach a distinct stop" >&2
+  exit 1
+fi
 stack="$(ipc dump_call_stack)"
 printf '%s\n' "$stack"
 expect_contains "$stack" "frames:" "call stack frame summary" || exit 1
-expect_contains "$stack" "#0" "at least one concrete frame" || exit 1
+expect_contains "$stack" "smoke_unwind_c" "unwind leaf frame" || exit 1
+expect_contains "$stack" "smoke_unwind_b" "unwind caller frame" || exit 1
+expect_contains "$stack" "smoke_unwind_a" "unwind caller frame" || exit 1
 
 echo "ok: ARM64 runtime smoke completed"
