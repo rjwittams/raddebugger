@@ -807,6 +807,10 @@ file_read(File file, Rng1U64 rng, void *out_data)
     {
       break;
     }
+    if(read_size == 0)
+    {
+      break;
+    }
     ptr += read_size;
     off += read_size;
   }
