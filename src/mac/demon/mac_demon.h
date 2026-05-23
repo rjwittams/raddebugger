@@ -25,6 +25,7 @@
 #include <mach/mig_errors.h>
 #include <mach/ndr.h>
 #include <stdlib.h>
+#include <sys/event.h>
 #include <sys/ptrace.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
@@ -42,6 +43,7 @@ MAC_DMN_EntityKind;
 
 typedef struct MAC_DMN_Entity MAC_DMN_Entity;
 typedef struct MAC_DMN_Process MAC_DMN_Process;
+typedef struct MAC_DMN_ExitEvent MAC_DMN_ExitEvent;
 
 typedef union MAC_DMN_MachMsg
 {
@@ -128,6 +130,13 @@ struct MAC_DMN_Entity
   };
 };
 
+struct MAC_DMN_ExitEvent
+{
+  MAC_DMN_ExitEvent *next;
+  pid_t pid;
+  int status;
+};
+
 typedef struct MAC_DMN_State MAC_DMN_State;
 struct MAC_DMN_State
 {
@@ -141,6 +150,11 @@ struct MAC_DMN_State
   volatile B32 halt_requested;
   U64 halt_code;
   U64 halt_user_data;
+  int process_monitor_kq;
+  Mutex process_monitor_mutex;
+  Thread process_monitor_thread;
+  MAC_DMN_ExitEvent *first_exit_event;
+  MAC_DMN_ExitEvent *last_exit_event;
 };
 
 typedef struct MAC_DMN_ProcessIterState MAC_DMN_ProcessIterState;
@@ -184,6 +198,13 @@ internal MAC_DMN_Entity *mac_dmn_entity_from_handle(DMN_Handle handle);
 internal MAC_DMN_Entity *mac_dmn_entity_alloc(MAC_DMN_EntityKind kind);
 internal void mac_dmn_entity_release(MAC_DMN_Entity *entity);
 internal void mac_dmn_process_entity_release(MAC_DMN_Entity *entity);
+internal void mac_dmn_process_monitor_thread__entry_point(void *p);
+internal void mac_dmn_process_monitor_register_pid(pid_t pid);
+internal void mac_dmn_process_monitor_push_exit_event(pid_t pid, int status);
+internal B32 mac_dmn_process_monitor_pop_exit_event(pid_t *pid_out, int *status_out);
+internal B32 mac_dmn_process_wait_for_exit(pid_t pid, int *status_out);
+internal B32 mac_dmn_ctrl_consume_exit_status(Arena *arena, DMN_EventList *events, pid_t pid, int status);
+internal B32 mac_dmn_ctrl_consume_monitor_exit_event(Arena *arena, DMN_EventList *events);
 internal MAC_DMN_Process *mac_dmn_process_from_handle(DMN_Handle handle);
 internal MAC_DMN_Thread *mac_dmn_thread_from_handle(DMN_Handle handle);
 internal MAC_DMN_Module *mac_dmn_module_from_handle(DMN_Handle handle);

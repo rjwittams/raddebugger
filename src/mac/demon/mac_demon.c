@@ -48,6 +48,166 @@ mac_dmn_entity_release(MAC_DMN_Entity *entity)
 }
 
 internal void
+mac_dmn_process_monitor_thread__entry_point(void *p)
+{
+  ThreadNameF("mac_dmn_process_monitor_thread");
+  (void)p;
+  for(;;)
+  {
+    struct kevent event = {0};
+    int count = kevent(mac_dmn_state->process_monitor_kq, 0, 0, &event, 1, 0);
+    if(count < 0 && errno == EINTR)
+    {
+      continue;
+    }
+    if(count <= 0)
+    {
+      continue;
+    }
+    if((event.flags & EV_ERROR) != 0)
+    {
+      continue;
+    }
+    if(event.filter == EVFILT_PROC && (event.fflags & NOTE_EXIT) != 0)
+    {
+      pid_t pid = (pid_t)event.ident;
+      int status = 0;
+      if(mac_dmn_process_wait_for_exit(pid, &status))
+      {
+        mac_dmn_process_monitor_push_exit_event(pid, status);
+      }
+    }
+  }
+}
+
+internal void
+mac_dmn_process_monitor_register_pid(pid_t pid)
+{
+  if(mac_dmn_state->process_monitor_kq >= 0 && pid > 0)
+  {
+    struct kevent event = {0};
+    EV_SET(&event, (uintptr_t)pid, EVFILT_PROC, EV_ADD|EV_ONESHOT, NOTE_EXIT, 0, 0);
+    kevent(mac_dmn_state->process_monitor_kq, &event, 1, 0, 0, 0);
+  }
+}
+
+internal void
+mac_dmn_process_monitor_push_exit_event(pid_t pid, int status)
+{
+  MAC_DMN_ExitEvent *event = (MAC_DMN_ExitEvent *)malloc(sizeof(*event));
+  if(event != 0)
+  {
+    MemoryZeroStruct(event);
+    event->pid = pid;
+    event->status = status;
+    MutexScope(mac_dmn_state->process_monitor_mutex)
+    {
+      SLLQueuePush(mac_dmn_state->first_exit_event, mac_dmn_state->last_exit_event, event);
+    }
+  }
+}
+
+internal B32
+mac_dmn_process_monitor_pop_exit_event(pid_t *pid_out, int *status_out)
+{
+  B32 result = 0;
+  MAC_DMN_ExitEvent *event = 0;
+  MutexScope(mac_dmn_state->process_monitor_mutex)
+  {
+    event = mac_dmn_state->first_exit_event;
+    if(event != 0)
+    {
+      SLLQueuePop(mac_dmn_state->first_exit_event, mac_dmn_state->last_exit_event);
+    }
+  }
+  if(event != 0)
+  {
+    if(pid_out != 0)
+    {
+      *pid_out = event->pid;
+    }
+    if(status_out != 0)
+    {
+      *status_out = event->status;
+    }
+    free(event);
+    result = 1;
+  }
+  return result;
+}
+
+internal B32
+mac_dmn_process_wait_for_exit(pid_t pid, int *status_out)
+{
+  B32 result = 0;
+  for(;;)
+  {
+    int status = 0;
+    pid_t wait_id = waitpid(pid, &status, 0);
+    if(wait_id < 0 && errno == EINTR)
+    {
+      continue;
+    }
+    if(wait_id != pid)
+    {
+      break;
+    }
+    if(WIFSTOPPED(status))
+    {
+      continue;
+    }
+    if(status_out != 0)
+    {
+      *status_out = status;
+    }
+    result = 1;
+    break;
+  }
+  return result;
+}
+
+internal B32
+mac_dmn_ctrl_consume_exit_status(Arena *arena, DMN_EventList *events, pid_t pid, int status)
+{
+  B32 result = 0;
+  MAC_DMN_Entity *process_entity = mac_dmn_process_entity_from_pid(pid);
+  if(process_entity != 0)
+  {
+    MAC_DMN_Process *process = &process_entity->process;
+    process->is_running = 0;
+    mac_dmn_process_resume_suspended_threads(process);
+    mac_dmn_refresh_module_events(arena, events, process_entity);
+    mac_dmn_refresh_thread_events(arena, events, process_entity);
+    if(WIFEXITED(status))
+    {
+      mac_dmn_push_event_exit_process(arena, events, process_entity, (U32)WEXITSTATUS(status));
+      mac_dmn_process_entity_release(process_entity);
+      result = 1;
+    }
+    else if(WIFSIGNALED(status))
+    {
+      mac_dmn_push_event_exit_process(arena, events, process_entity, (U32)WTERMSIG(status));
+      mac_dmn_process_entity_release(process_entity);
+      result = 1;
+    }
+  }
+  return result;
+}
+
+internal B32
+mac_dmn_ctrl_consume_monitor_exit_event(Arena *arena, DMN_EventList *events)
+{
+  B32 result = 0;
+  pid_t pid = 0;
+  int status = 0;
+  if(mac_dmn_process_monitor_pop_exit_event(&pid, &status))
+  {
+    result = mac_dmn_ctrl_consume_exit_status(arena, events, pid, status);
+  }
+  return result;
+}
+
+internal void
 mac_dmn_process_entity_release(MAC_DMN_Entity *entity)
 {
   if(entity != 0 && entity->kind == MAC_DMN_EntityKind_Process)
@@ -660,6 +820,7 @@ mac_dmn_process_entity_alloc(pid_t pid, mach_port_t task, B32 is_attached, B32 n
   entity->process.is_attached = is_attached;
   entity->process.needs_attach_events = needs_attach_events;
   SLLQueuePush(mac_dmn_state->first_process_entity, mac_dmn_state->last_process_entity, entity);
+  mac_dmn_process_monitor_register_pid(pid);
   return entity;
 }
 
@@ -2187,6 +2348,13 @@ dmn_init(void)
   mac_dmn_state = push_array(arena, MAC_DMN_State, 1);
   mac_dmn_state->arena = arena;
   mac_dmn_state->access_mutex = mutex_alloc();
+  mac_dmn_state->process_monitor_kq = -1;
+  mac_dmn_state->process_monitor_mutex = mutex_alloc();
+  mac_dmn_state->process_monitor_kq = kqueue();
+  if(mac_dmn_state->process_monitor_kq >= 0)
+  {
+    mac_dmn_state->process_monitor_thread = thread_launch(mac_dmn_process_monitor_thread__entry_point, 0);
+  }
 }
 
 internal DMN_CtrlCtx *
@@ -2323,15 +2491,20 @@ dmn_ctrl_kill(DMN_CtrlCtx *ctx, DMN_Handle handle, U32 exit_code)
   B32 result = 0;
   if(process != 0)
   {
-    mac_dmn_process_reply_pending_exception(process, 0);
     errno = 0;
     B32 ptrace_kill_worked = (ptrace(PT_KILL, process->pid, 0, 0) == 0);
+    mac_dmn_process_reply_pending_exception(process, 0);
     errno = 0;
     B32 signal_kill_worked = (kill(process->pid, SIGKILL) == 0 || errno == ESRCH);
     result = (ptrace_kill_worked || signal_kill_worked);
     kill(process->pid, SIGCONT);
     if(result)
     {
+      int status = 0;
+      if(mac_dmn_process_wait_for_exit(process->pid, &status))
+      {
+        mac_dmn_process_monitor_push_exit_event(process->pid, status);
+      }
       process->is_running = 1;
     }
   }
@@ -2382,6 +2555,32 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       mac_dmn_push_event_handshake_complete(arena, &result, entity);
       process->needs_attach_events = 0;
       break;
+    }
+  }
+
+  if(result.count == 0)
+  {
+    mac_dmn_ctrl_consume_monitor_exit_event(arena, &result);
+  }
+
+  if(result.count == 0 && mac_dmn_state->halt_requested)
+  {
+    for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+    {
+      if(entity->kind == MAC_DMN_EntityKind_Process)
+      {
+        MAC_DMN_Process *process = &entity->process;
+        if(process->is_running)
+        {
+          kill(process->pid, SIGSTOP);
+        }
+        else
+        {
+          mac_dmn_push_event_halt(arena, &result);
+          mac_dmn_state->halt_requested = 0;
+        }
+        break;
+      }
     }
   }
 
@@ -2541,6 +2740,14 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       S32 mach_exception_signo = 0;
       for(;;)
       {
+        pid_t monitor_pid = 0;
+        int monitor_status = 0;
+        if(mac_dmn_process_monitor_pop_exit_event(&monitor_pid, &monitor_status))
+        {
+          wait_id = monitor_pid;
+          status = monitor_status;
+          break;
+        }
         MAC_DMN_ExceptionMessage exception_message = {0};
         if(mac_dmn_exception_message_receive(&exception_message, 10))
         {
@@ -2560,7 +2767,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
         }
         do
         {
-          wait_id = waitpid(-1, &status, WNOHANG);
+          wait_id = waitpid(-1, &status, WNOHANG|WUNTRACED);
         }
         while(wait_id < 0 && errno == EINTR);
         if(wait_id > 0 && mac_dmn_process_entity_from_pid(wait_id) != 0)
@@ -2588,97 +2795,94 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       MAC_DMN_Entity *process_entity = got_mach_exception ? exception_process_entity : mac_dmn_process_entity_from_pid(wait_id);
       if(process_entity != 0)
       {
-        MAC_DMN_Process *process = &process_entity->process;
-        process->is_running = 0;
-        mac_dmn_process_resume_suspended_threads(process);
-        mac_dmn_refresh_module_events(arena, &result, process_entity);
-        mac_dmn_refresh_thread_events(arena, &result, process_entity);
-        if(!got_mach_exception && WIFEXITED(status))
+        if(!got_mach_exception && (WIFEXITED(status) || WIFSIGNALED(status)))
         {
-          mac_dmn_push_event_exit_process(arena, &result, process_entity, (U32)WEXITSTATUS(status));
-          mac_dmn_process_entity_release(process_entity);
+          mac_dmn_ctrl_consume_exit_status(arena, &result, wait_id, status);
         }
-        else if(!got_mach_exception && WIFSIGNALED(status))
+        else
         {
-          mac_dmn_push_event_exit_process(arena, &result, process_entity, (U32)WTERMSIG(status));
-          mac_dmn_process_entity_release(process_entity);
-        }
-        else if(got_mach_exception || WIFSTOPPED(status))
-        {
-          S32 signo = got_mach_exception ? mach_exception_signo : WSTOPSIG(status);
-          if(mac_dmn_state->halt_requested && signo == SIGSTOP)
+          MAC_DMN_Process *process = &process_entity->process;
+          process->is_running = 0;
+          mac_dmn_process_resume_suspended_threads(process);
+          mac_dmn_refresh_module_events(arena, &result, process_entity);
+          mac_dmn_refresh_thread_events(arena, &result, process_entity);
+          if(got_mach_exception || WIFSTOPPED(status))
           {
-            mac_dmn_push_event_halt(arena, &result);
-            mac_dmn_state->halt_requested = 0;
-          }
-          else
-          {
-            mac_dmn_refresh_threads(process);
-            MAC_DMN_ActiveTrap *hit_trap = 0;
-            MAC_DMN_Entity *thread_entity = 0;
-            if(signo == SIGTRAP)
+            S32 signo = got_mach_exception ? mach_exception_signo : WSTOPSIG(status);
+            if(mac_dmn_state->halt_requested && signo == SIGSTOP)
             {
-              thread_entity = mac_dmn_thread_entity_from_active_trap(process, first_active_trap, &hit_trap);
+              mac_dmn_push_event_halt(arena, &result);
+              mac_dmn_state->halt_requested = 0;
             }
-            if(thread_entity == 0 && signo == SIGTRAP)
+            else
             {
-              thread_entity = mac_dmn_thread_entity_stepping_over_dyld_notification(process);
-            }
-            if(thread_entity == 0 && single_step_thread_entity != 0 && single_step_thread_entity->thread.process == process)
-            {
-              thread_entity = single_step_thread_entity;
-            }
-            if(thread_entity == 0 && got_mach_exception && process->pending_exception.thread != MACH_PORT_NULL)
-            {
-              U64 thread_id = mac_dmn_thread_id_from_port(process->pending_exception.thread);
-              thread_entity = mac_dmn_thread_entity_from_thread_id(process, thread_id);
-            }
-            if(thread_entity == 0)
-            {
-              thread_entity = process->first_thread_entity;
-            }
-            DMN_Trap *hit_debug_trap = 0;
-            if(signo == SIGTRAP && thread_entity != 0)
-            {
-              hit_debug_trap = mac_dmn_thread_hit_debug_trap(&thread_entity->thread, first_flagged_trap_task);
-            }
-            if(signo == SIGTRAP && thread_entity != 0)
-            {
-              if(hit_trap != 0)
+              mac_dmn_refresh_threads(process);
+              MAC_DMN_ActiveTrap *hit_trap = 0;
+              MAC_DMN_Entity *thread_entity = 0;
+              if(signo == SIGTRAP)
               {
-                mac_dmn_thread_write_ip(&thread_entity->thread, hit_trap->trap->vaddr);
-                if(hit_trap->kind == MAC_DMN_ActiveTrapKind_DyldNotification)
+                thread_entity = mac_dmn_thread_entity_from_active_trap(process, first_active_trap, &hit_trap);
+              }
+              if(thread_entity == 0 && signo == SIGTRAP)
+              {
+                thread_entity = mac_dmn_thread_entity_stepping_over_dyld_notification(process);
+              }
+              if(thread_entity == 0 && single_step_thread_entity != 0 && single_step_thread_entity->thread.process == process)
+              {
+                thread_entity = single_step_thread_entity;
+              }
+              if(thread_entity == 0 && got_mach_exception && process->pending_exception.thread != MACH_PORT_NULL)
+              {
+                U64 thread_id = mac_dmn_thread_id_from_port(process->pending_exception.thread);
+                thread_entity = mac_dmn_thread_entity_from_thread_id(process, thread_id);
+              }
+              if(thread_entity == 0)
+              {
+                thread_entity = process->first_thread_entity;
+              }
+              DMN_Trap *hit_debug_trap = 0;
+              if(signo == SIGTRAP && thread_entity != 0)
+              {
+                hit_debug_trap = mac_dmn_thread_hit_debug_trap(&thread_entity->thread, first_flagged_trap_task);
+              }
+              if(signo == SIGTRAP && thread_entity != 0)
+              {
+                if(hit_trap != 0)
                 {
-                  thread_entity->thread.is_stepping_over_dyld_notification = 1;
-                  thread_entity->thread.dyld_notification_step_vaddr = hit_trap->trap->vaddr;
-                  mac_dmn_refresh_module_events(arena, &result, process_entity);
+                  mac_dmn_thread_write_ip(&thread_entity->thread, hit_trap->trap->vaddr);
+                  if(hit_trap->kind == MAC_DMN_ActiveTrapKind_DyldNotification)
+                  {
+                    thread_entity->thread.is_stepping_over_dyld_notification = 1;
+                    thread_entity->thread.dyld_notification_step_vaddr = hit_trap->trap->vaddr;
+                    mac_dmn_refresh_module_events(arena, &result, process_entity);
+                  }
+                  else
+                  {
+                    mac_dmn_push_event_breakpoint(arena, &result, process_entity, thread_entity, hit_trap->trap->vaddr, hit_trap->trap->id);
+                  }
+                }
+                else if(hit_debug_trap != 0)
+                {
+                  mac_dmn_push_event_data_breakpoint(arena, &result, process_entity, thread_entity, hit_debug_trap);
+                }
+                else if(thread_entity->thread.is_stepping_over_dyld_notification)
+                {
+                  thread_entity->thread.is_stepping_over_dyld_notification = 0;
+                  thread_entity->thread.dyld_notification_step_vaddr = 0;
+                }
+                else if(single_step_thread_entity == thread_entity)
+                {
+                  mac_dmn_push_event_single_step(arena, &result, process_entity, thread_entity);
                 }
                 else
                 {
-                  mac_dmn_push_event_breakpoint(arena, &result, process_entity, thread_entity, hit_trap->trap->vaddr, hit_trap->trap->id);
+                  mac_dmn_push_event_exception(arena, &result, process_entity, thread_entity, signo);
                 }
-              }
-              else if(hit_debug_trap != 0)
-              {
-                mac_dmn_push_event_data_breakpoint(arena, &result, process_entity, thread_entity, hit_debug_trap);
-              }
-              else if(thread_entity->thread.is_stepping_over_dyld_notification)
-              {
-                thread_entity->thread.is_stepping_over_dyld_notification = 0;
-                thread_entity->thread.dyld_notification_step_vaddr = 0;
-              }
-              else if(single_step_thread_entity == thread_entity)
-              {
-                mac_dmn_push_event_single_step(arena, &result, process_entity, thread_entity);
               }
               else
               {
                 mac_dmn_push_event_exception(arena, &result, process_entity, thread_entity, signo);
               }
-            }
-            else
-            {
-              mac_dmn_push_event_exception(arena, &result, process_entity, thread_entity, signo);
             }
           }
         }
