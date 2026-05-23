@@ -1,6 +1,8 @@
 // Copyright (c) Epic Games Tools
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
+#include <Security/Authorization.h>
+
 internal DMN_Handle
 mac_dmn_handle_from_entity(MAC_DMN_Entity *entity)
 {
@@ -167,9 +169,8 @@ mac_dmn_argv_from_launch_params(Arena *arena, ProcessLaunchParams *params)
   char **argv = push_array(arena, char *, params->cmd_line.node_count + 1);
   if(params->cmd_line.first != 0)
   {
-    String8List path_parts = str8_split_path(arena, params->path);
-    str8_list_push(arena, &path_parts, params->cmd_line.first->string);
-    String8 path_to_exe = str8_path_list_join_by_style(arena, &path_parts, PathStyle_SystemAbsolute);
+    String8 path_to_exe = path_absolute_dst_from_relative_dst_src(arena, params->cmd_line.first->string, params->path);
+    path_to_exe = str8_copy(arena, path_to_exe);
     argv[0] = (char *)path_to_exe.str;
     U64 arg_idx = 1;
     for EachNode(n, String8Node, params->cmd_line.first->next)
@@ -219,6 +220,25 @@ mac_dmn_apply_child_stdio(ProcessLaunchParams *params)
   }
 }
 
+internal void
+mac_dmn_kill_launched_child(pid_t pid)
+{
+  if(pid > 0)
+  {
+    ptrace(PT_KILL, pid, 0, 0);
+    kill(pid, SIGKILL);
+    kill(pid, SIGCONT);
+    for(;;)
+    {
+      pid_t wait_id = waitpid(pid, 0, 0);
+      if(wait_id == pid || (wait_id < 0 && errno != EINTR))
+      {
+        break;
+      }
+    }
+  }
+}
+
 internal pid_t
 mac_dmn_launch_traced_process(ProcessLaunchParams *params)
 {
@@ -230,7 +250,6 @@ mac_dmn_launch_traced_process(ProcessLaunchParams *params)
   if(pid == 0)
   {
     if(ptrace(PT_TRACE_ME, 0, 0, 0) != 0) { _exit(1); }
-    ptrace(PT_SIGEXC, 0, 0, 0);
     mac_dmn_apply_child_stdio(params);
     if(chdir(work_dir_path) != 0) { _exit(1); }
     execve(argv[0], argv, envp);
@@ -247,8 +266,28 @@ mac_dmn_launch_traced_process(ProcessLaunchParams *params)
     while(wait_id < 0 && errno == EINTR);
     if(wait_id != pid || !WIFSTOPPED(status))
     {
-      kill(pid, SIGKILL);
-      waitpid(pid, 0, WNOHANG);
+      String8 exe = params->cmd_line.first ? params->cmd_line.first->string : str8_zero();
+      if(wait_id != pid)
+      {
+        log_user_errorf("Could not launch `%S`: waitpid failed for traced child.", exe);
+      }
+      else if(WIFEXITED(status))
+      {
+        log_user_errorf("Could not launch `%S`: child exited before debugger attach with status %u.", exe, (U32)WEXITSTATUS(status));
+      }
+      else if(WIFSIGNALED(status))
+      {
+        log_user_errorf("Could not launch `%S`: child exited before debugger attach from signal %u.", exe, (U32)WTERMSIG(status));
+      }
+      else
+      {
+        log_user_errorf("Could not launch `%S`: child did not stop for debugger attach.", exe);
+      }
+      if(wait_id != pid)
+      {
+        kill(pid, SIGKILL);
+        waitpid(pid, 0, WNOHANG);
+      }
       pid = 0;
     }
   }
@@ -258,6 +297,37 @@ mac_dmn_launch_traced_process(ProcessLaunchParams *params)
   }
   scratch_end(scratch);
   return pid;
+}
+
+internal S32
+mac_dmn_taskport_authorization_status(B32 interaction_allowed)
+{
+  OSStatus result = errAuthorizationInternal;
+  AuthorizationRef authorization = 0;
+  OSStatus create_status = AuthorizationCreate(0, kAuthorizationEmptyEnvironment,
+                                               kAuthorizationFlagDefaults,
+                                               &authorization);
+  if(create_status == errAuthorizationSuccess)
+  {
+    AuthorizationItem item = { "system.privilege.taskport", 0, 0, 0 };
+    AuthorizationRights rights = { 1, &item };
+    AuthorizationFlags flags = (kAuthorizationFlagDefaults |
+                                kAuthorizationFlagExtendRights |
+                                kAuthorizationFlagPreAuthorize);
+    if(interaction_allowed)
+    {
+      flags |= kAuthorizationFlagInteractionAllowed;
+    }
+    result = AuthorizationCopyRights(authorization, &rights,
+                                     kAuthorizationEmptyEnvironment,
+                                     flags, 0);
+    AuthorizationFree(authorization, kAuthorizationFlagDefaults);
+  }
+  else
+  {
+    result = create_status;
+  }
+  return result;
 }
 
 internal Arch
@@ -1697,12 +1767,20 @@ dmn_ctrl_exclusive_access_end(void)
 internal U32
 dmn_ctrl_launch(DMN_CtrlCtx *ctx, ProcessLaunchParams *params)
 {
-  pid_t pid = mac_dmn_launch_traced_process(params);
   U32 result = 0;
+  S32 auth_status = mac_dmn_taskport_authorization_status(1);
+  if(auth_status != errAuthorizationSuccess)
+  {
+    String8 exe = params->cmd_line.first ? params->cmd_line.first->string : str8_zero();
+    log_user_errorf("Could not launch `%S`: taskport authorization failed with OSStatus %d. On macOS, approve the administrator authorization prompt, or run `security authorize -u -P system.privilege.taskport` from a logged-in Terminal session before launching targets.", exe, auth_status);
+    return result;
+  }
+  pid_t pid = mac_dmn_launch_traced_process(params);
   if(pid != 0)
   {
     mach_port_t task = MACH_PORT_NULL;
-    if(task_for_pid(mach_task_self(), (int)pid, &task) == KERN_SUCCESS && task != MACH_PORT_NULL)
+    kern_return_t task_result = task_for_pid(mach_task_self(), (int)pid, &task);
+    if(task_result == KERN_SUCCESS && task != MACH_PORT_NULL)
     {
       MAC_DMN_Entity *entity = mac_dmn_process_entity_alloc(pid, task, 1, 1);
       entity->process.dyld_bootstrap_pending = 1;
@@ -1710,8 +1788,9 @@ dmn_ctrl_launch(DMN_CtrlCtx *ctx, ProcessLaunchParams *params)
     }
     else
     {
-      kill(pid, SIGKILL);
-      waitpid(pid, 0, WNOHANG);
+      String8 exe = params->cmd_line.first ? params->cmd_line.first->string : str8_zero();
+      log_user_errorf("Could not launch `%S`: task_for_pid failed for pid %u with kern_return_t %d. On macOS, enable DevToolsSecurity and ensure the debugger has permission to control processes.", exe, (U32)pid, task_result);
+      mac_dmn_kill_launched_child(pid);
     }
   }
   return result;
@@ -1722,7 +1801,8 @@ dmn_ctrl_attach(DMN_CtrlCtx *ctx, U32 pid)
 {
   B32 result = 0;
   mach_port_t task = MACH_PORT_NULL;
-  if(task_for_pid(mach_task_self(), (int)pid, &task) == KERN_SUCCESS && task != MACH_PORT_NULL)
+  kern_return_t task_result = task_for_pid(mach_task_self(), (int)pid, &task);
+  if(task_result == KERN_SUCCESS && task != MACH_PORT_NULL)
   {
     int ptrace_result = ptrace(PT_ATTACHEXC, (pid_t)pid, 0, 0);
     if(ptrace_result == 0 || errno == EBUSY)
@@ -1732,8 +1812,13 @@ dmn_ctrl_attach(DMN_CtrlCtx *ctx, U32 pid)
     }
     else
     {
+      log_user_errorf("Could not attach to pid %u: ptrace(PT_ATTACHEXC) failed with errno %d.", pid, errno);
       mach_port_deallocate(mach_task_self(), task);
     }
+  }
+  else
+  {
+    log_user_errorf("Could not attach to pid %u: task_for_pid failed with kern_return_t %d. On macOS, enable DevToolsSecurity and ensure the debugger has permission to control processes.", pid, task_result);
   }
   return result;
 }
