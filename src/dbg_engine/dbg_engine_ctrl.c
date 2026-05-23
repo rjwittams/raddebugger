@@ -6296,7 +6296,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   log_infof("sp_check_value := 0x%I64x\n", sp_check_value);
   
   //////////////////////////////
-  //- rjf: claim pending software-breakpoint stops
+  //- claim pending software-breakpoint stops
   //
   // On Darwin, when multiple processes hit the same patched software breakpoint
   // nearly together, the non-selected tracee may already be stopped just after
