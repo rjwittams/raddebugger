@@ -1873,6 +1873,121 @@ mac_dmn_set_single_step_flag(MAC_DMN_Thread *thread, B32 is_on)
   return result;
 }
 
+#if ARCH_ARM64
+internal B32
+mac_dmn_arm64_debug_state_regs_from_trap(DMN_Trap *trap, U64 *wvr_out, U64 *wcr_out)
+{
+  B32 result = 0;
+  if(trap != 0 && wvr_out != 0 && wcr_out != 0)
+  {
+    B32 read = !!(trap->flags & DMN_TrapFlag_BreakOnRead);
+    B32 write = !!(trap->flags & DMN_TrapFlag_BreakOnWrite);
+    if((read || write) && trap->size != 0)
+    {
+      U64 aligned_size = u64_up_to_pow2(Max((U64)trap->size, 8));
+      U64 aligned_start = 0;
+      for(;;)
+      {
+        aligned_start = trap->vaddr & ~(aligned_size - 1);
+        if(aligned_start + aligned_size >= trap->vaddr + trap->size)
+        {
+          break;
+        }
+        aligned_size <<= 1;
+      }
+
+      U64 wvr = aligned_start;
+      U64 wcr = bit1|((U64)2 << 1)|(read ? bit4 : 0)|(write ? bit5 : 0);
+      if(aligned_size <= 8)
+      {
+        U64 offset = trap->vaddr - aligned_start;
+        U64 bas = ((1ull << trap->size) - 1) << offset;
+        wcr |= bas << 5;
+      }
+      else
+      {
+        U64 mask = count_bits_set64(aligned_size - 1);
+        if(mask > 31)
+        {
+          goto end;
+        }
+        wcr |= (0xffull << 5);
+        wcr |= mask << 24;
+      }
+
+      *wvr_out = wvr;
+      *wcr_out = wcr;
+      result = 1;
+    }
+  }
+  end:;
+  return result;
+}
+
+internal U64
+mac_dmn_arm64_debug_trap_idx_from_state(arm_debug_state64_t *state, U64 fault_vaddr, U64 slot_count)
+{
+  U64 result = max_U64;
+  if(state != 0)
+  {
+    U64 count = Min(slot_count, ArrayCount(state->__wcr));
+    for(U64 idx = 0; idx < count; idx += 1)
+    {
+      U64 wcr = state->__wcr[idx];
+      U64 wvr = state->__wvr[idx];
+      if(!(wcr & bit1))
+      {
+        continue;
+      }
+
+      U64 mask = (wcr >> 24) & 0x1f;
+      if(mask == 0)
+      {
+        U64 bas = (wcr >> 5) & 0xff;
+        if(((wvr >> 3) == (fault_vaddr >> 3)) &&
+           (bas & (1ull << (fault_vaddr & 7))))
+        {
+          result = idx;
+          break;
+        }
+      }
+      else
+      {
+        U64 compare_mask = ~((1ull << mask) - 1);
+        if((wvr & compare_mask) == (fault_vaddr & compare_mask))
+        {
+          result = idx;
+          break;
+        }
+      }
+    }
+  }
+  return result;
+}
+
+internal U64
+mac_dmn_arm64_supported_watchpoint_count(void)
+{
+  local_persist B32 inited = 0;
+  local_persist U64 result = 0;
+  if(!inited)
+  {
+    U32 n = 0;
+    size_t len = sizeof(n);
+    if(sysctlbyname("hw.optional.watchpoint", &n, &len, 0, 0) == 0)
+    {
+      result = n;
+    }
+    else
+    {
+      result = ArrayCount(((arm_debug_state64_t *)0)->__wcr);
+    }
+    inited = 1;
+  }
+  return result;
+}
+#endif
+
 internal B32
 mac_dmn_thread_set_debug_traps(MAC_DMN_Thread *thread, DMN_TrapChunkList *traps)
 {
@@ -1943,6 +2058,35 @@ mac_dmn_thread_set_debug_traps(MAC_DMN_Thread *thread, DMN_TrapChunkList *traps)
         }
       }break;
 #endif
+#if ARCH_ARM64
+      case Arch_arm64:
+      {
+        arm_debug_state64_t state = {0};
+        mach_msg_type_number_t count = ARM_DEBUG_STATE64_COUNT;
+        if(thread_get_state(thread->thread, ARM_DEBUG_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+        {
+          U64 trap_idx = 0;
+          U64 trap_count = mac_dmn_arm64_supported_watchpoint_count();
+          trap_count = Min(trap_count, ArrayCount(state.__wcr));
+          for(DMN_TrapChunkNode *n = traps->first; n != 0 && trap_idx < trap_count; n = n->next)
+          {
+            for(U64 n_idx = 0; n_idx < n->count && trap_idx < trap_count; n_idx += 1)
+            {
+              DMN_Trap *trap = n->v + n_idx;
+              U64 wvr = 0;
+              U64 wcr = 0;
+              if(mac_dmn_arm64_debug_state_regs_from_trap(trap, &wvr, &wcr))
+              {
+                state.__wvr[trap_idx] = wvr;
+                state.__wcr[trap_idx] = wcr;
+                trap_idx += 1;
+              }
+            }
+          }
+          result = (thread_set_state(thread->thread, ARM_DEBUG_STATE64, (thread_state_t)&state, ARM_DEBUG_STATE64_COUNT) == KERN_SUCCESS);
+        }
+      }break;
+#endif
     }
   }
   return result;
@@ -1971,6 +2115,22 @@ mac_dmn_thread_clear_debug_traps(MAC_DMN_Thread *thread)
           state.__dr6 = 0;
           state.__dr7 = 0;
           result = (thread_set_state(thread->thread, x86_DEBUG_STATE64, (thread_state_t)&state, x86_DEBUG_STATE64_COUNT) == KERN_SUCCESS);
+        }
+      }break;
+#endif
+#if ARCH_ARM64
+      case Arch_arm64:
+      {
+        arm_debug_state64_t state = {0};
+        mach_msg_type_number_t count = ARM_DEBUG_STATE64_COUNT;
+        if(thread_get_state(thread->thread, ARM_DEBUG_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+        {
+          for(U64 idx = 0; idx < ArrayCount(state.__wvr); idx += 1)
+          {
+            state.__wvr[idx] = 0;
+            state.__wcr[idx] = 0;
+          }
+          result = (thread_set_state(thread->thread, ARM_DEBUG_STATE64, (thread_state_t)&state, ARM_DEBUG_STATE64_COUNT) == KERN_SUCCESS);
         }
       }break;
 #endif
@@ -2004,6 +2164,18 @@ mac_dmn_process_set_debug_traps(MAC_DMN_Process *process, DMN_TrapChunkList *tra
             }
           }
 #endif
+#if ARCH_ARM64
+          if(!did_set_task_state && process->arch == Arch_arm64)
+          {
+            arm_debug_state64_t state = {0};
+            mach_msg_type_number_t count = ARM_DEBUG_STATE64_COUNT;
+            if(thread_get_state(thread_entity->thread.thread, ARM_DEBUG_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS &&
+               task_set_state(process->task, ARM_DEBUG_STATE64, (thread_state_t)&state, ARM_DEBUG_STATE64_COUNT) == KERN_SUCCESS)
+            {
+              did_set_task_state = 1;
+            }
+          }
+#endif
           result = 1;
         }
       }
@@ -2029,6 +2201,13 @@ mac_dmn_process_clear_debug_traps(MAC_DMN_Process *process)
     {
       x86_debug_state64_t state = {0};
       task_set_state(process->task, x86_DEBUG_STATE64, (thread_state_t)&state, x86_DEBUG_STATE64_COUNT);
+    }
+#endif
+#if ARCH_ARM64
+    if(process->arch == Arch_arm64 && process->task != MACH_PORT_NULL)
+    {
+      arm_debug_state64_t state = {0};
+      task_set_state(process->task, ARM_DEBUG_STATE64, (thread_state_t)&state, ARM_DEBUG_STATE64_COUNT);
     }
 #endif
   }
@@ -2081,6 +2260,63 @@ mac_dmn_thread_hit_debug_trap(MAC_DMN_Thread *thread, MAC_DMN_FlaggedTrapTask *f
                     {
                       result = n->v + n_idx;
                       break;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }break;
+#endif
+#if ARCH_ARM64
+      case Arch_arm64:
+      {
+        arm_debug_state64_t state = {0};
+        mach_msg_type_number_t count = ARM_DEBUG_STATE64_COUNT;
+        MAC_DMN_ExceptionMessage *exception = &thread->process->pending_exception;
+        B32 is_watchpoint = (exception->is_valid &&
+                             exception->exception == EXC_BREAKPOINT &&
+                             exception->code_count >= 2 &&
+                             exception->code[0] == EXC_ARM_DA_DEBUG);
+        if(is_watchpoint &&
+           thread_get_state(thread->thread, ARM_DEBUG_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
+        {
+          U64 trap_count = mac_dmn_arm64_supported_watchpoint_count();
+          U64 flagged_trap_idx = max_U64;
+          flagged_trap_idx = mac_dmn_arm64_debug_trap_idx_from_state(&state, exception->code[1], trap_count);
+          if(flagged_trap_idx != max_U64)
+          {
+            MAC_DMN_Process *process = thread->process;
+            DMN_Handle process_handle = {0};
+            for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+            {
+              if(entity->kind == MAC_DMN_EntityKind_Process && &entity->process == process)
+              {
+                process_handle = mac_dmn_handle_from_entity(entity);
+                break;
+              }
+            }
+            U64 trap_idx = 0;
+            for(MAC_DMN_FlaggedTrapTask *task = first_task; task != 0 && result == 0; task = task->next)
+            {
+              if(dmn_handle_match(task->process, process_handle))
+              {
+                for(DMN_TrapChunkNode *n = task->traps.first; n != 0 && result == 0; n = n->next)
+                {
+                  for(U64 n_idx = 0; n_idx < n->count; n_idx += 1)
+                  {
+                    DMN_Trap *trap = n->v + n_idx;
+                    U64 wvr = 0;
+                    U64 wcr = 0;
+                    if(mac_dmn_arm64_debug_state_regs_from_trap(trap, &wvr, &wcr))
+                    {
+                      if(trap_idx == flagged_trap_idx)
+                      {
+                        result = trap;
+                        break;
+                      }
+                      trap_idx += 1;
                     }
                   }
                 }
@@ -2564,6 +2800,80 @@ mac_dmn_arm64_thread_state_from_reg_block(arm_thread_state64_t *dst, ARM64_RegBl
   dst->__sp = src->sp;
   dst->__pc = src->pc;
   dst->__cpsr = src->cpsr;
+}
+
+internal void
+mac_dmn_arm64_reg_block_from_neon_state(ARM64_RegBlock *dst, arm_neon_state64_t *src)
+{
+  MemoryCopy(&dst->q0,  &src->__v[0],  sizeof(dst->q0));
+  MemoryCopy(&dst->q1,  &src->__v[1],  sizeof(dst->q1));
+  MemoryCopy(&dst->q2,  &src->__v[2],  sizeof(dst->q2));
+  MemoryCopy(&dst->q3,  &src->__v[3],  sizeof(dst->q3));
+  MemoryCopy(&dst->q4,  &src->__v[4],  sizeof(dst->q4));
+  MemoryCopy(&dst->q5,  &src->__v[5],  sizeof(dst->q5));
+  MemoryCopy(&dst->q6,  &src->__v[6],  sizeof(dst->q6));
+  MemoryCopy(&dst->q7,  &src->__v[7],  sizeof(dst->q7));
+  MemoryCopy(&dst->q8,  &src->__v[8],  sizeof(dst->q8));
+  MemoryCopy(&dst->q9,  &src->__v[9],  sizeof(dst->q9));
+  MemoryCopy(&dst->q10, &src->__v[10], sizeof(dst->q10));
+  MemoryCopy(&dst->q11, &src->__v[11], sizeof(dst->q11));
+  MemoryCopy(&dst->q12, &src->__v[12], sizeof(dst->q12));
+  MemoryCopy(&dst->q13, &src->__v[13], sizeof(dst->q13));
+  MemoryCopy(&dst->q14, &src->__v[14], sizeof(dst->q14));
+  MemoryCopy(&dst->q15, &src->__v[15], sizeof(dst->q15));
+  MemoryCopy(&dst->q16, &src->__v[16], sizeof(dst->q16));
+  MemoryCopy(&dst->q17, &src->__v[17], sizeof(dst->q17));
+  MemoryCopy(&dst->q18, &src->__v[18], sizeof(dst->q18));
+  MemoryCopy(&dst->q19, &src->__v[19], sizeof(dst->q19));
+  MemoryCopy(&dst->q20, &src->__v[20], sizeof(dst->q20));
+  MemoryCopy(&dst->q21, &src->__v[21], sizeof(dst->q21));
+  MemoryCopy(&dst->q22, &src->__v[22], sizeof(dst->q22));
+  MemoryCopy(&dst->q23, &src->__v[23], sizeof(dst->q23));
+  MemoryCopy(&dst->q24, &src->__v[24], sizeof(dst->q24));
+  MemoryCopy(&dst->q25, &src->__v[25], sizeof(dst->q25));
+  MemoryCopy(&dst->q26, &src->__v[26], sizeof(dst->q26));
+  MemoryCopy(&dst->q27, &src->__v[27], sizeof(dst->q27));
+  MemoryCopy(&dst->q28, &src->__v[28], sizeof(dst->q28));
+  MemoryCopy(&dst->q29, &src->__v[29], sizeof(dst->q29));
+  MemoryCopy(&dst->q30, &src->__v[30], sizeof(dst->q30));
+  MemoryCopy(&dst->q31, &src->__v[31], sizeof(dst->q31));
+}
+
+internal void
+mac_dmn_arm64_neon_state_from_reg_block(arm_neon_state64_t *dst, ARM64_RegBlock *src)
+{
+  MemoryCopy(&dst->__v[0],  &src->q0,  sizeof(src->q0));
+  MemoryCopy(&dst->__v[1],  &src->q1,  sizeof(src->q1));
+  MemoryCopy(&dst->__v[2],  &src->q2,  sizeof(src->q2));
+  MemoryCopy(&dst->__v[3],  &src->q3,  sizeof(src->q3));
+  MemoryCopy(&dst->__v[4],  &src->q4,  sizeof(src->q4));
+  MemoryCopy(&dst->__v[5],  &src->q5,  sizeof(src->q5));
+  MemoryCopy(&dst->__v[6],  &src->q6,  sizeof(src->q6));
+  MemoryCopy(&dst->__v[7],  &src->q7,  sizeof(src->q7));
+  MemoryCopy(&dst->__v[8],  &src->q8,  sizeof(src->q8));
+  MemoryCopy(&dst->__v[9],  &src->q9,  sizeof(src->q9));
+  MemoryCopy(&dst->__v[10], &src->q10, sizeof(src->q10));
+  MemoryCopy(&dst->__v[11], &src->q11, sizeof(src->q11));
+  MemoryCopy(&dst->__v[12], &src->q12, sizeof(src->q12));
+  MemoryCopy(&dst->__v[13], &src->q13, sizeof(src->q13));
+  MemoryCopy(&dst->__v[14], &src->q14, sizeof(src->q14));
+  MemoryCopy(&dst->__v[15], &src->q15, sizeof(src->q15));
+  MemoryCopy(&dst->__v[16], &src->q16, sizeof(src->q16));
+  MemoryCopy(&dst->__v[17], &src->q17, sizeof(src->q17));
+  MemoryCopy(&dst->__v[18], &src->q18, sizeof(src->q18));
+  MemoryCopy(&dst->__v[19], &src->q19, sizeof(src->q19));
+  MemoryCopy(&dst->__v[20], &src->q20, sizeof(src->q20));
+  MemoryCopy(&dst->__v[21], &src->q21, sizeof(src->q21));
+  MemoryCopy(&dst->__v[22], &src->q22, sizeof(src->q22));
+  MemoryCopy(&dst->__v[23], &src->q23, sizeof(src->q23));
+  MemoryCopy(&dst->__v[24], &src->q24, sizeof(src->q24));
+  MemoryCopy(&dst->__v[25], &src->q25, sizeof(src->q25));
+  MemoryCopy(&dst->__v[26], &src->q26, sizeof(src->q26));
+  MemoryCopy(&dst->__v[27], &src->q27, sizeof(src->q27));
+  MemoryCopy(&dst->__v[28], &src->q28, sizeof(src->q28));
+  MemoryCopy(&dst->__v[29], &src->q29, sizeof(src->q29));
+  MemoryCopy(&dst->__v[30], &src->q30, sizeof(src->q30));
+  MemoryCopy(&dst->__v[31], &src->q31, sizeof(src->q31));
 }
 #endif
 
@@ -3408,7 +3718,13 @@ dmn_thread_read_reg_block(DMN_Handle handle, void *reg_block)
           if(thread_get_state(thread->thread, ARM_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
           {
             mac_dmn_arm64_reg_block_from_thread_state((ARM64_RegBlock *)reg_block, &state);
-            result = 1;
+            arm_neon_state64_t neon_state = {0};
+            mach_msg_type_number_t neon_count = ARM_NEON_STATE64_COUNT;
+            if(thread_get_state(thread->thread, ARM_NEON_STATE64, (thread_state_t)&neon_state, &neon_count) == KERN_SUCCESS)
+            {
+              mac_dmn_arm64_reg_block_from_neon_state((ARM64_RegBlock *)reg_block, &neon_state);
+              result = 1;
+            }
           }
         }break;
 #endif
@@ -3443,7 +3759,16 @@ dmn_thread_write_reg_block(DMN_Handle handle, void *reg_block)
         {
           arm_thread_state64_t state = {0};
           mac_dmn_arm64_thread_state_from_reg_block(&state, (ARM64_RegBlock *)reg_block);
-          result = (thread_set_state(thread->thread, ARM_THREAD_STATE64, (thread_state_t)&state, ARM_THREAD_STATE64_COUNT) == KERN_SUCCESS);
+          if(thread_set_state(thread->thread, ARM_THREAD_STATE64, (thread_state_t)&state, ARM_THREAD_STATE64_COUNT) == KERN_SUCCESS)
+          {
+            arm_neon_state64_t neon_state = {0};
+            mach_msg_type_number_t neon_count = ARM_NEON_STATE64_COUNT;
+            if(thread_get_state(thread->thread, ARM_NEON_STATE64, (thread_state_t)&neon_state, &neon_count) == KERN_SUCCESS)
+            {
+              mac_dmn_arm64_neon_state_from_reg_block(&neon_state, (ARM64_RegBlock *)reg_block);
+              result = (thread_set_state(thread->thread, ARM_NEON_STATE64, (thread_state_t)&neon_state, ARM_NEON_STATE64_COUNT) == KERN_SUCCESS);
+            }
+          }
         }break;
 #endif
       }

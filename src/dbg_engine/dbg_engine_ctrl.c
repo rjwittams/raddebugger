@@ -3377,6 +3377,64 @@ d_macho_compact_unwind_arm64_mode_is_supported(U32 encoding)
   return result;
 }
 
+internal U64
+d_macho_compact_unwind_arm64_frame_saved_reg_slots_from_encoding(U32 encoding, D_MachOCompactArm64FrameRegSlot *slots, U64 slots_cap)
+{
+  U32 saved_register_bits = encoding & 0xfff;
+  U64 count = 0;
+  S32 cfa_off = -24;
+#define EmitPair(bit, reg_a, reg_b, size) \
+  if(saved_register_bits & (bit)) \
+  { \
+    if(count < slots_cap) { slots[count] = (D_MachOCompactArm64FrameRegSlot){(reg_a), cfa_off, (size)}; } \
+    count += 1; \
+    cfa_off -= 8; \
+    if(count < slots_cap) { slots[count] = (D_MachOCompactArm64FrameRegSlot){(reg_b), cfa_off, (size)}; } \
+    count += 1; \
+    cfa_off -= 8; \
+  }
+  EmitPair(MACHO_UNWIND_ARM64_FRAME_X19_X20_PAIR, ARM64_RegCode_x19, ARM64_RegCode_x20, 8);
+  EmitPair(MACHO_UNWIND_ARM64_FRAME_X21_X22_PAIR, ARM64_RegCode_x21, ARM64_RegCode_x22, 8);
+  EmitPair(MACHO_UNWIND_ARM64_FRAME_X23_X24_PAIR, ARM64_RegCode_x23, ARM64_RegCode_x24, 8);
+  EmitPair(MACHO_UNWIND_ARM64_FRAME_X25_X26_PAIR, ARM64_RegCode_x25, ARM64_RegCode_x26, 8);
+  EmitPair(MACHO_UNWIND_ARM64_FRAME_X27_X28_PAIR, ARM64_RegCode_x27, ARM64_RegCode_x28, 8);
+  EmitPair(MACHO_UNWIND_ARM64_FRAME_D8_D9_PAIR,   ARM64_RegCode_q8,  ARM64_RegCode_q9,  8);
+  EmitPair(MACHO_UNWIND_ARM64_FRAME_D10_D11_PAIR, ARM64_RegCode_q10, ARM64_RegCode_q11, 8);
+  EmitPair(MACHO_UNWIND_ARM64_FRAME_D12_D13_PAIR, ARM64_RegCode_q12, ARM64_RegCode_q13, 8);
+  EmitPair(MACHO_UNWIND_ARM64_FRAME_D14_D15_PAIR, ARM64_RegCode_q14, ARM64_RegCode_q15, 8);
+#undef EmitPair
+  return count;
+}
+
+internal B32
+d_macho_compact_unwind_arm64_write_reg_slot(ARM64_RegBlock *regs, D_MachOCompactArm64FrameRegSlot *slot, U64 value)
+{
+  B32 result = 1;
+  switch(slot->reg_code)
+  {
+    case ARM64_RegCode_x19: {regs->x19 = value;}break;
+    case ARM64_RegCode_x20: {regs->x20 = value;}break;
+    case ARM64_RegCode_x21: {regs->x21 = value;}break;
+    case ARM64_RegCode_x22: {regs->x22 = value;}break;
+    case ARM64_RegCode_x23: {regs->x23 = value;}break;
+    case ARM64_RegCode_x24: {regs->x24 = value;}break;
+    case ARM64_RegCode_x25: {regs->x25 = value;}break;
+    case ARM64_RegCode_x26: {regs->x26 = value;}break;
+    case ARM64_RegCode_x27: {regs->x27 = value;}break;
+    case ARM64_RegCode_x28: {regs->x28 = value;}break;
+    case ARM64_RegCode_q8:  {regs->q8.u64[0]  = value;}break;
+    case ARM64_RegCode_q9:  {regs->q9.u64[0]  = value;}break;
+    case ARM64_RegCode_q10: {regs->q10.u64[0] = value;}break;
+    case ARM64_RegCode_q11: {regs->q11.u64[0] = value;}break;
+    case ARM64_RegCode_q12: {regs->q12.u64[0] = value;}break;
+    case ARM64_RegCode_q13: {regs->q13.u64[0] = value;}break;
+    case ARM64_RegCode_q14: {regs->q14.u64[0] = value;}break;
+    case ARM64_RegCode_q15: {regs->q15.u64[0] = value;}break;
+    default: {result = 0;}break;
+  }
+  return result;
+}
+
 internal B32
 d_macho_compact_unwind_arm64_cfa_from_encoding(MachO_UnwindInfoLookupResult *lookup, ARM64_RegBlock *regs, U64 *cfa_out)
 {
@@ -3442,6 +3500,36 @@ d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 
             U64 caller_lr = frame_record[1];
             if((caller_fp == 0 || caller_fp > frame_fp) && caller_lr != 0)
             {
+              D_MachOCompactArm64FrameRegSlot slots[18] = {0};
+              U64 slot_count = d_macho_compact_unwind_arm64_frame_saved_reg_slots_from_encoding(lookup.encoding, slots, ArrayCount(slots));
+              U64 saved_values[18] = {0};
+              U64 cfa = frame_fp + 16;
+              B32 saved_regs_good = 1;
+              if(slot_count > ArrayCount(slots))
+              {
+                saved_regs_good = 0;
+                break;
+              }
+              for(U64 slot_idx = 0; slot_idx < slot_count; slot_idx += 1)
+              {
+                U64 value = 0;
+                U64 addr = cfa + (S64)slots[slot_idx].cfa_off;
+                if(!d_process_memory_read_struct(process_handle, addr, &is_stale, &value, endt_us) ||
+                   is_stale)
+                {
+                  saved_regs_good = 0;
+                  break;
+                }
+                saved_values[slot_idx] = value;
+              }
+              if(is_stale || saved_regs_good == 0)
+              {
+                break;
+              }
+              for(U64 slot_idx = 0; slot_idx < slot_count; slot_idx += 1)
+              {
+                d_macho_compact_unwind_arm64_write_reg_slot(regs, &slots[slot_idx], saved_values[slot_idx]);
+              }
               regs->fp = caller_fp;
               regs->lr = caller_lr;
               regs->sp = frame_fp + 16;

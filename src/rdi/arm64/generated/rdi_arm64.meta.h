@@ -7,7 +7,7 @@
 #define RDI_ARM64_META_H
 
 C_LINKAGE_BEGIN
-extern U8 rdi_reg_code_from_arm64_table[68];
+extern U8 rdi_reg_code_from_arm64_table[100];
 
 C_LINKAGE_END
 
