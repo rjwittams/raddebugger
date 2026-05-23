@@ -47,7 +47,7 @@ cc_link_dll="-fPIC"
 # --- External Libraries ------------------------------------------------------
 # sudo apt install -y pkg-config libfreetype6-dev libx11-dev libxext-dev libgl-dev libegl-dev
 if [[ "$host_os" == "Darwin" ]]; then
-  cc_os_gfx="-framework Cocoa"
+  cc_os_gfx="-framework Cocoa -framework Security"
   cc_render="-framework Metal -framework QuartzCore"
   cc_font_provider="-framework CoreText -framework CoreGraphics -framework CoreFoundation"
 elif [[ -x "$(command -v pkg-config)" ]]; then
@@ -83,8 +83,16 @@ fi
 
 # --- Build Everything (@build_targets) ---------------------------------------
 cd build
-if [[ "${raddbg:-0}"               == "1" ]]; then didbuild=1 && $compile ../src/raddbg/raddbg_main.c $cc_link $cc_os_gfx $cc_render $cc_font_provider -o raddbg; fi
-if [[ "${bundle:-0}"               == "1" ]]; then didbuild=1; if [[ "$host_os" != "Darwin" ]]; then echo "[ERROR] bundle target is only supported on Darwin."; exit 1; fi; $compile ../src/raddbg/raddbg_main.c $cc_link $cc_os_gfx $cc_render $cc_font_provider -o raddbg; rm -rf "RAD Debugger.app"; mkdir -p "RAD Debugger.app/Contents/MacOS" "RAD Debugger.app/Contents/Resources"; cp ../src/mac/raddbg_Info.plist "RAD Debugger.app/Contents/Info.plist"; cp ../src/mac/raddbg.icns "RAD Debugger.app/Contents/Resources/raddbg.icns"; cp raddbg "RAD Debugger.app/Contents/MacOS/raddbg"; chmod +x "RAD Debugger.app/Contents/MacOS/raddbg"; fi
+sign_raddbg_debug()
+{
+  if [[ "$host_os" == "Darwin" ]]; then
+    codesign_identity="${RADDBG_CODESIGN_IDENTITY:--}"
+    codesign_entitlements="${RADDBG_CODESIGN_ENTITLEMENTS:-../src/mac/raddbg_debug.entitlements}"
+    codesign --force --sign "$codesign_identity" --entitlements "$codesign_entitlements" "$1"
+  fi
+}
+if [[ "${raddbg:-0}"               == "1" ]]; then didbuild=1 && $compile ../src/raddbg/raddbg_main.c $cc_link $cc_os_gfx $cc_render $cc_font_provider -o raddbg; sign_raddbg_debug raddbg; fi
+if [[ "${bundle:-0}"               == "1" ]]; then didbuild=1; if [[ "$host_os" != "Darwin" ]]; then echo "[ERROR] bundle target is only supported on Darwin."; exit 1; fi; $compile ../src/raddbg/raddbg_main.c $cc_link $cc_os_gfx $cc_render $cc_font_provider -o raddbg; sign_raddbg_debug raddbg; rm -rf "RAD Debugger.app"; mkdir -p "RAD Debugger.app/Contents/MacOS" "RAD Debugger.app/Contents/Resources"; cp ../src/mac/raddbg_Info.plist "RAD Debugger.app/Contents/Info.plist"; cp ../src/mac/raddbg.icns "RAD Debugger.app/Contents/Resources/raddbg.icns"; cp raddbg "RAD Debugger.app/Contents/MacOS/raddbg"; chmod +x "RAD Debugger.app/Contents/MacOS/raddbg"; sign_raddbg_debug "RAD Debugger.app/Contents/MacOS/raddbg"; sign_raddbg_debug "RAD Debugger.app"; fi
 if [[ "${raddbg_non_graphical:-0}" == "1" ]]; then didbuild=1 && $compile ../src/raddbg/raddbg_main.c -DWM_STUB=1 -DR_BACKEND=R_BACKEND_STUB $cc_link $cc_os_gfx $cc_render $cc_font_provider -o raddbg_non_graphical; fi
 if [[ "${radbin:-0}"               == "1" ]]; then didbuild=1 && $compile ../src/radbin/radbin_main.c   $cc_link -o radbin; fi
 if [[ "${radlink:-0}"              == "1" ]]; then didbuild=1 && $compile ../src/linker/lnk.c           $cc_link -o radlink; fi
