@@ -18,6 +18,58 @@ di_key_match(DI_Key a, DI_Key b)
   return result;
 }
 
+internal String8
+di_rdi_cache_folder(Arena *arena)
+{
+  Temp scratch = scratch_begin(&arena, 1);
+  String8 user_program_data_path = get_process_info()->user_program_data_path;
+  String8 folder_prefix = program_data_folder_prefix_from_os(OperatingSystem_CURRENT);
+  String8 root_folder = push_str8f(scratch.arena, "%S/%Sraddbg", user_program_data_path, folder_prefix);
+  String8 cache_folder = push_str8f(scratch.arena, "%S/cache", root_folder);
+  String8 rdi_folder = push_str8f(arena, "%S/rdi", cache_folder);
+  make_directory(root_folder);
+  make_directory(cache_folder);
+  make_directory(rdi_folder);
+  scratch_end(scratch);
+  return rdi_folder;
+}
+
+internal String8
+di_sanitized_cache_name_from_path(Arena *arena, String8 path)
+{
+  String8 name = str8_skip_last_slash(path);
+  if(name.size == 0)
+  {
+    name = str8_lit("debug-info");
+  }
+  U8 *str = push_array_no_zero(arena, U8, name.size);
+  for(U64 idx = 0; idx < name.size; idx += 1)
+  {
+    U8 byte = name.str[idx];
+    if(byte == '/' || byte == '\\' || byte == ':' || byte == 0)
+    {
+      byte = '_';
+    }
+    str[idx] = byte;
+  }
+  return str8(str, name.size);
+}
+
+internal String8
+di_rdi_cache_path_from_original(Arena *arena, String8 og_path, U64 og_size, U64 og_min_timestamp)
+{
+  Temp scratch = scratch_begin(&arena, 1);
+  String8 folder = di_rdi_cache_folder(arena);
+  String8 normalized_path = path_normalized_from_string(scratch.arena, og_path);
+  String8 base = di_sanitized_cache_name_from_path(scratch.arena, normalized_path);
+  U64 path_hash = u64_hash_from_str8(normalized_path);
+  String8 result = push_str8f(arena, "%S/%S-%I64x-%I64x-%I64x-rdi%I64u.rdi",
+                              folder, base, path_hash, og_min_timestamp, og_size,
+                              (U64)RDI_ENCODING_VERSION);
+  scratch_end(scratch);
+  return result;
+}
+
 internal void
 di_key_list_push(Arena *arena, DI_KeyList *list, DI_Key key)
 {
@@ -709,7 +761,7 @@ di_async_tick(void)
           }
           else
           {
-            rdi_path = str8f(scratch.arena, "%S.rdi", str8_chop_last_dot(og_path));
+            rdi_path = di_rdi_cache_path_from_original(scratch.arena, og_path, og_size, og_min_timestamp);
           }
         }
         
