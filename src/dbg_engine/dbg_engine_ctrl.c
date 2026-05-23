@@ -3202,7 +3202,7 @@ d_unwind_step__pe_x64(D_Handle process_handle, D_Handle module_handle, U64 modul
       }
     }
   }
-  
+
   //////////////////////////////
   //- rjf: no pdata, or didn't do machframe in xdata unwind -> unwind by reading stack pointer
   //
@@ -3216,7 +3216,7 @@ d_unwind_step__pe_x64(D_Handle process_handle, D_Handle module_handle, U64 modul
     {
       is_good = 0;
     }
-    
+
     // rjf: commit registers
     if(is_good)
     {
@@ -3225,7 +3225,7 @@ d_unwind_step__pe_x64(D_Handle process_handle, D_Handle module_handle, U64 modul
       regs->rsp = new_rsp;
     }
   }
-  
+
   //////////////////////////////
   //- rjf: fill & return
   //
