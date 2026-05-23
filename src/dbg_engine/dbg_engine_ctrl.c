@@ -1004,7 +1004,7 @@ d_entity_string_alloc(D_EntityCtxRWStore *store, String8 string)
       }
     }
   }
-  
+
   //- rjf: fill node
   String8 result = {0};
   if(node != 0)
@@ -1110,7 +1110,7 @@ d_entity_release(D_EntityCtxRWStore *store, D_Entity *entity)
   {
     DLLRemove_NPZ(&d_entity_nil, entity->parent->first, entity->parent->last, entity, next, prev);
   }
-  
+
   // rjf: walk every entity in this tree, free each
   if(entity != &d_entity_nil)
   {
@@ -2255,89 +2255,181 @@ d_macho_compact_unwind_arm64_cfa_from_encoding(MachO_UnwindInfoLookupResult *loo
   return result;
 }
 
+internal B32
+d_unwind_arm64_cfa_from_frame_pointer(ARM64_RegBlock *regs, U64 *cfa_out)
+{
+  B32 result = 0;
+  if(regs->fp != 0)
+  {
+    *cfa_out = regs->fp + 16;
+    result = 1;
+  }
+  return result;
+}
+
+internal B32
+d_unwind_arm64_cfa_from_link_register(ARM64_RegBlock *regs, U64 *cfa_out)
+{
+  B32 result = 0;
+  if(regs->lr != 0)
+  {
+    *cfa_out = regs->sp;
+    result = 1;
+  }
+  return result;
+}
+
 internal D_UnwindStepResult
-d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, ARM64_RegBlock *regs, U64 endt_us)
+d_unwind_step__link_register_arm64(ARM64_RegBlock *regs)
+{
+  B32 is_good = 0;
+  if(regs->lr != 0)
+  {
+    U64 caller_pc = regs->lr >= 4 ? regs->lr - 4 : regs->lr;
+    if(caller_pc != regs->pc)
+    {
+      regs->pc = caller_pc;
+      regs->lr = 0;
+      is_good = 1;
+    }
+  }
+
+  D_UnwindStepResult result = {0};
+  if(!is_good) {result.flags |= D_UnwindFlag_Error;}
+  return result;
+}
+
+internal D_UnwindStepResult
+d_unwind_step__frame_pointer_arm64(D_Handle process_handle, ARM64_RegBlock *regs, U64 endt_us)
+{
+  B32 is_good = 0;
+  B32 is_stale = 0;
+  U64 frame_record[2] = {0};
+  U64 frame_fp = regs->fp;
+  if(frame_fp != 0)
+  {
+    B32 read = d_process_memory_read(process_handle, r1u64(frame_fp, frame_fp + sizeof(frame_record)), &is_stale, frame_record, endt_us);
+    if(read && !is_stale)
+    {
+      U64 caller_fp = frame_record[0];
+      U64 caller_lr = frame_record[1];
+      if((caller_fp == 0 || caller_fp > frame_fp) && caller_lr != 0)
+      {
+        regs->fp = caller_fp;
+        regs->lr = caller_lr;
+        regs->sp = frame_fp + 16;
+        regs->pc = caller_lr >= 4 ? caller_lr - 4 : caller_lr;
+        is_good = 1;
+      }
+    }
+  }
+
+  D_UnwindStepResult result = {0};
+  if(!is_good) {result.flags |= D_UnwindFlag_Error;}
+  if(is_stale) {result.flags |= D_UnwindFlag_Stale;}
+  return result;
+}
+
+internal D_UnwindStepResult
+d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, ARM64_RegBlock *regs, B32 prefer_entry_lr, U64 endt_us)
 {
   B32 is_stale = 0;
   B32 is_good = 0;
   Temp scratch = scratch_begin(0, 0);
-  String8 unwind_info_data = d_macho_unwind_info_data_from_module(scratch.arena, module_handle);
-  MachO_UnwindInfoLookupResult lookup = {0};
-  if(macho_unwind_info_lookup(unwind_info_data, regs->pc - module_base_vaddr, &lookup))
+
+  if(prefer_entry_lr)
   {
-    switch(lookup.encoding & MACHO_UNWIND_ARM64_MODE_MASK)
+    D_UnwindStepResult lr_result = d_unwind_step__link_register_arm64(regs);
+    is_good = !(lr_result.flags & D_UnwindFlag_Error);
+  }
+  if(!is_good)
+  {
+    String8 unwind_info_data = d_macho_unwind_info_data_from_module(scratch.arena, module_handle);
+    MachO_UnwindInfoLookupResult lookup = {0};
+    if(macho_unwind_info_lookup(unwind_info_data, regs->pc - module_base_vaddr, &lookup))
     {
-      case MACHO_UNWIND_ARM64_MODE_FRAMELESS:
+      switch(lookup.encoding & MACHO_UNWIND_ARM64_MODE_MASK)
       {
-        U64 stack_size = ((lookup.encoding & MACHO_UNWIND_ARM64_FRAMELESS_STACK_SIZE_MASK) >> 12)*16;
-        if(regs->lr != 0)
+        case MACHO_UNWIND_ARM64_MODE_FRAMELESS:
         {
-          U64 caller_pc = regs->lr >= 4 ? regs->lr - 4 : regs->lr;
-          if(caller_pc != regs->pc)
+          U64 stack_size = ((lookup.encoding & MACHO_UNWIND_ARM64_FRAMELESS_STACK_SIZE_MASK) >> 12)*16;
+          if(regs->lr != 0)
           {
-            regs->pc = caller_pc;
-            regs->lr = 0;
-            regs->sp += stack_size;
-            is_good = 1;
-          }
-        }
-      }break;
-      case MACHO_UNWIND_ARM64_MODE_FRAME:
-      {
-        U64 frame_record[2] = {0};
-        if(regs->fp != 0)
-        {
-          U64 frame_fp = regs->fp;
-          B32 read = d_process_memory_read(process_handle, r1u64(frame_fp, frame_fp + sizeof(frame_record)), &is_stale, frame_record, endt_us);
-          if(read && !is_stale)
-          {
-            U64 caller_fp = frame_record[0];
-            U64 caller_lr = frame_record[1];
-            if((caller_fp == 0 || caller_fp > frame_fp) && caller_lr != 0)
+            U64 caller_pc = regs->lr >= 4 ? regs->lr - 4 : regs->lr;
+            if(caller_pc != regs->pc)
             {
-              D_MachOCompactArm64FrameRegSlot slots[18] = {0};
-              U64 slot_count = d_macho_compact_unwind_arm64_frame_saved_reg_slots_from_encoding(lookup.encoding, slots, ArrayCount(slots));
-              U64 saved_values[18] = {0};
-              U64 cfa = frame_fp + 16;
-              B32 saved_regs_good = 1;
-              if(slot_count > ArrayCount(slots))
+              regs->pc = caller_pc;
+              regs->lr = 0;
+              regs->sp += stack_size;
+              is_good = 1;
+            }
+          }
+        }break;
+        case MACHO_UNWIND_ARM64_MODE_FRAME:
+        {
+          U64 frame_record[2] = {0};
+          if(regs->fp != 0)
+          {
+            U64 frame_fp = regs->fp;
+            B32 read = d_process_memory_read(process_handle, r1u64(frame_fp, frame_fp + sizeof(frame_record)), &is_stale, frame_record, endt_us);
+            if(read && !is_stale)
+            {
+              U64 caller_fp = frame_record[0];
+              U64 caller_lr = frame_record[1];
+              if((caller_fp == 0 || caller_fp > frame_fp) && caller_lr != 0)
               {
-                saved_regs_good = 0;
-                break;
-              }
-              for(U64 slot_idx = 0; slot_idx < slot_count; slot_idx += 1)
-              {
-                U64 value = 0;
-                U64 addr = cfa + (S64)slots[slot_idx].cfa_off;
-                if(!d_process_memory_read_struct(process_handle, addr, &is_stale, &value, endt_us) ||
-                   is_stale)
+                D_MachOCompactArm64FrameRegSlot slots[18] = {0};
+                U64 slot_count = d_macho_compact_unwind_arm64_frame_saved_reg_slots_from_encoding(lookup.encoding, slots, ArrayCount(slots));
+                U64 saved_values[18] = {0};
+                U64 cfa = frame_fp + 16;
+                B32 saved_regs_good = 1;
+                if(slot_count > ArrayCount(slots))
                 {
                   saved_regs_good = 0;
                   break;
                 }
-                saved_values[slot_idx] = value;
+                for(U64 slot_idx = 0; slot_idx < slot_count; slot_idx += 1)
+                {
+                  U64 value = 0;
+                  U64 addr = cfa + (S64)slots[slot_idx].cfa_off;
+                  if(!d_process_memory_read_struct(process_handle, addr, &is_stale, &value, endt_us) ||
+                     is_stale)
+                  {
+                    saved_regs_good = 0;
+                    break;
+                  }
+                  saved_values[slot_idx] = value;
+                }
+                if(is_stale || saved_regs_good == 0)
+                {
+                  break;
+                }
+                for(U64 slot_idx = 0; slot_idx < slot_count; slot_idx += 1)
+                {
+                  d_macho_compact_unwind_arm64_write_reg_slot(regs, &slots[slot_idx], saved_values[slot_idx]);
+                }
+                regs->fp = caller_fp;
+                regs->lr = caller_lr;
+                regs->sp = frame_fp + 16;
+                regs->pc = caller_lr >= 4 ? caller_lr - 4 : caller_lr;
+                is_good = 1;
               }
-              if(is_stale || saved_regs_good == 0)
-              {
-                break;
-              }
-              for(U64 slot_idx = 0; slot_idx < slot_count; slot_idx += 1)
-              {
-                d_macho_compact_unwind_arm64_write_reg_slot(regs, &slots[slot_idx], saved_values[slot_idx]);
-              }
-              regs->fp = caller_fp;
-              regs->lr = caller_lr;
-              regs->sp = frame_fp + 16;
-              regs->pc = caller_lr >= 4 ? caller_lr - 4 : caller_lr;
-              is_good = 1;
             }
           }
-        }
-      }break;
+        }break;
+      }
     }
   }
-  scratch_end(scratch);
   
+  if(!is_good && !is_stale)
+  {
+    D_UnwindStepResult fallback_result = d_unwind_step__frame_pointer_arm64(process_handle, regs, endt_us);
+    is_good = !(fallback_result.flags & D_UnwindFlag_Error);
+    is_stale = !!(fallback_result.flags & D_UnwindFlag_Stale);
+  }
+
+  scratch_end(scratch);
+
   D_UnwindStepResult result = {0};
   if(!is_good) {result.flags |= D_UnwindFlag_Error;}
   if(is_stale) {result.flags |= D_UnwindFlag_Stale;}
@@ -2506,12 +2598,42 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
         {
           ARM64_RegBlock *regs_arm64 = regs_block;
           MachO_UnwindInfoLookupResult lookup = {0};
-          B32 compact_lookup_good = macho_unwind_info_lookup(module_info->macho_unwind_info_data, start_ip - module_entity->vaddr_range.min, &lookup);
+          U64 pc_voff = start_ip - module_entity->vaddr_range.min;
+          B32 compact_lookup_good = macho_unwind_info_lookup(module_info->macho_unwind_info_data, pc_voff, &lookup);
+          U64 lr_vaddr = regs_arm64->lr >= 4 ? regs_arm64->lr - 4 : regs_arm64->lr;
+          B32 lr_module_good = (d_module_from_process_vaddr(process_entity, lr_vaddr) != &d_entity_nil);
+          B32 near_unwind_entry = (!compact_lookup_good ||
+                                   (lookup.voff_range.min <= pc_voff &&
+                                    pc_voff - lookup.voff_range.min < 16));
+          B32 prefer_entry_lr = (frame_node_count == 1 &&
+                                 regs_arm64->lr != 0 &&
+                                 lr_module_good &&
+                                 near_unwind_entry);
           B32 compact_dwarf = (compact_lookup_good &&
                                (lookup.encoding & MACHO_UNWIND_ARM64_MODE_MASK) == MACHO_UNWIND_ARM64_MODE_DWARF);
           B32 compact_supported = compact_lookup_good && d_macho_compact_unwind_arm64_mode_is_supported(lookup.encoding);
           B32 compact_cfa_good = compact_supported && d_macho_compact_unwind_arm64_cfa_from_encoding(&lookup, regs_arm64, &cfa);
-          if(compact_dwarf)
+          if(prefer_entry_lr && d_unwind_arm64_cfa_from_link_register(regs_arm64, &cfa))
+          {
+            D_UnwindStepResult step = d_unwind_step__macho_arm64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, regs_arm64, 1, endt_us);
+            if(step.flags == 0)
+            {
+              last_frame_node->v.cfa = cfa;
+              step_is_good = 1;
+              U64 new_ip = arch_ip_from_reg_block(arch_info, regs_block);
+              D_Entity *new_module_entity = d_module_from_process_vaddr(process_entity, new_ip);
+              stop_after_step = (new_ip != 0 && new_module_entity != module_entity);
+            }
+            else if(step.flags & D_UnwindFlag_Stale)
+            {
+              unwind.flags |= D_UnwindFlag_Stale;
+            }
+            else
+            {
+              MemoryCopy(regs_block, regs_block_restore, arch_reg_block_size);
+            }
+          }
+          else if(compact_dwarf)
           {
             EH_UWND_ModuleUnwindInfo *eh_unwind_info = (module_info->unwinder == UWND_Unwinder_EHFrame ? (EH_UWND_ModuleUnwindInfo *)module_info->unwind_info : 0);
             if(eh_unwind_info != 0 && eh_unwind_info->eh_frame_vaddr != 0)
@@ -2522,11 +2644,12 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
               step_unwinder_module_info.unwind_info = &compact_dwarf_unwind_info;
             }
           }
-          else if(compact_lookup_good &&
-                  compact_supported &&
-                  compact_cfa_good)
+          else if((compact_lookup_good &&
+                   compact_supported &&
+                   compact_cfa_good) ||
+                  d_unwind_arm64_cfa_from_frame_pointer(regs_arm64, &cfa))
           {
-            D_UnwindStepResult step = d_unwind_step__macho_arm64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, regs_arm64, endt_us);
+            D_UnwindStepResult step = d_unwind_step__macho_arm64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, regs_arm64, 0, endt_us);
             if(step.flags == 0)
             {
               last_frame_node->v.cfa = cfa;
