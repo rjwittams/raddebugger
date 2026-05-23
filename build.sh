@@ -82,7 +82,9 @@ cd build
 sign_raddbg_debug()
 {
   if [ "$host_os" = "Darwin" ]; then
-    codesign --force --sign - --entitlements ../src/mac/raddbg_debug.entitlements "$1"
+    codesign_identity="${RADDBG_CODESIGN_IDENTITY:--}"
+    codesign_entitlements="${RADDBG_CODESIGN_ENTITLEMENTS:-../src/mac/raddbg_debug.entitlements}"
+    codesign --force --sign "$codesign_identity" --entitlements "$codesign_entitlements" "$1"
   fi
 }
 if [ -n "${raddbg+x}" ];              then didbuild=1 && $compile ../src/raddbg/raddbg_main.c                                    $compile_link $link_os_gfx $link_render $link_font_provider $out raddbg; sign_raddbg_debug raddbg; fi

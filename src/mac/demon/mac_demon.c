@@ -300,7 +300,7 @@ mac_dmn_launch_traced_process(ProcessLaunchParams *params)
 }
 
 internal S32
-mac_dmn_taskport_authorization_status(void)
+mac_dmn_taskport_authorization_status(B32 interaction_allowed)
 {
   OSStatus result = errAuthorizationInternal;
   AuthorizationRef authorization = 0;
@@ -314,6 +314,10 @@ mac_dmn_taskport_authorization_status(void)
     AuthorizationFlags flags = (kAuthorizationFlagDefaults |
                                 kAuthorizationFlagExtendRights |
                                 kAuthorizationFlagPreAuthorize);
+    if(interaction_allowed)
+    {
+      flags |= kAuthorizationFlagInteractionAllowed;
+    }
     result = AuthorizationCopyRights(authorization, &rights,
                                      kAuthorizationEmptyEnvironment,
                                      flags, 0);
@@ -1564,11 +1568,11 @@ internal U32
 dmn_ctrl_launch(DMN_CtrlCtx *ctx, ProcessLaunchParams *params)
 {
   U32 result = 0;
-  S32 auth_status = mac_dmn_taskport_authorization_status();
+  S32 auth_status = mac_dmn_taskport_authorization_status(1);
   if(auth_status != errAuthorizationSuccess)
   {
     String8 exe = params->cmd_line.first ? params->cmd_line.first->string : str8_zero();
-    log_user_errorf("Could not launch `%S`: taskport authorization failed with OSStatus %d. On macOS, run `security authorize -u -P system.privilege.taskport` from a logged-in Terminal session before launching targets.", exe, auth_status);
+    log_user_errorf("Could not launch `%S`: taskport authorization failed with OSStatus %d. On macOS, approve the administrator authorization prompt, or run `security authorize -u -P system.privilege.taskport` from a logged-in Terminal session before launching targets.", exe, auth_status);
     return result;
   }
   pid_t pid = mac_dmn_launch_traced_process(params);

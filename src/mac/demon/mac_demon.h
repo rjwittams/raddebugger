@@ -146,7 +146,7 @@ internal char **mac_dmn_argv_from_launch_params(Arena *arena, ProcessLaunchParam
 internal char **mac_dmn_envp_from_launch_params(Arena *arena, ProcessLaunchParams *params);
 internal void mac_dmn_apply_child_stdio(ProcessLaunchParams *params);
 internal pid_t mac_dmn_launch_traced_process(ProcessLaunchParams *params);
-internal S32 mac_dmn_taskport_authorization_status(void);
+internal S32 mac_dmn_taskport_authorization_status(B32 interaction_allowed);
 internal vm_prot_t mac_dmn_vm_prot_from_access_flags(AccessFlags flags);
 internal Arch mac_dmn_host_arch(void);
 internal U64 mac_dmn_thread_id_from_port(mach_port_t thread);
