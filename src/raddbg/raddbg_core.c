@@ -15639,7 +15639,7 @@ rd_frame(void)
           }break;
           case RD_CmdKind_AddAddressBreakpoint:
           {
-            rd_cmd(RD_CmdKind_AddBreakpoint, .file_path = str8_zero(), .do_lister = 1);
+            rd_cmd(RD_CmdKind_AddBreakpoint, .file_path = str8_zero(), .expr = rd_regs()->expr, .vaddr = rd_regs()->vaddr, .do_lister = 1);
           }break;
           case RD_CmdKind_AddFunctionBreakpoint:
           {
