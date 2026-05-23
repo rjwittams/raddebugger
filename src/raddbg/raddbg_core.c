@@ -12909,6 +12909,131 @@ rd_frame(void)
               String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
               str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
             }
+            else if(str8_match(cmd_name, str8_lit("dump_registers"), 0))
+            {
+              handled = 1;
+              String8Node *arg = msg_parts.first != 0 ? msg_parts.first->next : 0;
+              D_Entity *thread = &d_entity_nil;
+              if(arg != 0)
+              {
+                D_Entity *entity = d_entity_from_handle(d_handle_from_string(arg->string));
+                if(entity != &d_entity_nil)
+                {
+                  if(entity->kind == D_EntityKind_Process)
+                  {
+                    thread = d_entity_child_from_kind(entity, D_EntityKind_Thread);
+                  }
+                  else
+                  {
+                    thread = entity;
+                  }
+                  arg = arg->next;
+                }
+                else
+                {
+                  U64 pid = 0;
+                  if(try_u64_from_str8_c_rules(arg->string, &pid))
+                  {
+                    D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
+                    for(U64 idx = 0; idx < processes.count; idx += 1)
+                    {
+                      D_Entity *process = processes.v[idx];
+                      if(process->id == pid)
+                      {
+                        thread = d_entity_child_from_kind(process, D_EntityKind_Thread);
+                        arg = arg->next;
+                        break;
+                      }
+                    }
+                  }
+                }
+              }
+              if(thread == &d_entity_nil)
+              {
+                thread = d_entity_from_handle(rd_base_regs()->thread);
+              }
+              if(thread == &d_entity_nil || thread->kind != D_EntityKind_Thread)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: thread not found");
+              }
+              else
+              {
+                ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
+                void *regs_block = d_cached_reg_block_from_thread(scratch.arena, thread->handle);
+                if(regs_block == 0 || arch_info == &arch_info_nil)
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: registers not cached");
+                }
+                else
+                {
+                  String8List reg_names = {0};
+                  if(arg == 0)
+                  {
+                    switch(thread->arch)
+                    {
+                      case Arch_x64:
+                      {
+                        str8_list_push(scratch.arena, &reg_names, str8_lit("rip"));
+                        str8_list_push(scratch.arena, &reg_names, str8_lit("rsp"));
+                        str8_list_push(scratch.arena, &reg_names, str8_lit("rbp"));
+                      }break;
+                      case Arch_arm64:
+                      {
+                        str8_list_push(scratch.arena, &reg_names, str8_lit("pc"));
+                        str8_list_push(scratch.arena, &reg_names, str8_lit("sp"));
+                        str8_list_push(scratch.arena, &reg_names, str8_lit("fp"));
+                        str8_list_push(scratch.arena, &reg_names, str8_lit("lr"));
+                        str8_list_push(scratch.arena, &reg_names, str8_lit("q0"));
+                        str8_list_push(scratch.arena, &reg_names, str8_lit("q8"));
+                        str8_list_push(scratch.arena, &reg_names, str8_lit("q31"));
+                      }break;
+                      default: break;
+                    }
+                  }
+                  else
+                  {
+                    for(String8Node *n = arg; n != 0; n = n->next)
+                    {
+                      str8_list_push(scratch.arena, &reg_names, n->string);
+                    }
+                  }
+
+                  String8List lines = {0};
+                  str8_list_pushf(scratch.arena, &lines, "thread:%S arch:%S",
+                                  d_string_from_handle(scratch.arena, thread->handle),
+                                  string_from_arch(thread->arch));
+                  for(String8Node *n = reg_names.first; n != 0; n = n->next)
+                  {
+                    ARCH_RegCode reg_code = arch_reg_code_from_name(arch_info, n->string);
+                    if(reg_code == 0)
+                    {
+                      str8_list_pushf(scratch.arena, &lines, "\n%S:error:unknown", n->string);
+                    }
+                    else
+                    {
+                      Rng1U16 range = arch_info->reg_code_rng_table[reg_code];
+                      U64 byte_size = dim_1u16(range);
+                      U8 bytes[32] = {0};
+                      if(byte_size > sizeof(bytes) ||
+                         !arch_reg_block_read_range(arch_info, regs_block, range, bytes))
+                      {
+                        str8_list_pushf(scratch.arena, &lines, "\n%S:error:unreadable", n->string);
+                      }
+                      else
+                      {
+                        str8_list_pushf(scratch.arena, &lines, "\n%S:", n->string);
+                        for(U64 byte_idx = 0; byte_idx < byte_size; byte_idx += 1)
+                        {
+                          str8_list_pushf(scratch.arena, &lines, "%02x", bytes[byte_idx]);
+                        }
+                      }
+                    }
+                  }
+                  String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+                  str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+                }
+              }
+            }
             else if(str8_match(cmd_name, str8_lit("dump_output"), 0))
             {
               handled = 1;
