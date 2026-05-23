@@ -5,7 +5,7 @@
 #define MAC_BASE_H
 
 ////////////////////////////////
-//~ rjf: Includes
+//~ Includes
 
 #include <dirent.h>
 #include <dlfcn.h>
@@ -33,7 +33,7 @@ typedef struct tm tm;
 typedef struct timespec timespec;
 
 ////////////////////////////////
-//~ rjf: Mac Call Interruption Retry Helper
+//~ Mac Call Interruption Retry Helper
 
 #define MAC_RETRY_ON_EINTR(expr)          \
 (__extension__({                           \
@@ -46,7 +46,7 @@ __ret;                                     \
 
 
 ////////////////////////////////
-//~ rjf: File Iterator
+//~ File Iterator
 
 typedef struct MAC_FileIter MAC_FileIter;
 struct MAC_FileIter
@@ -58,7 +58,7 @@ struct MAC_FileIter
 StaticAssert(sizeof(Member(FileIter, memory)) >= sizeof(MAC_FileIter), mac_file_iter_size_check);
 
 ////////////////////////////////
-//~ rjf: Safe Call Handler Chain
+//~ Safe Call Handler Chain
 
 typedef struct MAC_SafeCallChain MAC_SafeCallChain;
 struct MAC_SafeCallChain
@@ -69,7 +69,7 @@ struct MAC_SafeCallChain
 };
 
 ////////////////////////////////
-//~ rjf: Entities
+//~ Entities
 
 typedef enum MAC_EntityKind
 {
@@ -113,7 +113,7 @@ struct MAC_Entity
 };
 
 ////////////////////////////////
-//~ rjf: State
+//~ State
 
 typedef struct MAC_State MAC_State;
 struct MAC_State
@@ -129,13 +129,13 @@ struct MAC_State
 };
 
 ////////////////////////////////
-//~ rjf: Globals
+//~ Globals
 
 global MAC_State mac_state = {0};
 thread_static MAC_SafeCallChain *mac_safe_call_chain = 0;
 
 ////////////////////////////////
-//~ rjf: Helpers
+//~ Helpers
 
 internal DateTime mac_date_time_from_tm(tm in, U32 msec);
 internal tm mac_tm_from_date_time(DateTime dt);
@@ -146,13 +146,13 @@ internal String8 mac_posix_ipc_name(Arena *arena, String8 name);
 internal void mac_safe_call_sig_handler(int x);
 
 ////////////////////////////////
-//~ rjf: Entities
+//~ Entities
 
 internal MAC_Entity *mac_entity_alloc(MAC_EntityKind kind);
 internal void mac_entity_release(MAC_Entity *entity);
 
 ////////////////////////////////
-//~ rjf: Thread Entry Point
+//~ Thread Entry Point
 
 internal void *mac_thread_entry_point(void *ptr);
 
