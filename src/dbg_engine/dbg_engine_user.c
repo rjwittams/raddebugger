@@ -1581,6 +1581,9 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         case D_EventKind_Error:
         {
           log_user_error(event->string);
+          String8 output = push_str8f(scratch.arena, "[error] %S\n", event->string);
+          MTX_Op op = {r1u64(max_U64, max_U64), output};
+          mtx_push_op(d_user_state->output_log_key, op);
         }break;
         
         case D_EventKind_Started:
