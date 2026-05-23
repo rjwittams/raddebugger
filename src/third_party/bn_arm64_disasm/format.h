@@ -52,5 +52,3 @@ const char *get_arrspec_str_truncated(ArrangementSpec arrspec);
 #ifdef __cplusplus
 }
 #endif
-
-

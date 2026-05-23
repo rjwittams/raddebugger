@@ -10042,7 +10042,7 @@ int decode_scratchpad(context* ctx, Instruction* instr)
 		    REG_X_BASE, ctx->n, 0,
 		    REG_X_BASE, ctx->m, 0,
 		    shamt ? ShiftType_LSL : ShiftType_NONE, shamt, 1
-		);		
+		);
 		break;
 	}
 
