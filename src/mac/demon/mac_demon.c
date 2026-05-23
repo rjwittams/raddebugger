@@ -1853,6 +1853,25 @@ mac_dmn_thread_entity_stepping_over_dyld_bootstrap(MAC_DMN_Process *process)
   return result;
 }
 
+internal MAC_DMN_Entity *
+mac_dmn_thread_entity_stepping_over_debug_trap(MAC_DMN_Process *process)
+{
+  MAC_DMN_Entity *result = 0;
+  if(process != 0)
+  {
+    for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+    {
+      if(thread_entity->kind == MAC_DMN_EntityKind_Thread &&
+         thread_entity->thread.is_stepping_over_debug_trap)
+      {
+        result = thread_entity;
+        break;
+      }
+    }
+  }
+  return result;
+}
+
 internal void
 mac_dmn_process_set_dyld_notification_single_step_flags(MAC_DMN_Process *process, B32 is_on)
 {
@@ -3603,6 +3622,21 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
         }
       }
     }
+    if(single_step_thread_entity == 0)
+    {
+      for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+      {
+        if(entity->kind == MAC_DMN_EntityKind_Process)
+        {
+          single_step_thread_entity = mac_dmn_thread_entity_stepping_over_debug_trap(&entity->process);
+          if(single_step_thread_entity != 0)
+          {
+            mac_dmn_set_single_step_flag(&single_step_thread_entity->thread, 1);
+            break;
+          }
+        }
+      }
+    }
 
     for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
     {
@@ -3615,7 +3649,9 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
     for(MAC_DMN_FlaggedTrapTask *task = first_flagged_trap_task; task != 0; task = task->next)
     {
       MAC_DMN_Entity *process_entity = mac_dmn_entity_from_handle(task->process);
-      if(process_entity != 0 && process_entity->kind == MAC_DMN_EntityKind_Process)
+      if(process_entity != 0 &&
+         process_entity->kind == MAC_DMN_EntityKind_Process &&
+         mac_dmn_thread_entity_stepping_over_debug_trap(&process_entity->process) == 0)
       {
         mac_dmn_process_set_debug_traps(&process_entity->process, &task->traps);
       }
@@ -3823,6 +3859,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
                 }
                 else if(hit_debug_trap != 0)
                 {
+                  thread_entity->thread.is_stepping_over_debug_trap = 1;
                   mac_dmn_push_event_data_breakpoint(arena, &result, process_entity, thread_entity, hit_debug_trap);
                 }
                 else if(thread_entity->thread.is_stepping_over_dyld_notification)
@@ -3851,6 +3888,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
                   }
                   else
                   {
+                    thread_entity->thread.is_stepping_over_debug_trap = 0;
                     if(got_mach_exception &&
                        mac_dmn_exception_is_software_breakpoint(thread_entity->thread.arch, &process->pending_exception) &&
                        mac_dmn_thread_skip_past_trap_instruction(&thread_entity->thread))
