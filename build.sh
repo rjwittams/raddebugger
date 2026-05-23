@@ -85,6 +85,7 @@ fi
 # --- Build Everything (@build_targets) ---------------------------------------
 cd build
 if [ -v raddbg ];                then didbuild=1 && $compile ../src/raddbg/raddbg_main.c                                    $compile_link $link_os_gfx $link_render $link_font_provider $out raddbg; fi
+if [ -v bundle ];                then didbuild=1; if [ "$host_os" != "Darwin" ]; then echo "[ERROR] bundle target is only supported on Darwin."; exit 1; fi; if [ ! -x raddbg ]; then $compile ../src/raddbg/raddbg_main.c $compile_link $link_os_gfx $link_render $link_font_provider $out raddbg; fi; rm -rf "RAD Debugger.app"; mkdir -p "RAD Debugger.app/Contents/MacOS" "RAD Debugger.app/Contents/Resources"; cp ../src/mac/raddbg_Info.plist "RAD Debugger.app/Contents/Info.plist"; cp raddbg "RAD Debugger.app/Contents/MacOS/raddbg"; chmod +x "RAD Debugger.app/Contents/MacOS/raddbg"; fi
 if [ -v radbin ];                then didbuild=1 && $compile ../src/radbin/radbin_main.c                                    $compile_link $out radbin; fi
 if [ -v radlink ];               then didbuild=1 && $compile ../src/linker/lnk.c                                            $compile_link $out radlink; fi
 cd ..
