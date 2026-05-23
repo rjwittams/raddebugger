@@ -1,6 +1,7 @@
 // Copyright (c) Epic Games Tools
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
+#undef T_Group
 #define T_Group "Arch"
 
 TEST(arm64_metadata)
@@ -116,3 +117,121 @@ TEST(arm64_vector_register_metadata)
   T_Ok(dw_reg_size_from_code(Arch_arm64, DW_RegARM64_V31) == 16);
   T_Ok(d2r_rdi_reg_code_from_dw_reg(Arch_arm64, DW_RegARM64_V0) == RDI_RegCodeARM64_q0);
 }
+
+TEST(arm64_macho_compact_frame_saved_reg_slots)
+{
+  U32 encoding = (MACHO_UNWIND_ARM64_MODE_FRAME|
+                  MACHO_UNWIND_ARM64_FRAME_X19_X20_PAIR|
+                  MACHO_UNWIND_ARM64_FRAME_X21_X22_PAIR|
+                  MACHO_UNWIND_ARM64_FRAME_D8_D9_PAIR);
+  D_MachOCompactArm64FrameRegSlot slots[8] = {0};
+  U64 count = d_macho_compact_unwind_arm64_frame_saved_reg_slots_from_encoding(encoding, slots, ArrayCount(slots));
+
+  T_Ok(count == 6);
+  T_Ok(slots[0].reg_code == ARM64_RegCode_x19);
+  T_Ok(slots[0].cfa_off == -24);
+  T_Ok(slots[1].reg_code == ARM64_RegCode_x20);
+  T_Ok(slots[1].cfa_off == -32);
+  T_Ok(slots[2].reg_code == ARM64_RegCode_x21);
+  T_Ok(slots[2].cfa_off == -40);
+  T_Ok(slots[3].reg_code == ARM64_RegCode_x22);
+  T_Ok(slots[3].cfa_off == -48);
+  T_Ok(slots[4].reg_code == ARM64_RegCode_q8);
+  T_Ok(slots[4].cfa_off == -56);
+  T_Ok(slots[4].byte_size == 8);
+  T_Ok(slots[5].reg_code == ARM64_RegCode_q9);
+  T_Ok(slots[5].cfa_off == -64);
+  T_Ok(slots[5].byte_size == 8);
+
+  D_MachOCompactArm64FrameRegSlot short_slots[2] = {0};
+  U64 short_count = d_macho_compact_unwind_arm64_frame_saved_reg_slots_from_encoding(encoding, short_slots, ArrayCount(short_slots));
+  T_Ok(short_count == 6);
+  T_Ok(short_slots[0].reg_code == ARM64_RegCode_x19);
+  T_Ok(short_slots[1].reg_code == ARM64_RegCode_x20);
+
+  ARM64_RegBlock regs = {0};
+  regs.q8.u64[1] = 0x1122334455667788ull;
+  T_Ok(d_macho_compact_unwind_arm64_write_reg_slot(&regs, &slots[0], 0x1919191919191919ull));
+  T_Ok(d_macho_compact_unwind_arm64_write_reg_slot(&regs, &slots[4], 0x8888888888888888ull));
+  T_Ok(regs.x19 == 0x1919191919191919ull);
+  T_Ok(regs.q8.u64[0] == 0x8888888888888888ull);
+  T_Ok(regs.q8.u64[1] == 0x1122334455667788ull);
+}
+
+#if OS_MAC && ARCH_ARM64
+TEST(arm64_darwin_neon_state_conversion)
+{
+  arm_neon_state64_t neon = {0};
+  ARM64_RegBlock regs = {0};
+  U128 q0 = u128_make(0x0011223344556677ull, 0x8899aabbccddeeffull);
+  U128 q31 = u128_make(0xfedcba9876543210ull, 0x7766554433221100ull);
+
+  MemoryCopy(&neon.__v[0], &q0, sizeof(q0));
+  MemoryCopy(&neon.__v[31], &q31, sizeof(q31));
+  mac_dmn_arm64_reg_block_from_neon_state(&regs, &neon);
+  T_Ok(u128_match(regs.q0, q0));
+  T_Ok(u128_match(regs.q31, q31));
+
+  U128 q7 = u128_make(0x1011121314151617ull, 0x18191a1b1c1d1e1full);
+  U128 q30 = u128_make(0x2021222324252627ull, 0x28292a2b2c2d2e2full);
+  MemoryZeroStruct(&neon);
+  MemoryZeroStruct(&regs);
+  regs.q7 = q7;
+  regs.q30 = q30;
+  mac_dmn_arm64_neon_state_from_reg_block(&neon, &regs);
+
+  U128 got_q7 = {0};
+  U128 got_q30 = {0};
+  MemoryCopy(&got_q7, &neon.__v[7], sizeof(got_q7));
+  MemoryCopy(&got_q30, &neon.__v[30], sizeof(got_q30));
+  T_Ok(u128_match(got_q7, q7));
+  T_Ok(u128_match(got_q30, q30));
+}
+
+TEST(arm64_darwin_debug_watchpoint_encoding)
+{
+  DMN_Trap trap = {0};
+  U64 wvr = 0;
+  U64 wcr = 0;
+
+  trap.vaddr = 0x1005;
+  trap.size = 3;
+  trap.flags = DMN_TrapFlag_BreakOnWrite;
+  T_Ok(mac_dmn_arm64_debug_state_regs_from_trap(&trap, &wvr, &wcr));
+  T_Ok(wvr == 0x1000);
+  T_Ok(wcr == 0x1c15);
+
+  trap.vaddr = 0x2000;
+  trap.size = 8;
+  trap.flags = DMN_TrapFlag_BreakOnRead|DMN_TrapFlag_BreakOnWrite;
+  T_Ok(mac_dmn_arm64_debug_state_regs_from_trap(&trap, &wvr, &wcr));
+  T_Ok(wvr == 0x2000);
+  T_Ok(wcr == 0x1ffd);
+
+  trap.vaddr = 0x3000;
+  trap.size = 16;
+  trap.flags = DMN_TrapFlag_BreakOnRead;
+  T_Ok(mac_dmn_arm64_debug_state_regs_from_trap(&trap, &wvr, &wcr));
+  T_Ok(wvr == 0x3000);
+  T_Ok(wcr == 0x4001fed);
+
+  trap.vaddr = 0x4000;
+  trap.size = 1;
+  trap.flags = DMN_TrapFlag_BreakOnExecute;
+  T_Ok(!mac_dmn_arm64_debug_state_regs_from_trap(&trap, &wvr, &wcr));
+}
+
+TEST(arm64_darwin_debug_watchpoint_hit_matching)
+{
+  arm_debug_state64_t state = {0};
+  state.__wvr[0] = 0x1000;
+  state.__wcr[0] = 0x1c15;
+  state.__wvr[2] = 0x3000;
+  state.__wcr[2] = 0x4001fed;
+
+  T_Ok(mac_dmn_arm64_debug_trap_idx_from_state(&state, 0x1006, 4) == 0);
+  T_Ok(mac_dmn_arm64_debug_trap_idx_from_state(&state, 0x1004, 4) == max_U64);
+  T_Ok(mac_dmn_arm64_debug_trap_idx_from_state(&state, 0x300f, 4) == 2);
+  T_Ok(mac_dmn_arm64_debug_trap_idx_from_state(&state, 0x3010, 4) == max_U64);
+}
+#endif
