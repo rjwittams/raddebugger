@@ -77,4 +77,3 @@ RDI_RegCodeARM64_cpsr,
 };
 
 C_LINKAGE_END
-
