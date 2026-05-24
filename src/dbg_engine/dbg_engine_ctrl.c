@@ -6741,11 +6741,6 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       if(ignore_initial_halt)
       {
         B32 should_ignore_event = (event->kind == DMN_EventKind_Halt);
-#if OS_MAC
-        should_ignore_event = (should_ignore_event ||
-                               (event->kind == DMN_EventKind_Exception &&
-                                event->signo == SIGSTOP));
-#endif
         if(should_ignore_event)
         {
           if(ignore_initial_halt_count > 0)
