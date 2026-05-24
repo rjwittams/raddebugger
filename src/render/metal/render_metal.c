@@ -91,11 +91,45 @@ r_mtl_resource_options_from_kind(R_ResourceKind kind)
 }
 
 internal void
+r_mtl_wait_for_upload_slot(U64 slot_idx)
+{
+  id<MTLCommandBuffer> command_buffer = r_mtl_state->upload_buffer_command_buffers[slot_idx];
+  if(command_buffer != 0)
+  {
+    if(command_buffer.status != MTLCommandBufferStatusCompleted &&
+       command_buffer.status != MTLCommandBufferStatusError)
+    {
+      fprintf(stderr, "raddebugger: Metal upload slot %llu still in flight; waiting before reuse.\n", slot_idx);
+      [command_buffer waitUntilCompleted];
+    }
+    [command_buffer release];
+    r_mtl_state->upload_buffer_command_buffers[slot_idx] = 0;
+  }
+}
+
+internal void
 r_mtl_log_ns_error(char *context, NSError *error)
 {
   if(error != 0)
   {
     fprintf(stderr, "raddebugger: Metal %s: %s\n", context, [[error localizedDescription] UTF8String]);
+  }
+}
+
+internal void
+r_mtl_log_command_buffer_error(id<MTLCommandBuffer> command_buffer)
+{
+  if(command_buffer.status == MTLCommandBufferStatusError)
+  {
+    NSError *error = command_buffer.error;
+    if(error != 0)
+    {
+      fprintf(stderr, "raddebugger: Metal command buffer failure: %s\n", [[error localizedDescription] UTF8String]);
+    }
+    else
+    {
+      fprintf(stderr, "raddebugger: Metal command buffer failure.\n");
+    }
   }
 }
 
@@ -148,7 +182,15 @@ r_mtl_retire_object(id object)
 {
   if(object != 0)
   {
-    R_MTL_RetiredObject *node = push_array_no_zero(r_mtl_state->arena, R_MTL_RetiredObject, 1);
+    R_MTL_RetiredObject *node = r_mtl_state->free_retired_object;
+    if(node != 0)
+    {
+      SLLStackPop(r_mtl_state->free_retired_object);
+    }
+    else
+    {
+      node = push_array_no_zero(r_mtl_state->arena, R_MTL_RetiredObject, 1);
+    }
     node->object = object;
     SLLStackPush(r_mtl_state->retired_object[r_mtl_state->retire_idx], node);
   }
@@ -161,6 +203,8 @@ r_mtl_drain_retired_slot(U64 slot_idx)
   {
     next = node->next;
     [node->object release];
+    node->object = 0;
+    SLLStackPush(r_mtl_state->free_retired_object, node);
   }
   r_mtl_state->retired_object[slot_idx] = 0;
   for(R_MTL_Tex2D *tex = r_mtl_state->retired_tex2d[slot_idx], *next = 0; tex != 0; tex = next)
@@ -231,7 +275,7 @@ r_mtl_window_resize_targets(R_MTL_Window *window)
 }
 
 internal id<MTLBuffer>
-r_mtl_upload_buffer(void *data, U64 size, U64 align, U64 *out_offset)
+r_mtl_upload_buffer_reserve(U64 size, U64 align, U64 *out_offset, void **out_ptr)
 {
   id<MTLBuffer> result = 0;
   if(size != 0)
@@ -249,9 +293,21 @@ r_mtl_upload_buffer(void *data, U64 size, U64 align, U64 *out_offset)
       r_mtl_state->upload_buffer_caps[idx] = new_cap;
     }
     result = r_mtl_state->upload_buffers[idx];
-    MemoryCopy((U8 *)[result contents] + pos, data, size);
     r_mtl_state->upload_buffer_pos = pos + size;
     *out_offset = pos;
+    *out_ptr = (U8 *)[result contents] + pos;
+  }
+  return result;
+}
+
+internal id<MTLBuffer>
+r_mtl_upload_buffer(void *data, U64 size, U64 align, U64 *out_offset)
+{
+  void *ptr = 0;
+  id<MTLBuffer> result = r_mtl_upload_buffer_reserve(size, align, out_offset, &ptr);
+  if(ptr != 0)
+  {
+    MemoryCopy(ptr, data, size);
   }
   return result;
 }
@@ -352,10 +408,15 @@ r_init(CmdLine *cmdln)
   Arena *arena = arena_alloc();
   r_mtl_state = push_array(arena, R_MTL_State, 1);
   r_mtl_state->arena = arena;
+  r_mtl_state->device_rw_mutex = rw_mutex_alloc();
   r_mtl_state->device = MTLCreateSystemDefaultDevice();
   if(r_mtl_state->device != 0)
   {
     r_mtl_state->command_queue = [r_mtl_state->device newCommandQueue];
+    r_mtl_state->command_buffer_completion_handler = [^(id<MTLCommandBuffer> completed_buffer)
+    {
+      r_mtl_log_command_buffer_error(completed_buffer);
+    } copy];
 
     NSString *shader_source = [[NSString alloc] initWithBytes:r_mtl_g_shader_src.str length:r_mtl_g_shader_src.size encoding:NSUTF8StringEncoding];
       NSError *error = 0;
@@ -397,32 +458,41 @@ r_hook R_Handle
 r_window_equip(WM_Window window)
 {
   R_MTL_Window *result = 0;
-  if(r_mtl_state->device != 0)
+  MutexScopeW(r_mtl_state->device_rw_mutex)
   {
-    result = r_mtl_state->free_window;
-    if(result != 0)
+    if(r_mtl_state->device != 0)
     {
-      SLLStackPop(r_mtl_state->free_window);
-    }
-    else
-    {
-      result = push_array_no_zero(r_mtl_state->arena, R_MTL_Window, 1);
-    }
-    MemoryZeroStruct(result);
+      result = r_mtl_state->free_window;
+      if(result != 0)
+      {
+        SLLStackPop(r_mtl_state->free_window);
+      }
+      else
+      {
+        result = push_array_no_zero(r_mtl_state->arena, R_MTL_Window, 1);
+      }
+      MemoryZeroStruct(result);
 
-    MAC_WM_Window *mac_window = mac_wm_window_from_handle(window);
-    NSView *content_view = [mac_window->ns_window contentView];
-    result->layer = [CAMetalLayer layer];
-    result->layer.device = r_mtl_state->device;
-    result->layer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
-    result->layer.framebufferOnly = YES;
-    result->contents_scale = r_mtl_contents_scale_from_window(window);
-    result->layer.contentsScale = result->contents_scale;
-    result->drawable_size = r_mtl_drawable_size_from_window(window);
-    result->layer.drawableSize = CGSizeMake(result->drawable_size.x, result->drawable_size.y);
-    r_mtl_window_resize_targets(result);
-    [content_view setWantsLayer:YES];
-    [content_view setLayer:result->layer];
+      MAC_WM_Window *mac_window = mac_wm_window_from_handle(window);
+      NSView *content_view = [mac_window->ns_window contentView];
+      result->layer = [CAMetalLayer layer];
+      result->layer.device = r_mtl_state->device;
+      result->layer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+      result->layer.framebufferOnly = YES;
+      result->stage_clear_pass = [MTLRenderPassDescriptor new];
+      result->stage_pass = [MTLRenderPassDescriptor new];
+      result->blur_pass = [MTLRenderPassDescriptor new];
+      result->geo_pass = [MTLRenderPassDescriptor new];
+      result->composite_pass = [MTLRenderPassDescriptor new];
+      result->final_pass = [MTLRenderPassDescriptor new];
+      result->contents_scale = r_mtl_contents_scale_from_window(window);
+      result->layer.contentsScale = result->contents_scale;
+      result->drawable_size = r_mtl_drawable_size_from_window(window);
+      result->layer.drawableSize = CGSizeMake(result->drawable_size.x, result->drawable_size.y);
+      r_mtl_window_resize_targets(result);
+      [content_view setWantsLayer:YES];
+      [content_view setLayer:result->layer];
+    }
   }
   return r_mtl_handle_from_window(result);
 }
@@ -430,79 +500,109 @@ r_window_equip(WM_Window window)
 r_hook void
 r_window_unequip(WM_Window window, R_Handle window_equip)
 {
-  R_MTL_Window *mtl_window = r_mtl_window_from_handle(window_equip);
-  if(mtl_window != 0)
+  MutexScopeW(r_mtl_state->device_rw_mutex)
   {
-    MAC_WM_Window *mac_window = mac_wm_window_from_handle(window);
-    NSView *content_view = [mac_window->ns_window contentView];
-    if([content_view layer] == mtl_window->layer)
+    R_MTL_Window *mtl_window = r_mtl_window_from_handle(window_equip);
+    if(mtl_window != 0)
     {
-      [content_view setLayer:0];
+      MAC_WM_Window *mac_window = mac_wm_window_from_handle(window);
+      NSView *content_view = [mac_window->ns_window contentView];
+      if([content_view layer] == mtl_window->layer)
+      {
+        [content_view setLayer:0];
+      }
+      r_mtl_retire_object(mtl_window->stage_color);
+      r_mtl_retire_object(mtl_window->stage_scratch_color);
+      r_mtl_retire_object(mtl_window->geo3d_color);
+      r_mtl_retire_object(mtl_window->geo3d_depth);
+      [mtl_window->stage_clear_pass release];
+      [mtl_window->stage_pass release];
+      [mtl_window->blur_pass release];
+      [mtl_window->geo_pass release];
+      [mtl_window->composite_pass release];
+      [mtl_window->final_pass release];
+      mtl_window->layer = 0;
+      mtl_window->stage_color = 0;
+      mtl_window->stage_scratch_color = 0;
+      mtl_window->geo3d_color = 0;
+      mtl_window->geo3d_depth = 0;
+      mtl_window->stage_clear_pass = 0;
+      mtl_window->stage_pass = 0;
+      mtl_window->blur_pass = 0;
+      mtl_window->geo_pass = 0;
+      mtl_window->composite_pass = 0;
+      mtl_window->final_pass = 0;
+      SLLStackPush(r_mtl_state->free_window, mtl_window);
     }
-    r_mtl_retire_object(mtl_window->stage_color);
-    r_mtl_retire_object(mtl_window->stage_scratch_color);
-    r_mtl_retire_object(mtl_window->geo3d_color);
-    r_mtl_retire_object(mtl_window->geo3d_depth);
-    mtl_window->layer = 0;
-    mtl_window->stage_color = 0;
-    mtl_window->stage_scratch_color = 0;
-    mtl_window->geo3d_color = 0;
-    mtl_window->geo3d_depth = 0;
-    SLLStackPush(r_mtl_state->free_window, mtl_window);
   }
 }
 
 r_hook R_Handle
 r_tex2d_alloc(R_ResourceKind kind, Vec2S32 size, R_Tex2DFormat format, void *data)
 {
-  R_MTL_Tex2D *texture = r_mtl_state->free_tex2d;
-  if(texture != 0)
+  R_Handle result = {0};
+  MutexScopeW(r_mtl_state->device_rw_mutex)
   {
-    SLLStackPop(r_mtl_state->free_tex2d);
-  }
-  else
-  {
-    texture = push_array_no_zero(r_mtl_state->arena, R_MTL_Tex2D, 1);
-  }
-  MemoryZeroStruct(texture);
-  texture->kind = kind;
-  texture->format = format;
-  texture->size = size;
+    R_MTL_Tex2D *texture = r_mtl_state->free_tex2d;
+    if(texture != 0)
+    {
+      SLLStackPop(r_mtl_state->free_tex2d);
+    }
+    else
+    {
+      texture = push_array_no_zero(r_mtl_state->arena, R_MTL_Tex2D, 1);
+    }
+    MemoryZeroStruct(texture);
+    texture->kind = kind;
+    texture->format = format;
+    texture->size = size;
 
-  MTLPixelFormat pixel_format = r_mtl_pixel_format_from_tex2d_format(format);
-  MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pixel_format
-                                                                                       width:Max(size.x, 1)
-                                                                                      height:Max(size.y, 1)
-                                                                                   mipmapped:NO];
-  descriptor.usage = MTLTextureUsageShaderRead;
-  descriptor.storageMode = MTLStorageModeShared;
-  texture->texture = [r_mtl_state->device newTextureWithDescriptor:descriptor];
-  if(data != 0 && texture->texture != 0)
-  {
-    Rng2S32 region = r2s32p(0, 0, size.x, size.y);
-    r_fill_tex2d_region(r_mtl_handle_from_tex2d(texture), region, data);
+    MTLPixelFormat pixel_format = r_mtl_pixel_format_from_tex2d_format(format);
+    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pixel_format
+                                                                                         width:Max(size.x, 1)
+                                                                                        height:Max(size.y, 1)
+                                                                                     mipmapped:NO];
+    descriptor.usage = MTLTextureUsageShaderRead;
+    descriptor.storageMode = MTLStorageModeShared;
+    texture->texture = [r_mtl_state->device newTextureWithDescriptor:descriptor];
+    if(data != 0 && texture->texture != 0)
+    {
+      U64 bytes_per_pixel = r_mtl_bytes_per_pixel_from_tex2d_format(texture->format);
+      MTLRegion region = MTLRegionMake2D(0, 0, size.x, size.y);
+      [texture->texture replaceRegion:region
+                           mipmapLevel:0
+                             withBytes:data
+                           bytesPerRow:size.x*bytes_per_pixel];
+    }
+    result = r_mtl_handle_from_tex2d(texture);
   }
-  return r_mtl_handle_from_tex2d(texture);
+  return result;
 }
 
 r_hook void
 r_tex2d_release(R_Handle handle)
 {
-  R_MTL_Tex2D *texture = r_mtl_tex2d_from_handle(handle);
-  if(texture != 0)
+  MutexScopeW(r_mtl_state->device_rw_mutex)
   {
-    SLLStackPush(r_mtl_state->retired_tex2d[r_mtl_state->retire_idx], texture);
+    R_MTL_Tex2D *texture = r_mtl_tex2d_from_handle(handle);
+    if(texture != 0)
+    {
+      SLLStackPush(r_mtl_state->retired_tex2d[r_mtl_state->retire_idx], texture);
+    }
   }
 }
 
 r_hook R_ResourceKind
 r_kind_from_tex2d(R_Handle handle)
 {
-  R_MTL_Tex2D *texture = r_mtl_tex2d_from_handle(handle);
   R_ResourceKind result = R_ResourceKind_Static;
-  if(texture != 0)
+  MutexScopeR(r_mtl_state->device_rw_mutex)
   {
-    result = texture->kind;
+    R_MTL_Tex2D *texture = r_mtl_tex2d_from_handle(handle);
+    if(texture != 0)
+    {
+      result = texture->kind;
+    }
   }
   return result;
 }
@@ -510,11 +610,14 @@ r_kind_from_tex2d(R_Handle handle)
 r_hook Vec2S32
 r_size_from_tex2d(R_Handle handle)
 {
-  R_MTL_Tex2D *texture = r_mtl_tex2d_from_handle(handle);
   Vec2S32 result = {1, 1};
-  if(texture != 0)
+  MutexScopeR(r_mtl_state->device_rw_mutex)
   {
-    result = texture->size;
+    R_MTL_Tex2D *texture = r_mtl_tex2d_from_handle(handle);
+    if(texture != 0)
+    {
+      result = texture->size;
+    }
   }
   return result;
 }
@@ -522,11 +625,14 @@ r_size_from_tex2d(R_Handle handle)
 r_hook R_Tex2DFormat
 r_format_from_tex2d(R_Handle handle)
 {
-  R_MTL_Tex2D *texture = r_mtl_tex2d_from_handle(handle);
   R_Tex2DFormat result = R_Tex2DFormat_RGBA8;
-  if(texture != 0)
+  MutexScopeR(r_mtl_state->device_rw_mutex)
   {
-    result = texture->format;
+    R_MTL_Tex2D *texture = r_mtl_tex2d_from_handle(handle);
+    if(texture != 0)
+    {
+      result = texture->format;
+    }
   }
   return result;
 }
@@ -534,62 +640,77 @@ r_format_from_tex2d(R_Handle handle)
 r_hook void
 r_fill_tex2d_region(R_Handle handle, Rng2S32 subrect, void *data)
 {
-  R_MTL_Tex2D *texture = r_mtl_tex2d_from_handle(handle);
-  if(texture != 0 && texture->texture != 0 && data != 0)
+  MutexScopeW(r_mtl_state->device_rw_mutex)
   {
-    U64 bytes_per_pixel = r_mtl_bytes_per_pixel_from_tex2d_format(texture->format);
-    MTLRegion region = MTLRegionMake2D(subrect.x0, subrect.y0, subrect.x1 - subrect.x0, subrect.y1 - subrect.y0);
-    [texture->texture replaceRegion:region
-                         mipmapLevel:0
-                           withBytes:data
-                         bytesPerRow:(subrect.x1 - subrect.x0)*bytes_per_pixel];
+    R_MTL_Tex2D *texture = r_mtl_tex2d_from_handle(handle);
+    if(texture != 0 && texture->texture != 0 && data != 0)
+    {
+      U64 bytes_per_pixel = r_mtl_bytes_per_pixel_from_tex2d_format(texture->format);
+      MTLRegion region = MTLRegionMake2D(subrect.x0, subrect.y0, subrect.x1 - subrect.x0, subrect.y1 - subrect.y0);
+      [texture->texture replaceRegion:region
+                           mipmapLevel:0
+                             withBytes:data
+                           bytesPerRow:(subrect.x1 - subrect.x0)*bytes_per_pixel];
+    }
   }
 }
 
 r_hook R_Handle
 r_buffer_alloc(R_ResourceKind kind, U64 size, void *data)
 {
-  R_MTL_Buffer *buffer = r_mtl_state->free_buffer;
-  if(buffer != 0)
+  R_Handle result = {0};
+  MutexScopeW(r_mtl_state->device_rw_mutex)
   {
-    SLLStackPop(r_mtl_state->free_buffer);
+    R_MTL_Buffer *buffer = r_mtl_state->free_buffer;
+    if(buffer != 0)
+    {
+      SLLStackPop(r_mtl_state->free_buffer);
+    }
+    else
+    {
+      buffer = push_array_no_zero(r_mtl_state->arena, R_MTL_Buffer, 1);
+    }
+    MemoryZeroStruct(buffer);
+    buffer->kind = kind;
+    buffer->size = size;
+    NSUInteger options = r_mtl_resource_options_from_kind(kind);
+    if(data != 0)
+    {
+      buffer->buffer = [r_mtl_state->device newBufferWithBytes:data length:size options:options];
+    }
+    else
+    {
+      buffer->buffer = [r_mtl_state->device newBufferWithLength:size options:options];
+    }
+    result = r_mtl_handle_from_buffer(buffer);
   }
-  else
-  {
-    buffer = push_array_no_zero(r_mtl_state->arena, R_MTL_Buffer, 1);
-  }
-  MemoryZeroStruct(buffer);
-  buffer->kind = kind;
-  buffer->size = size;
-  NSUInteger options = r_mtl_resource_options_from_kind(kind);
-  if(data != 0)
-  {
-    buffer->buffer = [r_mtl_state->device newBufferWithBytes:data length:size options:options];
-  }
-  else
-  {
-    buffer->buffer = [r_mtl_state->device newBufferWithLength:size options:options];
-  }
-  return r_mtl_handle_from_buffer(buffer);
+  return result;
 }
 
 r_hook void
 r_buffer_release(R_Handle handle)
 {
-  R_MTL_Buffer *buffer = r_mtl_buffer_from_handle(handle);
-  if(buffer != 0)
+  MutexScopeW(r_mtl_state->device_rw_mutex)
   {
-    SLLStackPush(r_mtl_state->retired_buffer[r_mtl_state->retire_idx], buffer);
+    R_MTL_Buffer *buffer = r_mtl_buffer_from_handle(handle);
+    if(buffer != 0)
+    {
+      SLLStackPush(r_mtl_state->retired_buffer[r_mtl_state->retire_idx], buffer);
+    }
   }
 }
 
 r_hook void
 r_begin_frame(void)
 {
-  r_mtl_state->upload_buffer_idx += 1;
-  r_mtl_state->retire_idx = r_mtl_state->upload_buffer_idx % ArrayCount(r_mtl_state->retired_object);
-  r_mtl_drain_retired_slot(r_mtl_state->retire_idx);
-  r_mtl_state->upload_buffer_pos = 0;
+  MutexScopeW(r_mtl_state->device_rw_mutex)
+  {
+    r_mtl_state->upload_buffer_idx += 1;
+    r_mtl_state->retire_idx = r_mtl_state->upload_buffer_idx % ArrayCount(r_mtl_state->retired_object);
+    r_mtl_wait_for_upload_slot(r_mtl_state->retire_idx);
+    r_mtl_drain_retired_slot(r_mtl_state->retire_idx);
+    r_mtl_state->upload_buffer_pos = 0;
+  }
 }
 
 r_hook void
@@ -600,20 +721,23 @@ r_end_frame(void)
 r_hook void
 r_window_begin_frame(WM_Window window, R_Handle window_equip)
 {
-  R_MTL_Window *mtl_window = r_mtl_window_from_handle(window_equip);
-  if(mtl_window != 0)
+  MutexScopeW(r_mtl_state->device_rw_mutex)
   {
-    F32 contents_scale = r_mtl_contents_scale_from_window(window);
-    Vec2S32 drawable_size = r_mtl_drawable_size_from_window(window);
-    if(contents_scale != mtl_window->contents_scale ||
-       drawable_size.x != mtl_window->drawable_size.x ||
-       drawable_size.y != mtl_window->drawable_size.y)
+    R_MTL_Window *mtl_window = r_mtl_window_from_handle(window_equip);
+    if(mtl_window != 0)
     {
-      mtl_window->contents_scale = contents_scale;
-      mtl_window->drawable_size = drawable_size;
-      mtl_window->layer.contentsScale = contents_scale;
-      mtl_window->layer.drawableSize = CGSizeMake(drawable_size.x, drawable_size.y);
-      r_mtl_window_resize_targets(mtl_window);
+      F32 contents_scale = r_mtl_contents_scale_from_window(window);
+      Vec2S32 drawable_size = r_mtl_drawable_size_from_window(window);
+      if(contents_scale != mtl_window->contents_scale ||
+         drawable_size.x != mtl_window->drawable_size.x ||
+         drawable_size.y != mtl_window->drawable_size.y)
+      {
+        mtl_window->contents_scale = contents_scale;
+        mtl_window->drawable_size = drawable_size;
+        mtl_window->layer.contentsScale = contents_scale;
+        mtl_window->layer.drawableSize = CGSizeMake(drawable_size.x, drawable_size.y);
+        r_mtl_window_resize_targets(mtl_window);
+      }
     }
   }
 }
@@ -626,19 +750,20 @@ r_window_end_frame(WM_Window window, R_Handle window_equip)
 r_hook void
 r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
 {
-  R_MTL_Window *mtl_window = r_mtl_window_from_handle(window_equip);
-  if(mtl_window != 0 && r_mtl_state->command_queue != 0 && mtl_window->stage_color != 0)
+  MutexScopeW(r_mtl_state->device_rw_mutex)
   {
-    id<CAMetalDrawable> drawable = [mtl_window->layer nextDrawable];
-    if(drawable != 0)
+    R_MTL_Window *mtl_window = r_mtl_window_from_handle(window_equip);
+    if(mtl_window != 0 && r_mtl_state->command_queue != 0 && mtl_window->stage_color != 0)
     {
-      id<MTLCommandBuffer> command_buffer = [r_mtl_state->command_queue commandBuffer];
-      Temp scratch = scratch_begin(0, 0);
-      Rng2F32 viewport_rect = wm_client_rect_from_window(window);
-      Vec2F32 viewport_dim = dim_2f32(viewport_rect);
-      F32 scale = r_mtl_contents_scale_from_window(window);
+      id<CAMetalDrawable> drawable = [mtl_window->layer nextDrawable];
+      if(drawable != 0)
+      {
+        id<MTLCommandBuffer> command_buffer = [r_mtl_state->command_queue commandBuffer];
+        Rng2F32 viewport_rect = wm_client_rect_from_window(window);
+        Vec2F32 viewport_dim = dim_2f32(viewport_rect);
+        F32 scale = r_mtl_contents_scale_from_window(window);
 
-      MTLRenderPassDescriptor *stage_clear_pass = [MTLRenderPassDescriptor renderPassDescriptor];
+      MTLRenderPassDescriptor *stage_clear_pass = mtl_window->stage_clear_pass;
       stage_clear_pass.colorAttachments[0].texture = mtl_window->stage_color;
       stage_clear_pass.colorAttachments[0].loadAction = MTLLoadActionClear;
       stage_clear_pass.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -656,7 +781,7 @@ r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
           {
             if(r_mtl_state->rect_pipeline != 0)
             {
-              MTLRenderPassDescriptor *stage_pass = [MTLRenderPassDescriptor renderPassDescriptor];
+              MTLRenderPassDescriptor *stage_pass = mtl_window->stage_pass;
               stage_pass.colorAttachments[0].texture = mtl_window->stage_color;
               stage_pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
               stage_pass.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -676,15 +801,15 @@ r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
                 if(texture != 0 && texture->texture != 0 && batches->byte_count != 0)
                 {
                   U64 inst_count = batches->byte_count / batches->bytes_per_inst;
-                  U8 *insts = push_array_no_zero(scratch.arena, U8, batches->byte_count);
-                  U64 insts_off = 0;
+                  U64 insts_offset = 0;
+                  void *insts_ptr = 0;
+                  id<MTLBuffer> insts_buffer = r_mtl_upload_buffer_reserve(batches->byte_count, 16, &insts_offset, &insts_ptr);
+                  U8 *insts = (U8 *)insts_ptr;
                   for(R_BatchNode *batch_n = batches->first; batch_n != 0; batch_n = batch_n->next)
                   {
-                    MemoryCopy(insts + insts_off, batch_n->v.v, batch_n->v.byte_count);
-                    insts_off += batch_n->v.byte_count;
+                    MemoryCopy(insts, batch_n->v.v, batch_n->v.byte_count);
+                    insts += batch_n->v.byte_count;
                   }
-                  U64 insts_offset = 0;
-                  id<MTLBuffer> insts_buffer = r_mtl_upload_buffer(insts, batches->byte_count, 16, &insts_offset);
                   R_MTL_RectUniforms group_uniforms = {0};
                   group_uniforms.viewport_size = viewport_dim;
                   group_uniforms.opacity = 1.f - group_params->transparency;
@@ -759,7 +884,7 @@ r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
                   U64 uniform_offset = 0;
                   id<MTLBuffer> uniform_buffer = r_mtl_upload_buffer(&uniforms, sizeof(uniforms), 256, &uniform_offset);
 
-                  MTLRenderPassDescriptor *blur_pass = [MTLRenderPassDescriptor renderPassDescriptor];
+                  MTLRenderPassDescriptor *blur_pass = mtl_window->blur_pass;
                   blur_pass.colorAttachments[0].texture = dst;
                   blur_pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
                   blur_pass.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -786,7 +911,7 @@ r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
               R_PassParams_Geo3D *params = render_pass->params_geo3d;
               R_BatchGroup3DMap *mesh_group_map = &params->mesh_batches;
 
-              MTLRenderPassDescriptor *geo_pass = [MTLRenderPassDescriptor renderPassDescriptor];
+              MTLRenderPassDescriptor *geo_pass = mtl_window->geo_pass;
               geo_pass.colorAttachments[0].texture = mtl_window->geo3d_color;
               geo_pass.colorAttachments[0].loadAction = MTLLoadActionClear;
               geo_pass.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -861,7 +986,7 @@ r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
                 U64 composite_uniform_offset = 0;
                 id<MTLBuffer> composite_uniform_buffer = r_mtl_upload_buffer(&composite_uniforms, sizeof(composite_uniforms), 256, &composite_uniform_offset);
 
-                MTLRenderPassDescriptor *composite_pass = [MTLRenderPassDescriptor renderPassDescriptor];
+                MTLRenderPassDescriptor *composite_pass = mtl_window->composite_pass;
                 composite_pass.colorAttachments[0].texture = mtl_window->stage_color;
                 composite_pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
                 composite_pass.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -884,7 +1009,7 @@ r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
         R_MTL_FinalizeUniforms uniforms = {viewport_dim};
         U64 uniform_offset = 0;
         id<MTLBuffer> uniform_buffer = r_mtl_upload_buffer(&uniforms, sizeof(uniforms), 256, &uniform_offset);
-        MTLRenderPassDescriptor *final_pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        MTLRenderPassDescriptor *final_pass = mtl_window->final_pass;
         final_pass.colorAttachments[0].texture = drawable.texture;
         final_pass.colorAttachments[0].loadAction = MTLLoadActionClear;
         final_pass.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -897,9 +1022,17 @@ r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
         [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         [encoder endEncoding];
       }
-      scratch_end(scratch);
-      [command_buffer presentDrawable:drawable];
-      [command_buffer commit];
+        [command_buffer addCompletedHandler:r_mtl_state->command_buffer_completion_handler];
+        [command_buffer presentDrawable:drawable];
+        [command_buffer commit];
+        U64 upload_slot_idx = r_mtl_state->upload_buffer_idx % ArrayCount(r_mtl_state->upload_buffer_command_buffers);
+        id<MTLCommandBuffer> old_command_buffer = r_mtl_state->upload_buffer_command_buffers[upload_slot_idx];
+        if(old_command_buffer != 0)
+        {
+          [old_command_buffer release];
+        }
+        r_mtl_state->upload_buffer_command_buffers[upload_slot_idx] = [command_buffer retain];
+      }
     }
   }
 }
