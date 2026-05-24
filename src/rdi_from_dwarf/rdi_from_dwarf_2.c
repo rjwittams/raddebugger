@@ -721,13 +721,25 @@ d2r2_convert(Arena *arena, D2R2_ConvertParams *params)
     for EachIndex(unit_idx, unit_count)
     {
       DW2_LineTableHeader *hdr = &unit_line_table_headers[unit_idx];
+      DW2_Tag *unit_root_tag = &unit_root_tags[unit_idx];
+      DW2_Attrib *comp_dir_attrib = dw2_attrib_from_kind(unit_root_tag, DW_AttribKind_CompDir);
+      String8 unit_comp_dir = comp_dir_attrib->val.string;
       for EachIndex(file_idx, hdr->files.count)
       {
         DW2_LineTableFile *f = &hdr->files.v[file_idx];
-        DW2_LineTableFile *dir = &hdr->dirs.v[f->dir_idx];
+        String8 dir = f->dir_idx < hdr->dirs.count ? hdr->dirs.v[f->dir_idx].file_name : str8_zero();
+        String8 full_dir = dir;
+        if(dir.size == 0)
+        {
+          full_dir = unit_comp_dir;
+        }
+        else if(path_style_from_str8(dir) == PathStyle_Relative && unit_comp_dir.size != 0)
+        {
+          full_dir = path_absolute_dst_from_relative_dst_src(scratch2.arena, dir, unit_comp_dir);
+        }
         PathStyle file_name_style = path_style_from_str8(f->file_name);
         String8 full_file_path = (file_name_style == PathStyle_Relative ?
-                                  str8f(scratch2.arena, "%S%s%S", dir->file_name, dir->file_name.size != 0 ? "/" : "", f->file_name) :
+                                  path_absolute_dst_from_relative_dst_src(scratch2.arena, f->file_name, full_dir) :
                                   f->file_name);
         U64 hash = u64_hash_from_str8(full_file_path);
         U64 slot_idx = hash%slots_count;
