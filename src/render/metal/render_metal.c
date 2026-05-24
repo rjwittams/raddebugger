@@ -199,7 +199,7 @@ r_mtl_window_resize_targets(R_MTL_Window *window)
 
     S32 width = Max(window->drawable_size.x, 1);
     S32 height = Max(window->drawable_size.y, 1);
-    MTLTextureDescriptor *stage_descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+    MTLTextureDescriptor *stage_descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
                                                                                                 width:width
                                                                                                height:height
                                                                                             mipmapped:NO];
@@ -284,65 +284,6 @@ r_mtl_drawable_size_from_window(WM_Window window)
   return result;
 }
 
-internal void
-r_mtl_rect_vertices_push(R_MTL_RectVertex *vertices, U64 *idx, R_Rect2DInst *inst, R_BatchGroup2DParams *params, Vec2S32 texture_size)
-{
-  Vec2F32 positions[Corner_COUNT] =
-  {
-    v2f32(inst->dst.x0, inst->dst.y0),
-    v2f32(inst->dst.x0, inst->dst.y1),
-    v2f32(inst->dst.x1, inst->dst.y0 + inst->shear),
-    v2f32(inst->dst.x1, inst->dst.y1 + inst->shear),
-  };
-  Vec2F32 texcoords[Corner_COUNT] =
-  {
-    v2f32(inst->src.x0, inst->src.y0),
-    v2f32(inst->src.x0, inst->src.y1),
-    v2f32(inst->src.x1, inst->src.y0),
-    v2f32(inst->src.x1, inst->src.y1),
-  };
-  Vec2F32 corner_pcts[Corner_COUNT] =
-  {
-    v2f32(0.f, 0.f),
-    v2f32(0.f, 1.f),
-    v2f32(1.f, 0.f),
-    v2f32(1.f, 1.f),
-  };
-  U32 indices[] =
-  {
-    Corner_00, Corner_01, Corner_10,
-    Corner_10, Corner_01, Corner_11,
-  };
-  F32 texture_w = (F32)Max(texture_size.x, 1);
-  F32 texture_h = (F32)Max(texture_size.y, 1);
-  Vec2F32 xform_2x2_col0 = v2f32(params->xform.v[0][0], params->xform.v[0][1]);
-  Vec2F32 xform_2x2_col1 = v2f32(params->xform.v[1][0], params->xform.v[1][1]);
-  Vec2F32 xform_scale = v2f32(length_2f32(xform_2x2_col0), length_2f32(xform_2x2_col1));
-  Vec2F32 dst_half_size = scale_2f32(dim_2f32(inst->dst), 0.5f);
-  Vec2F32 rect_half_size = mul_2f32(dst_half_size, xform_scale);
-  for EachIndex(index_idx, ArrayCount(indices))
-  {
-    U32 corner = indices[index_idx];
-    Vec2F32 sdf_sample_pos =
-    {
-      (2.f*corner_pcts[corner].x - 1.f)*rect_half_size.x,
-      (2.f*corner_pcts[corner].y - 1.f)*rect_half_size.y,
-    };
-    Vec3F32 transformed = xform_3f32(v3f32(positions[corner].x, positions[corner].y, 1.f), params->xform);
-    R_MTL_RectVertex *vertex = vertices + *idx;
-    vertex->pos = v2f32(transformed.x, transformed.y);
-    vertex->texcoord = v2f32(texcoords[corner].x/texture_w, texcoords[corner].y/texture_h);
-    vertex->color = inst->colors[corner];
-    vertex->sdf_sample_pos = sdf_sample_pos;
-    vertex->rect_half_size = rect_half_size;
-    vertex->corner_radius = inst->corner_radii[corner]*Max(xform_scale.x, xform_scale.y);
-    vertex->border_thickness = inst->border_thickness*Max(xform_scale.x, xform_scale.y);
-    vertex->softness = inst->edge_softness*Max(xform_scale.x, xform_scale.y);
-    vertex->omit_texture = inst->white_texture_override;
-    *idx += 1;
-  }
-}
-
 internal B32
 r_mtl_scissor_from_clip(Rng2F32 clip, Vec2S32 drawable_size, F32 scale, MTLScissorRect *out)
 {
@@ -416,202 +357,17 @@ r_init(CmdLine *cmdln)
   {
     r_mtl_state->command_queue = [r_mtl_state->device newCommandQueue];
 
-    NSString *shader_source =
-      @"#include <metal_stdlib>\n"
-       "using namespace metal;\n"
-       "struct RectVertex {\n"
-       "  packed_float2 pos;\n"
-       "  packed_float2 texcoord;\n"
-       "  packed_float4 color;\n"
-       "  packed_float2 sdf_sample_pos;\n"
-       "  packed_float2 rect_half_size;\n"
-       "  float corner_radius;\n"
-       "  float border_thickness;\n"
-       "  float softness;\n"
-       "  float omit_texture;\n"
-       "};\n"
-       "struct MeshVertex {\n"
-       "  packed_float3 position;\n"
-       "  packed_float3 normal;\n"
-       "  packed_float2 texcoord;\n"
-       "  packed_float3 color;\n"
-       "};\n"
-       "struct RectUniforms {\n"
-       "  packed_float2 viewport_size;\n"
-       "  float opacity;\n"
-       "  float _padding0;\n"
-       "  float4x4 texture_sample_channel_map;\n"
-       "};\n"
-       "struct BlurUniforms {\n"
-       "  float4 rect;\n"
-       "  float4 corner_radii;\n"
-       "  packed_float2 direction;\n"
-       "  packed_float2 viewport_size;\n"
-       "  uint blur_count;\n"
-       "  uint _padding0[3];\n"
-       "  float4 kernel_weights[32];\n"
-       "};\n"
-       "struct FinalizeUniforms {\n"
-       "  packed_float2 viewport_size;\n"
-       "};\n"
-       "struct MeshUniforms {\n"
-       "  float4x4 xform;\n"
-       "};\n"
-       "struct VertexOut {\n"
-       "  float4 position [[position]];\n"
-       "  float2 texcoord;\n"
-       "  float4 color;\n"
-       "  float2 sdf_sample_pos;\n"
-       "  float2 rect_half_size;\n"
-       "  float corner_radius;\n"
-       "  float border_thickness;\n"
-       "  float softness;\n"
-       "  float omit_texture;\n"
-       "};\n"
-       "struct MeshOut {\n"
-       "  float4 position [[position]];\n"
-       "  float2 texcoord;\n"
-       "  float4 color;\n"
-       "};\n"
-       "float rect_sdf(float2 sample_pos, float2 rect_half_size, float r) {\n"
-       "  return length(max(abs(sample_pos) - rect_half_size + r, 0.0f)) - r;\n"
-       "}\n"
-       "vertex VertexOut rect_vertex(uint vertex_id [[vertex_id]],\n"
-       "                             const device RectVertex *vertices [[buffer(0)]],\n"
-       "                             constant RectUniforms &uniforms [[buffer(1)]]) {\n"
-       "  RectVertex in_vertex = vertices[vertex_id];\n"
-       "  VertexOut out;\n"
-       "  float2 ndc = float2(2.0f*in_vertex.pos.x/uniforms.viewport_size.x - 1.0f,\n"
-       "                       1.0f - 2.0f*in_vertex.pos.y/uniforms.viewport_size.y);\n"
-       "  out.position = float4(ndc, 0.0f, 1.0f);\n"
-       "  out.texcoord = in_vertex.texcoord;\n"
-       "  out.color = float4(in_vertex.color);\n"
-       "  out.sdf_sample_pos = in_vertex.sdf_sample_pos;\n"
-       "  out.rect_half_size = in_vertex.rect_half_size;\n"
-       "  out.corner_radius = in_vertex.corner_radius;\n"
-       "  out.border_thickness = in_vertex.border_thickness;\n"
-       "  out.softness = in_vertex.softness;\n"
-       "  out.omit_texture = in_vertex.omit_texture;\n"
-       "  return out;\n"
-       "}\n"
-       "fragment float4 rect_fragment(VertexOut in [[stage_in]],\n"
-       "                              texture2d<float> tex [[texture(0)]],\n"
-       "                              sampler tex_sampler [[sampler(0)]],\n"
-       "                              constant RectUniforms &uniforms [[buffer(1)]]) {\n"
-       "  float4 sample_color = float4(1.0f);\n"
-       "  if(in.omit_texture < 0.5f) {\n"
-       "    sample_color = uniforms.texture_sample_channel_map * tex.sample(tex_sampler, in.texcoord);\n"
-       "  }\n"
-       "  float soft_span = max(2.0f*in.softness, 0.001f);\n"
-       "  float border_sdf_t = 1.0f;\n"
-       "  if(in.border_thickness > 0.0f) {\n"
-       "    float2 inner_half_size = in.rect_half_size - float2(in.softness*2.0f) - in.border_thickness;\n"
-       "    float border_sdf_s = rect_sdf(in.sdf_sample_pos, inner_half_size, max(in.corner_radius-in.border_thickness, 0.0f));\n"
-       "    border_sdf_t = smoothstep(0.0f, soft_span, border_sdf_s);\n"
-       "  }\n"
-       "  if(border_sdf_t < 0.001f) {\n"
-       "    discard_fragment();\n"
-       "  }\n"
-       "  float corner_sdf_t = 1.0f;\n"
-       "  if(in.corner_radius > 0.0f || in.softness > 0.75f) {\n"
-       "    float corner_sdf_s = rect_sdf(in.sdf_sample_pos, in.rect_half_size - float2(in.softness*2.0f), in.corner_radius);\n"
-       "    corner_sdf_t = 1.0f - smoothstep(0.0f, soft_span, corner_sdf_s);\n"
-       "  }\n"
-       "  float4 result = sample_color * in.color;\n"
-       "  result.a *= uniforms.opacity;\n"
-       "  result.a *= corner_sdf_t;\n"
-       "  result.a *= border_sdf_t;\n"
-       "  result.rgb *= uniforms.opacity;\n"
-       "  return result;\n"
-       "}\n"
-       "vertex VertexOut fullscreen_vertex(uint vertex_id [[vertex_id]],\n"
-       "                                 constant FinalizeUniforms &uniforms [[buffer(0)]]) {\n"
-       "  float2 pos[] = { float2(0.0f, uniforms.viewport_size.y), float2(0.0f, 0.0f), float2(uniforms.viewport_size.x, uniforms.viewport_size.y), float2(uniforms.viewport_size.x, 0.0f) };\n"
-       "  float2 pct = pos[vertex_id] / uniforms.viewport_size;\n"
-       "  VertexOut out;\n"
-       "  out.position = float4(2.0f*pct.x - 1.0f, 1.0f - 2.0f*pct.y, 0.0f, 1.0f);\n"
-       "  out.texcoord = pct;\n"
-       "  out.color = float4(1.0f);\n"
-       "  out.sdf_sample_pos = float2(0.0f);\n"
-       "  out.rect_half_size = float2(0.0f);\n"
-       "  out.corner_radius = 0.0f;\n"
-       "  out.border_thickness = 0.0f;\n"
-       "  out.softness = 0.0f;\n"
-       "  out.omit_texture = 0.0f;\n"
-       "  return out;\n"
-       "}\n"
-       "fragment float4 finalize_fragment(VertexOut in [[stage_in]],\n"
-       "                                  texture2d<float> tex [[texture(0)]],\n"
-       "                                  sampler tex_sampler [[sampler(0)]]) {\n"
-       "  float4 color = tex.sample(tex_sampler, in.texcoord);\n"
-       "  color.a = 1.0f;\n"
-       "  return color;\n"
-       "}\n"
-       "fragment float4 composite_fragment(VertexOut in [[stage_in]],\n"
-       "                                  texture2d<float> tex [[texture(0)]],\n"
-       "                                  sampler tex_sampler [[sampler(0)]]) {\n"
-       "  return tex.sample(tex_sampler, in.texcoord);\n"
-       "}\n"
-       "vertex VertexOut blur_vertex(uint vertex_id [[vertex_id]],\n"
-       "                          constant BlurUniforms &uniforms [[buffer(0)]]) {\n"
-       "  float2 pos[] = { uniforms.rect.xw, uniforms.rect.xy, uniforms.rect.zw, uniforms.rect.zy };\n"
-       "  float radii[] = { uniforms.corner_radii.y, uniforms.corner_radii.x, uniforms.corner_radii.w, uniforms.corner_radii.z };\n"
-       "  float2 corner_pct = float2((vertex_id >> 1) ? 1.0f : 0.0f, (vertex_id & 1) ? 0.0f : 1.0f);\n"
-       "  float2 pct = pos[vertex_id] / uniforms.viewport_size;\n"
-       "  float2 half_size = float2((uniforms.rect.z - uniforms.rect.x)/2.0f, (uniforms.rect.w - uniforms.rect.y)/2.0f);\n"
-       "  VertexOut out;\n"
-       "  out.position = float4(2.0f*pct.x - 1.0f, 1.0f - 2.0f*pct.y, 0.0f, 1.0f);\n"
-       "  out.texcoord = pct;\n"
-       "  out.color = float4(1.0f);\n"
-       "  out.sdf_sample_pos = (2.0f*corner_pct - 1.0f) * half_size;\n"
-       "  out.rect_half_size = half_size - 2.0f;\n"
-       "  out.corner_radius = radii[vertex_id];\n"
-       "  out.border_thickness = 0.0f;\n"
-       "  out.softness = 0.0f;\n"
-       "  out.omit_texture = 0.0f;\n"
-       "  return out;\n"
-       "}\n"
-       "fragment float4 blur_fragment(VertexOut in [[stage_in]],\n"
-       "                              texture2d<float> tex [[texture(0)]],\n"
-       "                              sampler tex_sampler [[sampler(0)]],\n"
-       "                              constant BlurUniforms &uniforms [[buffer(0)]]) {\n"
-       "  float3 color = uniforms.kernel_weights[0].x * tex.sample(tex_sampler, in.texcoord).rgb;\n"
-       "  for(uint i = 1; i < uniforms.blur_count; i += 1) {\n"
-       "    float weight = uniforms.kernel_weights[i].x;\n"
-       "    float offset = uniforms.kernel_weights[i].y;\n"
-       "    color += weight * tex.sample(tex_sampler, in.texcoord - offset * uniforms.direction).rgb;\n"
-       "    color += weight * tex.sample(tex_sampler, in.texcoord + offset * uniforms.direction).rgb;\n"
-       "  }\n"
-       "  float corner_sdf_s = rect_sdf(in.sdf_sample_pos, in.rect_half_size, in.corner_radius);\n"
-       "  float corner_sdf_t = 1.0f - smoothstep(0.0f, 2.0f, corner_sdf_s);\n"
-       "  if(corner_sdf_t < 0.9f) {\n"
-       "    discard_fragment();\n"
-       "  }\n"
-       "  return float4(color, 1.0f);\n"
-       "}\n"
-       "vertex MeshOut mesh_vertex(uint vertex_id [[vertex_id]],\n"
-       "                           const device MeshVertex *vertices [[buffer(0)]],\n"
-       "                           constant MeshUniforms &uniforms [[buffer(1)]]) {\n"
-       "  MeshVertex in_vertex = vertices[vertex_id];\n"
-       "  MeshOut out;\n"
-       "  out.position = uniforms.xform * float4(in_vertex.position, 1.0f);\n"
-       "  out.texcoord = in_vertex.texcoord;\n"
-       "  out.color = float4(in_vertex.color, 1.0f);\n"
-       "  return out;\n"
-       "}\n"
-       "fragment float4 mesh_fragment(MeshOut in [[stage_in]]) {\n"
-       "  return in.color;\n"
-       "}\n";
+    NSString *shader_source = [[NSString alloc] initWithBytes:r_mtl_g_shader_src.str length:r_mtl_g_shader_src.size encoding:NSUTF8StringEncoding];
       NSError *error = 0;
       id<MTLLibrary> library = [r_mtl_state->device newLibraryWithSource:shader_source options:0 error:&error];
       r_mtl_log_ns_error("library creation", error);
       if(library != 0)
       {
-        r_mtl_state->rect_pipeline = r_mtl_render_pipeline_from_library(library, @"rect_vertex", @"rect_fragment", MTLPixelFormatBGRA8Unorm);
-        r_mtl_state->blur_pipeline = r_mtl_render_pipeline_from_library(library, @"blur_vertex", @"blur_fragment", MTLPixelFormatBGRA8Unorm);
+        r_mtl_state->rect_pipeline = r_mtl_render_pipeline_from_library(library, @"rect_vertex", @"rect_fragment", MTLPixelFormatRGBA16Float);
+        r_mtl_state->blur_pipeline = r_mtl_render_pipeline_from_library(library, @"blur_vertex", @"blur_fragment", MTLPixelFormatRGBA16Float);
         r_mtl_state->mesh_pipeline = r_mtl_render_pipeline_from_library_ex(library, @"mesh_vertex", @"mesh_fragment", MTLPixelFormatRGBA8Unorm, MTLPixelFormatDepth32Float, 1);
-        r_mtl_state->geo3d_composite_pipeline = r_mtl_render_pipeline_from_library(library, @"fullscreen_vertex", @"composite_fragment", MTLPixelFormatBGRA8Unorm);
-        r_mtl_state->finalize_pipeline = r_mtl_render_pipeline_from_library(library, @"fullscreen_vertex", @"finalize_fragment", MTLPixelFormatBGRA8Unorm);
+        r_mtl_state->geo3d_composite_pipeline = r_mtl_render_pipeline_from_library(library, @"fullscreen_vertex", @"composite_fragment", MTLPixelFormatRGBA16Float);
+        r_mtl_state->finalize_pipeline = r_mtl_render_pipeline_from_library(library, @"fullscreen_vertex", @"finalize_fragment", MTLPixelFormatBGRA8Unorm_sRGB);
         [library release];
       }
 
@@ -658,7 +414,7 @@ r_window_equip(WM_Window window)
     NSView *content_view = [mac_window->ns_window contentView];
     result->layer = [CAMetalLayer layer];
     result->layer.device = r_mtl_state->device;
-    result->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    result->layer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
     result->layer.framebufferOnly = YES;
     result->contents_scale = r_mtl_contents_scale_from_window(window);
     result->layer.contentsScale = result->contents_scale;
@@ -920,24 +676,26 @@ r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
                 if(texture != 0 && texture->texture != 0 && batches->byte_count != 0)
                 {
                   U64 inst_count = batches->byte_count / batches->bytes_per_inst;
-                  U64 vertex_count = inst_count*6;
-                  R_MTL_RectVertex *vertices = push_array_no_zero(scratch.arena, R_MTL_RectVertex, vertex_count);
-                  U64 vertex_idx = 0;
+                  U8 *insts = push_array_no_zero(scratch.arena, U8, batches->byte_count);
+                  U64 insts_off = 0;
                   for(R_BatchNode *batch_n = batches->first; batch_n != 0; batch_n = batch_n->next)
                   {
-                    R_Rect2DInst *insts = (R_Rect2DInst *)batch_n->v.v;
-                    U64 batch_inst_count = batch_n->v.byte_count / batches->bytes_per_inst;
-                    for(U64 inst_idx = 0; inst_idx < batch_inst_count; inst_idx += 1)
-                    {
-                      r_mtl_rect_vertices_push(vertices, &vertex_idx, insts + inst_idx, group_params, texture->size);
-                    }
+                    MemoryCopy(insts + insts_off, batch_n->v.v, batch_n->v.byte_count);
+                    insts_off += batch_n->v.byte_count;
                   }
-                  U64 vertex_offset = 0;
-                  id<MTLBuffer> vertex_buffer = r_mtl_upload_buffer(vertices, vertex_count*sizeof(R_MTL_RectVertex), 16, &vertex_offset);
+                  U64 insts_offset = 0;
+                  id<MTLBuffer> insts_buffer = r_mtl_upload_buffer(insts, batches->byte_count, 16, &insts_offset);
                   R_MTL_RectUniforms group_uniforms = {0};
                   group_uniforms.viewport_size = viewport_dim;
                   group_uniforms.opacity = 1.f - group_params->transparency;
                   group_uniforms.texture_sample_channel_map = r_sample_channel_map_from_tex2dformat(texture->format);
+                  group_uniforms.texture_size = v2f32((F32)Max(texture->size.x, 1), (F32)Max(texture->size.y, 1));
+                  Vec2F32 xform_2x2_col0 = v2f32(group_params->xform.v[0][0], group_params->xform.v[0][1]);
+                  Vec2F32 xform_2x2_col1 = v2f32(group_params->xform.v[1][0], group_params->xform.v[1][1]);
+                  group_uniforms.xform_scale = v2f32(length_2f32(xform_2x2_col0), length_2f32(xform_2x2_col1));
+                  group_uniforms.xform[0] = v4f32(group_params->xform.v[0][0], group_params->xform.v[1][0], group_params->xform.v[2][0], 0);
+                  group_uniforms.xform[1] = v4f32(group_params->xform.v[0][1], group_params->xform.v[1][1], group_params->xform.v[2][1], 0);
+                  group_uniforms.xform[2] = v4f32(group_params->xform.v[0][2], group_params->xform.v[1][2], group_params->xform.v[2][2], 0);
                   U64 uniform_offset = 0;
                   id<MTLBuffer> uniform_buffer = r_mtl_upload_buffer(&group_uniforms, sizeof(group_uniforms), 256, &uniform_offset);
                   if(group_params->clip.x0 != 0 ||
@@ -960,12 +718,12 @@ r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
                     MTLScissorRect scissor = {0, 0, (NSUInteger)mtl_window->drawable_size.x, (NSUInteger)mtl_window->drawable_size.y};
                     [encoder setScissorRect:scissor];
                   }
-                  [encoder setVertexBuffer:vertex_buffer offset:vertex_offset atIndex:0];
+                  [encoder setVertexBuffer:insts_buffer offset:insts_offset atIndex:0];
                   [encoder setVertexBuffer:uniform_buffer offset:uniform_offset atIndex:1];
                   [encoder setFragmentBuffer:uniform_buffer offset:uniform_offset atIndex:1];
                   [encoder setFragmentTexture:texture->texture atIndex:0];
                   [encoder setFragmentSamplerState:r_mtl_state->samplers[group_params->tex_sample_kind] atIndex:0];
-                  [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:vertex_count];
+                  [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:inst_count];
                 }
               }
               [encoder endEncoding];
