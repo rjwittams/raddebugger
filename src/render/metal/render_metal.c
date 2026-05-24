@@ -87,6 +87,32 @@ internal NSUInteger
 r_mtl_resource_options_from_kind(R_ResourceKind kind)
 {
   NSUInteger result = MTLResourceStorageModeShared;
+  if(kind == R_ResourceKind_Static) { result = MTLResourceStorageModePrivate; }
+  return result;
+}
+
+internal U64
+r_mtl_blit_texture_bytes_per_row(U64 row_bytes)
+{
+  U64 result = AlignPow2(row_bytes, 256);
+  return result;
+}
+
+internal id<MTLBuffer>
+r_mtl_static_upload_buffer_from_size(U64 size)
+{
+  id<MTLBuffer> result = 0;
+  if(size != 0)
+  {
+    if(r_mtl_state->static_upload_buffer == 0 || r_mtl_state->static_upload_buffer_cap < size)
+    {
+      [r_mtl_state->static_upload_buffer release];
+      r_mtl_state->static_upload_buffer_cap = ClampBot(MB(1), size);
+      r_mtl_state->static_upload_buffer = [r_mtl_state->device newBufferWithLength:r_mtl_state->static_upload_buffer_cap options:MTLResourceStorageModeShared];
+      [r_mtl_state->static_upload_buffer setLabel:@"RAD static upload buffer"];
+    }
+    result = r_mtl_state->static_upload_buffer;
+  }
   return result;
 }
 
@@ -413,6 +439,9 @@ r_init(CmdLine *cmdln)
   if(r_mtl_state->device != 0)
   {
     r_mtl_state->command_queue = [r_mtl_state->device newCommandQueue];
+    r_mtl_state->static_upload_buffer_cap = MB(1);
+    r_mtl_state->static_upload_buffer = [r_mtl_state->device newBufferWithLength:r_mtl_state->static_upload_buffer_cap options:MTLResourceStorageModeShared];
+    [r_mtl_state->static_upload_buffer setLabel:@"RAD static upload buffer"];
     r_mtl_state->command_buffer_completion_handler = [^(id<MTLCommandBuffer> completed_buffer)
     {
       r_mtl_log_command_buffer_error(completed_buffer);
@@ -563,16 +592,52 @@ r_tex2d_alloc(R_ResourceKind kind, Vec2S32 size, R_Tex2DFormat format, void *dat
                                                                                         height:Max(size.y, 1)
                                                                                      mipmapped:NO];
     descriptor.usage = MTLTextureUsageShaderRead;
-    descriptor.storageMode = MTLStorageModeShared;
+    descriptor.storageMode = (kind == R_ResourceKind_Static ? MTLStorageModePrivate : MTLStorageModeShared);
     texture->texture = [r_mtl_state->device newTextureWithDescriptor:descriptor];
     if(data != 0 && texture->texture != 0)
     {
       U64 bytes_per_pixel = r_mtl_bytes_per_pixel_from_tex2d_format(texture->format);
-      MTLRegion region = MTLRegionMake2D(0, 0, size.x, size.y);
-      [texture->texture replaceRegion:region
-                           mipmapLevel:0
-                             withBytes:data
-                           bytesPerRow:size.x*bytes_per_pixel];
+      if(kind == R_ResourceKind_Static)
+      {
+        U64 row_bytes = size.x*bytes_per_pixel;
+        U64 blit_row_bytes = r_mtl_blit_texture_bytes_per_row(row_bytes);
+        U64 staging_size = blit_row_bytes*size.y;
+        id<MTLBuffer> staging_buffer = r_mtl_static_upload_buffer_from_size(staging_size);
+        if(staging_buffer != 0)
+        {
+          U8 *dst = (U8 *)[staging_buffer contents];
+          U8 *src = (U8 *)data;
+          for(S64 y = 0; y < size.y; y += 1)
+          {
+            MemoryCopy(dst + y*blit_row_bytes, src + y*row_bytes, row_bytes);
+          }
+          id<MTLCommandBuffer> command_buffer = [r_mtl_state->command_queue commandBuffer];
+          id<MTLBlitCommandEncoder> encoder = [command_buffer blitCommandEncoder];
+          MTLSize blit_size = MTLSizeMake(size.x, size.y, 1);
+          MTLOrigin origin = MTLOriginMake(0, 0, 0);
+          [encoder copyFromBuffer:staging_buffer
+                      sourceOffset:0
+                 sourceBytesPerRow:blit_row_bytes
+               sourceBytesPerImage:staging_size
+                        sourceSize:blit_size
+                         toTexture:texture->texture
+                  destinationSlice:0
+                  destinationLevel:0
+                 destinationOrigin:origin];
+          [encoder endEncoding];
+          [command_buffer commit];
+          [command_buffer waitUntilCompleted];
+          r_mtl_log_command_buffer_error(command_buffer);
+        }
+      }
+      else
+      {
+        MTLRegion region = MTLRegionMake2D(0, 0, size.x, size.y);
+        [texture->texture replaceRegion:region
+                             mipmapLevel:0
+                               withBytes:data
+                             bytesPerRow:size.x*bytes_per_pixel];
+      }
     }
     result = r_mtl_handle_from_tex2d(texture);
   }
@@ -643,7 +708,7 @@ r_fill_tex2d_region(R_Handle handle, Rng2S32 subrect, void *data)
   MutexScopeW(r_mtl_state->device_rw_mutex)
   {
     R_MTL_Tex2D *texture = r_mtl_tex2d_from_handle(handle);
-    if(texture != 0 && texture->texture != 0 && data != 0)
+    if(texture != 0 && texture->texture != 0 && texture->kind == R_ResourceKind_Dynamic && data != 0)
     {
       U64 bytes_per_pixel = r_mtl_bytes_per_pixel_from_tex2d_format(texture->format);
       MTLRegion region = MTLRegionMake2D(subrect.x0, subrect.y0, subrect.x1 - subrect.x0, subrect.y1 - subrect.y0);
@@ -674,7 +739,27 @@ r_buffer_alloc(R_ResourceKind kind, U64 size, void *data)
     buffer->kind = kind;
     buffer->size = size;
     NSUInteger options = r_mtl_resource_options_from_kind(kind);
-    if(data != 0)
+    if(kind == R_ResourceKind_Static && data != 0)
+    {
+      buffer->buffer = [r_mtl_state->device newBufferWithLength:size options:options];
+      id<MTLBuffer> staging_buffer = r_mtl_static_upload_buffer_from_size(size);
+      if(buffer->buffer != 0 && staging_buffer != 0)
+      {
+        MemoryCopy([staging_buffer contents], data, size);
+        id<MTLCommandBuffer> command_buffer = [r_mtl_state->command_queue commandBuffer];
+        id<MTLBlitCommandEncoder> encoder = [command_buffer blitCommandEncoder];
+        [encoder copyFromBuffer:staging_buffer
+                   sourceOffset:0
+                       toBuffer:buffer->buffer
+              destinationOffset:0
+                           size:size];
+        [encoder endEncoding];
+        [command_buffer commit];
+        [command_buffer waitUntilCompleted];
+        r_mtl_log_command_buffer_error(command_buffer);
+      }
+    }
+    else if(data != 0)
     {
       buffer->buffer = [r_mtl_state->device newBufferWithBytes:data length:size options:options];
     }
