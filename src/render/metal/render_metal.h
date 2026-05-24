@@ -32,6 +32,12 @@ struct R_MTL_Window
   id<MTLTexture> stage_scratch_color;
   id<MTLTexture> geo3d_color;
   id<MTLTexture> geo3d_depth;
+  MTLRenderPassDescriptor *stage_clear_pass;
+  MTLRenderPassDescriptor *stage_pass;
+  MTLRenderPassDescriptor *blur_pass;
+  MTLRenderPassDescriptor *geo_pass;
+  MTLRenderPassDescriptor *composite_pass;
+  MTLRenderPassDescriptor *final_pass;
   Vec2S32 drawable_size;
   F32 contents_scale;
 };
@@ -102,8 +108,10 @@ typedef struct R_MTL_State R_MTL_State;
 struct R_MTL_State
 {
   Arena *arena;
+  RWMutex device_rw_mutex;
   id<MTLDevice> device;
   id<MTLCommandQueue> command_queue;
+  void (^command_buffer_completion_handler)(id<MTLCommandBuffer>);
   id<MTLRenderPipelineState> rect_pipeline;
   id<MTLRenderPipelineState> blur_pipeline;
   id<MTLRenderPipelineState> mesh_pipeline;
@@ -113,12 +121,14 @@ struct R_MTL_State
   id<MTLSamplerState> samplers[R_Tex2DSampleKind_COUNT];
   R_MTL_Tex2D *white_texture;
   id<MTLBuffer> upload_buffers[3];
+  id<MTLCommandBuffer> upload_buffer_command_buffers[3];
   U64 upload_buffer_caps[3];
   U64 upload_buffer_pos;
   U64 upload_buffer_idx;
   R_MTL_Window *free_window;
   R_MTL_Tex2D *free_tex2d;
   R_MTL_Buffer *free_buffer;
+  R_MTL_RetiredObject *free_retired_object;
   R_MTL_Tex2D *retired_tex2d[3];
   R_MTL_Buffer *retired_buffer[3];
   R_MTL_RetiredObject *retired_object[3];
