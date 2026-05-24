@@ -761,6 +761,18 @@ mac_dmn_process_stop_for_detach(MAC_DMN_Process *process)
   return result;
 }
 
+internal void
+mac_dmn_process_request_halt(MAC_DMN_Process *process)
+{
+  if(process != 0 && process->is_running && !process->halt_expected)
+  {
+    if(kill(process->pid, SIGSTOP) == 0)
+    {
+      process->halt_expected = 1;
+    }
+  }
+}
+
 #pragma pack(push, 4)
 typedef struct MAC_DMN_RequestMachExceptionRaise
 {
@@ -2609,7 +2621,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
         MAC_DMN_Process *process = &entity->process;
         if(process->is_running)
         {
-          kill(process->pid, SIGSTOP);
+          mac_dmn_process_request_halt(process);
         }
         else
         {
@@ -2846,10 +2858,14 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
           if(got_mach_exception || WIFSTOPPED(status))
           {
             S32 signo = got_mach_exception ? mach_exception_signo : WSTOPSIG(status);
-            if(mac_dmn_state->halt_requested && signo == SIGSTOP)
+            if(process->halt_expected && signo == SIGSTOP)
             {
-              mac_dmn_push_event_halt(arena, &result);
-              mac_dmn_state->halt_requested = 0;
+              process->halt_expected = 0;
+              if(mac_dmn_state->halt_requested)
+              {
+                mac_dmn_push_event_halt(arena, &result);
+                mac_dmn_state->halt_requested = 0;
+              }
             }
             else
             {
@@ -2987,7 +3003,7 @@ dmn_halt(U64 code, U64 user_data)
     if(entity->kind == MAC_DMN_EntityKind_Process)
     {
       MAC_DMN_Process *process = &entity->process;
-      kill(process->pid, SIGSTOP);
+      mac_dmn_process_request_halt(process);
     }
   }
 }

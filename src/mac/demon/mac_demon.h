@@ -85,6 +85,7 @@ struct MAC_DMN_Process
   B32 is_running;
   B32 needs_attach_events;
   B32 uses_mach_exceptions;
+  B32 halt_expected;
   mach_port_t exception_port;
   MAC_DMN_ExceptionPortInfo exception_port_info;
   MAC_DMN_ExceptionMessage pending_exception;
@@ -229,6 +230,7 @@ internal B32 mac_dmn_process_reacquire_task_after_exec(MAC_DMN_Process *process)
 internal S32 mac_dmn_soft_signal_from_exception_message(MAC_DMN_ExceptionMessage *message);
 internal B32 mac_dmn_process_reply_pending_exception(MAC_DMN_Process *process, S32 signal);
 internal B32 mac_dmn_process_stop_for_detach(MAC_DMN_Process *process);
+internal void mac_dmn_process_request_halt(MAC_DMN_Process *process);
 internal MAC_DMN_Entity *mac_dmn_process_entity_from_exception_port(mach_port_t exception_port);
 internal B32 mac_dmn_exception_message_receive(MAC_DMN_ExceptionMessage *message, mach_msg_timeout_t timeout);
 internal MAC_DMN_Entity *mac_dmn_process_entity_alloc(pid_t pid, mach_port_t task, B32 is_attached, B32 needs_attach_events);
