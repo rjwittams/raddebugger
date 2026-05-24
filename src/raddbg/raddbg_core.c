@@ -6712,12 +6712,13 @@ rd_window_frame(void)
         //- rjf: left column
         {
           ui_set_next_flags(UI_BoxFlag_Clip|UI_BoxFlag_ViewScrollX|UI_BoxFlag_ViewClamp);
+          ui_set_next_min_width(native_title_bar_left_padding);
           UI_WidthFill UI_NamedRow(str8_lit("###menu_bar"))
           {
             //- rjf: icon
             if(native_title_bar_left_padding > 0)
             {
-              ui_spacer(ui_px(native_title_bar_left_padding, 0));
+              ui_spacer(ui_px(native_title_bar_left_padding, 1));
             }
             else UI_Padding(ui_em(0.5f, 1.f))
             {
