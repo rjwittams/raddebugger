@@ -6308,9 +6308,34 @@ d_ctrl_thread__detach(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   //- rjf: detach
   B32 detach_worked = dmn_ctrl_detach(ctrl_ctx, process);
   
+  //- consume synthetic process-removal events
+#if OS_MAC
+  if(detach_worked)
+  {
+    DMN_RunCtrls run_ctrls = {0};
+    run_ctrls.run_entities_are_unfrozen = 1;
+    run_ctrls.run_entities_are_processes = 1;
+    run_ctrls.run_entities = &process;
+    run_ctrls.run_entity_count = 1;
+    for(B32 done = 0; done == 0;)
+    {
+      DMN_Event *event = d_ctrl_thread__next_dmn_event(scratch.arena, ctrl_ctx, msg, &run_ctrls, 0);
+      if(event->kind == DMN_EventKind_ExitProcess && dmn_handle_match(event->process, process))
+      {
+        done = 1;
+      }
+      if(event->kind == DMN_EventKind_Halt || event->kind == DMN_EventKind_Error)
+      {
+        done = 1;
+      }
+    }
+  }
+#endif
+
   //- rjf: record stop
   {
     D_EventList evts = {0};
+#if !OS_MAC
     if(detach_worked)
     {
       D_Event *end_event = d_event_list_push(scratch.arena, &evts);
@@ -6318,6 +6343,7 @@ d_ctrl_thread__detach(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       end_event->msg_id = msg->msg_id;
       end_event->entity = msg->entity;
     }
+#endif
     D_Event *event = d_event_list_push(scratch.arena, &evts);
     event->kind       = D_EventKind_Stopped;
     event->cause      = D_EventCause_Finished;
