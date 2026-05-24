@@ -2766,7 +2766,12 @@ dmn_ctrl_detach(DMN_CtrlCtx *ctx, DMN_Handle handle)
     if(process->is_attached)
     {
       mac_dmn_process_stop_for_detach(process);
-      ptrace(PT_DETACH, process->pid, (caddr_t)1, 0);
+      mac_dmn_process_resume_suspended_threads(process);
+      mac_dmn_process_reply_pending_exception(process, 0);
+      if(ptrace(PT_DETACH, process->pid, (caddr_t)1, 0) == 0)
+      {
+        kill(process->pid, SIGCONT);
+      }
       mac_dmn_process_end_mach_exceptions(process);
       process->is_attached = 0;
     }
