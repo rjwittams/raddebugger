@@ -21,6 +21,8 @@
 # undef nil
 #endif
 
+#include "render/metal/generated/render_metal.meta.h"
+
 typedef struct R_MTL_Window R_MTL_Window;
 struct R_MTL_Window
 {
@@ -60,20 +62,6 @@ struct R_MTL_RetiredObject
   id object;
 };
 
-typedef struct R_MTL_RectVertex R_MTL_RectVertex;
-struct R_MTL_RectVertex
-{
-  Vec2F32 pos;
-  Vec2F32 texcoord;
-  Vec4F32 color;
-  Vec2F32 sdf_sample_pos;
-  Vec2F32 rect_half_size;
-  F32 corner_radius;
-  F32 border_thickness;
-  F32 softness;
-  F32 omit_texture;
-};
-
 typedef struct R_MTL_RectUniforms R_MTL_RectUniforms;
 struct R_MTL_RectUniforms
 {
@@ -81,6 +69,9 @@ struct R_MTL_RectUniforms
   F32 opacity;
   F32 _padding0_;
   Mat4x4F32 texture_sample_channel_map;
+  Vec2F32 texture_size;
+  Vec2F32 xform_scale;
+  Vec4F32 xform[3];
 };
 
 typedef struct R_MTL_BlurUniforms R_MTL_BlurUniforms;
@@ -154,7 +145,6 @@ internal void r_mtl_window_resize_targets(R_MTL_Window *window);
 internal id<MTLBuffer> r_mtl_upload_buffer(void *data, U64 size, U64 align, U64 *out_offset);
 internal F32 r_mtl_contents_scale_from_window(WM_Window window);
 internal Vec2S32 r_mtl_drawable_size_from_window(WM_Window window);
-internal void r_mtl_rect_vertices_push(R_MTL_RectVertex *vertices, U64 *idx, R_Rect2DInst *inst, R_BatchGroup2DParams *params, Vec2S32 texture_size);
 internal B32 r_mtl_scissor_from_clip(Rng2F32 clip, Vec2S32 drawable_size, F32 scale, MTLScissorRect *out);
 internal R_MTL_BlurUniforms r_mtl_blur_uniforms_from_params(R_PassParams_Blur *params, Vec2F32 viewport_dim);
 
