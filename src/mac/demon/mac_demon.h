@@ -159,6 +159,8 @@ struct MAC_DMN_State
   Thread process_monitor_thread;
   MAC_DMN_ExitEvent *first_exit_event;
   MAC_DMN_ExitEvent *last_exit_event;
+  Arena *detach_arena;
+  DMN_HandleList detach_processes;
 };
 
 typedef struct MAC_DMN_ProcessIterState MAC_DMN_ProcessIterState;
@@ -290,6 +292,7 @@ internal void mac_dmn_push_event_load_module(Arena *arena, DMN_EventList *events
 internal void mac_dmn_push_event_unload_module(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *module_entity);
 internal void mac_dmn_push_event_handshake_complete(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity);
 internal void mac_dmn_push_event_exit_process(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, U32 exit_code);
+internal void mac_dmn_push_detach_events(Arena *arena, DMN_EventList *events);
 internal void mac_dmn_push_event_breakpoint(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, U64 instruction_pointer, U64 user_data);
 internal void mac_dmn_push_event_data_breakpoint(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, DMN_Trap *trap);
 internal void mac_dmn_push_event_single_step(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity);
