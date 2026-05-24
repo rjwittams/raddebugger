@@ -1,0 +1,239 @@
+// Copyright (c) Epic Games Tools
+// Licensed under the MIT license (https://opensource.org/license/mit/)
+
+@embed_string r_mtl_g_shader_src:
+```
+#include <metal_stdlib>
+using namespace metal;
+struct RectInstance {
+  float4 dst_rect;
+  float4 src_rect;
+  float4 colors[4];
+  float4 corner_radii;
+  float border_thickness;
+  float edge_softness;
+  float white_texture_override;
+  float shear;
+};
+struct MeshVertex {
+  packed_float3 position;
+  packed_float3 normal;
+  packed_float2 texcoord;
+  packed_float3 color;
+};
+struct RectUniforms {
+  packed_float2 viewport_size;
+  float opacity;
+  float _padding0;
+  float4x4 texture_sample_channel_map;
+  packed_float2 texture_size;
+  packed_float2 xform_scale;
+  float4 xform[3];
+};
+struct BlurUniforms {
+  float4 rect;
+  float4 corner_radii;
+  packed_float2 direction;
+  packed_float2 viewport_size;
+  uint blur_count;
+  uint _padding0[3];
+  float4 kernel_weights[32];
+};
+struct FinalizeUniforms {
+  packed_float2 viewport_size;
+};
+struct MeshUniforms {
+  float4x4 xform;
+};
+struct VertexOut {
+  float4 position [[position]];
+  float2 texcoord;
+  float4 color;
+  float2 sdf_sample_pos;
+  float2 rect_half_size;
+  float corner_radius;
+  float border_thickness;
+  float softness;
+  float omit_texture;
+};
+struct MeshOut {
+  float4 position [[position]];
+  float2 texcoord;
+  float4 color;
+};
+float rect_sdf(float2 sample_pos, float2 rect_half_size, float r) {
+  return length(max(abs(sample_pos) - rect_half_size + r, 0.0f)) - r;
+}
+float linear_from_srgb_f32(float x) {
+  return x < 0.0404482362771082f ? x / 12.92f : pow((x + 0.055f) / 1.055f, 2.4f);
+}
+float4 linear_from_srgba(float4 v) {
+  return float4(linear_from_srgb_f32(v.x),
+                linear_from_srgb_f32(v.y),
+                linear_from_srgb_f32(v.z),
+                v.w);
+}
+vertex VertexOut rect_vertex(uint vertex_id [[vertex_id]],
+                             uint instance_id [[instance_id]],
+                             const device RectInstance *instances [[buffer(0)]],
+                             constant RectUniforms &uniforms [[buffer(1)]]) {
+  RectInstance inst = instances[instance_id];
+  float2 dst_p0 = inst.dst_rect.xy;
+  float2 dst_p1 = inst.dst_rect.zw;
+  float2 src_p0 = inst.src_rect.xy;
+  float2 src_p1 = inst.src_rect.zw;
+  float2 dst_size = abs(dst_p1 - dst_p0);
+  float2 dst_positions[] = {
+    float2(dst_p0.x, dst_p1.y),
+    float2(dst_p0.x, dst_p0.y),
+    float2(dst_p1.x, dst_p1.y + inst.shear),
+    float2(dst_p1.x, dst_p0.y + inst.shear),
+  };
+  float2 src_positions[] = {
+    float2(src_p0.x, src_p1.y),
+    float2(src_p0.x, src_p0.y),
+    float2(src_p1.x, src_p1.y),
+    float2(src_p1.x, src_p0.y),
+  };
+  float corner_radii[] = {
+    inst.corner_radii.y,
+    inst.corner_radii.x,
+    inst.corner_radii.w,
+    inst.corner_radii.z,
+  };
+  float4 colors[] = {
+    inst.colors[1],
+    inst.colors[0],
+    inst.colors[3],
+    inst.colors[2],
+  };
+  float2 corner_pct = float2((vertex_id >> 1) ? 1.0f : 0.0f,
+                             (vertex_id & 1) ? 0.0f : 1.0f);
+  float3 p = float3(dst_positions[vertex_id], 1.0f);
+  float2 transformed = float2(dot(p, uniforms.xform[0].xyz), dot(p, uniforms.xform[1].xyz));
+  float2 rect_half_size = dst_size*0.5f*uniforms.xform_scale;
+  float scale = max(uniforms.xform_scale.x, uniforms.xform_scale.y);
+  VertexOut out;
+  float2 ndc = float2(2.0f*transformed.x/uniforms.viewport_size.x - 1.0f,
+                       1.0f - 2.0f*transformed.y/uniforms.viewport_size.y);
+  out.position = float4(ndc, 0.0f, 1.0f);
+  out.texcoord = src_positions[vertex_id] / uniforms.texture_size;
+  out.color = colors[vertex_id];
+  out.sdf_sample_pos = (2.0f*corner_pct - 1.0f) * rect_half_size;
+  out.rect_half_size = rect_half_size;
+  out.corner_radius = corner_radii[vertex_id]*scale;
+  out.border_thickness = inst.border_thickness*scale;
+  out.softness = inst.edge_softness*scale;
+  out.omit_texture = inst.white_texture_override;
+  return out;
+}
+fragment float4 rect_fragment(VertexOut in [[stage_in]],
+                              texture2d<float> tex [[texture(0)]],
+                              sampler tex_sampler [[sampler(0)]],
+                              constant RectUniforms &uniforms [[buffer(1)]]) {
+  float4 sample_color = float4(1.0f);
+  if(in.omit_texture < 0.5f) {
+    sample_color = uniforms.texture_sample_channel_map * tex.sample(tex_sampler, in.texcoord);
+    sample_color = linear_from_srgba(sample_color);
+  }
+  float soft_span = max(2.0f*in.softness, 0.001f);
+  float border_sdf_t = 1.0f;
+  if(in.border_thickness > 0.0f) {
+    float2 inner_half_size = in.rect_half_size - float2(in.softness*2.0f) - in.border_thickness;
+    float border_sdf_s = rect_sdf(in.sdf_sample_pos, inner_half_size, max(in.corner_radius-in.border_thickness, 0.0f));
+    border_sdf_t = smoothstep(0.0f, soft_span, border_sdf_s);
+  }
+  if(border_sdf_t < 0.001f) {
+    discard_fragment();
+  }
+  float corner_sdf_t = 1.0f;
+  if(in.corner_radius > 0.0f || in.softness > 0.75f) {
+    float corner_sdf_s = rect_sdf(in.sdf_sample_pos, in.rect_half_size - float2(in.softness*2.0f), in.corner_radius);
+    corner_sdf_t = 1.0f - smoothstep(0.0f, soft_span, corner_sdf_s);
+  }
+  float4 result = sample_color * in.color;
+  result.a *= uniforms.opacity;
+  result.a *= corner_sdf_t;
+  result.a *= border_sdf_t;
+  result.rgb *= uniforms.opacity;
+  return result;
+}
+vertex VertexOut fullscreen_vertex(uint vertex_id [[vertex_id]],
+                                 constant FinalizeUniforms &uniforms [[buffer(0)]]) {
+  float2 pos[] = { float2(0.0f, uniforms.viewport_size.y), float2(0.0f, 0.0f), float2(uniforms.viewport_size.x, uniforms.viewport_size.y), float2(uniforms.viewport_size.x, 0.0f) };
+  float2 pct = pos[vertex_id] / uniforms.viewport_size;
+  VertexOut out;
+  out.position = float4(2.0f*pct.x - 1.0f, 1.0f - 2.0f*pct.y, 0.0f, 1.0f);
+  out.texcoord = pct;
+  out.color = float4(1.0f);
+  out.sdf_sample_pos = float2(0.0f);
+  out.rect_half_size = float2(0.0f);
+  out.corner_radius = 0.0f;
+  out.border_thickness = 0.0f;
+  out.softness = 0.0f;
+  out.omit_texture = 0.0f;
+  return out;
+}
+fragment float4 finalize_fragment(VertexOut in [[stage_in]],
+                                  texture2d<float> tex [[texture(0)]],
+                                  sampler tex_sampler [[sampler(0)]]) {
+  float4 color = tex.sample(tex_sampler, in.texcoord);
+  color.a = 1.0f;
+  return color;
+}
+fragment float4 composite_fragment(VertexOut in [[stage_in]],
+                                  texture2d<float> tex [[texture(0)]],
+                                  sampler tex_sampler [[sampler(0)]]) {
+  return tex.sample(tex_sampler, in.texcoord);
+}
+vertex VertexOut blur_vertex(uint vertex_id [[vertex_id]],
+                          constant BlurUniforms &uniforms [[buffer(0)]]) {
+  float2 pos[] = { uniforms.rect.xw, uniforms.rect.xy, uniforms.rect.zw, uniforms.rect.zy };
+  float radii[] = { uniforms.corner_radii.y, uniforms.corner_radii.x, uniforms.corner_radii.w, uniforms.corner_radii.z };
+  float2 corner_pct = float2((vertex_id >> 1) ? 1.0f : 0.0f, (vertex_id & 1) ? 0.0f : 1.0f);
+  float2 pct = pos[vertex_id] / uniforms.viewport_size;
+  float2 half_size = float2((uniforms.rect.z - uniforms.rect.x)/2.0f, (uniforms.rect.w - uniforms.rect.y)/2.0f);
+  VertexOut out;
+  out.position = float4(2.0f*pct.x - 1.0f, 1.0f - 2.0f*pct.y, 0.0f, 1.0f);
+  out.texcoord = pct;
+  out.color = float4(1.0f);
+  out.sdf_sample_pos = (2.0f*corner_pct - 1.0f) * half_size;
+  out.rect_half_size = half_size - 2.0f;
+  out.corner_radius = radii[vertex_id];
+  out.border_thickness = 0.0f;
+  out.softness = 0.0f;
+  out.omit_texture = 0.0f;
+  return out;
+}
+fragment float4 blur_fragment(VertexOut in [[stage_in]],
+                              texture2d<float> tex [[texture(0)]],
+                              sampler tex_sampler [[sampler(0)]],
+                              constant BlurUniforms &uniforms [[buffer(0)]]) {
+  float3 color = uniforms.kernel_weights[0].x * tex.sample(tex_sampler, in.texcoord).rgb;
+  for(uint i = 1; i < uniforms.blur_count; i += 1) {
+    float weight = uniforms.kernel_weights[i].x;
+    float offset = uniforms.kernel_weights[i].y;
+    color += weight * tex.sample(tex_sampler, in.texcoord - offset * uniforms.direction).rgb;
+    color += weight * tex.sample(tex_sampler, in.texcoord + offset * uniforms.direction).rgb;
+  }
+  float corner_sdf_s = rect_sdf(in.sdf_sample_pos, in.rect_half_size, in.corner_radius);
+  float corner_sdf_t = 1.0f - smoothstep(0.0f, 2.0f, corner_sdf_s);
+  if(corner_sdf_t < 0.9f) {
+    discard_fragment();
+  }
+  return float4(color, 1.0f);
+}
+vertex MeshOut mesh_vertex(uint vertex_id [[vertex_id]],
+                           const device MeshVertex *vertices [[buffer(0)]],
+                           constant MeshUniforms &uniforms [[buffer(1)]]) {
+  MeshVertex in_vertex = vertices[vertex_id];
+  MeshOut out;
+  out.position = uniforms.xform * float4(in_vertex.position, 1.0f);
+  out.texcoord = in_vertex.texcoord;
+  out.color = float4(in_vertex.color, 1.0f);
+  return out;
+}
+fragment float4 mesh_fragment(MeshOut in [[stage_in]]) {
+  return in.color;
+}
+```
