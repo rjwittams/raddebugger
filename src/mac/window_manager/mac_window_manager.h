@@ -13,6 +13,7 @@
 #import <Foundation/NSArray.h>
 #import <Foundation/NSDate.h>
 #import <Foundation/NSString.h>
+#import <Foundation/NSRunLoop.h>
 #import <Foundation/NSURL.h>
 #import <AppKit/NSAlert.h>
 #import <AppKit/NSApplication.h>
@@ -25,6 +26,7 @@
 #import <AppKit/NSScreen.h>
 #import <AppKit/NSWindow.h>
 #import <AppKit/NSWorkspace.h>
+#import <QuartzCore/CADisplayLink.h>
 #undef FileInfo
 #pragma pop_macro("FileInfo")
 #pragma pop_macro("global")
@@ -62,7 +64,10 @@ struct MAC_WM_MenuCommandNode
 {
 @public
   MAC_WM_Window *window;
+  CADisplayLink *live_resize_display_link;
+  B32 live_resize_update_in_progress;
 }
+- (void)macLiveResizeStopDisplayLink;
 @end
 
 @interface MAC_WM_MenuTarget : NSObject
