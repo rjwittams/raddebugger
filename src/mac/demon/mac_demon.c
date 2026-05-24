@@ -2506,6 +2506,15 @@ mac_dmn_push_event_not_attached(Arena *arena, DMN_EventList *events)
 }
 
 internal void
+mac_dmn_push_event_unexpected_failure(Arena *arena, DMN_EventList *events, U32 code)
+{
+  DMN_Event *e = dmn_event_list_push(arena, events);
+  e->kind = DMN_EventKind_Error;
+  e->error_kind = DMN_ErrorKind_UnexpectedFailure;
+  e->code = code;
+}
+
+internal void
 mac_dmn_push_event_handshake_complete(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity)
 {
   MAC_DMN_Process *process = &process_entity->process;
@@ -3038,6 +3047,8 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       MAC_DMN_Entity *exception_process_entity = 0;
       B32 got_mach_exception = 0;
       S32 mach_exception_signo = 0;
+      B32 got_wait_error = 0;
+      int wait_error = 0;
       for(;;)
       {
         pid_t monitor_pid = 0;
@@ -3070,6 +3081,12 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
           wait_id = waitpid(-1, &status, WNOHANG|WUNTRACED);
         }
         while(wait_id < 0 && errno == EINTR);
+        if(wait_id < 0)
+        {
+          got_wait_error = 1;
+          wait_error = errno;
+          break;
+        }
         if(wait_id > 0 && mac_dmn_process_entity_from_pid(wait_id) != 0)
         {
           break;
@@ -3094,7 +3111,11 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       }
 
       MAC_DMN_Entity *process_entity = got_mach_exception ? exception_process_entity : mac_dmn_process_entity_from_pid(wait_id);
-      if(process_entity != 0)
+      if(got_wait_error)
+      {
+        mac_dmn_push_event_unexpected_failure(arena, &result, (U32)wait_error);
+      }
+      else if(process_entity != 0)
       {
         if(!got_mach_exception && (WIFEXITED(status) || WIFSIGNALED(status)))
         {
