@@ -2198,6 +2198,26 @@ mac_dmn_push_event_exit_process(Arena *arena, DMN_EventList *events, MAC_DMN_Ent
 }
 
 internal void
+mac_dmn_push_detach_events(Arena *arena, DMN_EventList *events)
+{
+  for(DMN_HandleNode *n = mac_dmn_state->detach_processes.first; n != 0; n = n->next)
+  {
+    MAC_DMN_Entity *process_entity = mac_dmn_entity_from_handle(n->v);
+    if(process_entity != 0 && process_entity->kind == MAC_DMN_EntityKind_Process)
+    {
+      MAC_DMN_Process *process = &process_entity->process;
+      mac_dmn_process_resume_suspended_threads(process);
+      mac_dmn_process_clear_thread_entities(arena, events, process_entity);
+      mac_dmn_process_clear_module_entities(arena, events, process_entity);
+      mac_dmn_push_event_exit_process(arena, events, process_entity, 0);
+      mac_dmn_process_entity_release(process_entity);
+    }
+  }
+  MemoryZeroStruct(&mac_dmn_state->detach_processes);
+  arena_clear(mac_dmn_state->detach_arena);
+}
+
+internal void
 mac_dmn_push_event_breakpoint(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, U64 instruction_pointer, U64 user_data)
 {
   DMN_Event *e = dmn_event_list_push(arena, events);
@@ -2360,6 +2380,7 @@ dmn_init(void)
   mac_dmn_state->access_mutex = mutex_alloc();
   mac_dmn_state->process_monitor_kq = -1;
   mac_dmn_state->process_monitor_mutex = mutex_alloc();
+  mac_dmn_state->detach_arena = arena_alloc();
   mac_dmn_state->process_monitor_kq = kqueue();
   if(mac_dmn_state->process_monitor_kq >= 0)
   {
@@ -2534,8 +2555,9 @@ dmn_ctrl_detach(DMN_CtrlCtx *ctx, DMN_Handle handle)
       mac_dmn_process_stop_for_detach(process);
       ptrace(PT_DETACH, process->pid, (caddr_t)1, 0);
       mac_dmn_process_end_mach_exceptions(process);
+      process->is_attached = 0;
     }
-    mac_dmn_process_entity_release(entity);
+    dmn_handle_list_push(mac_dmn_state->detach_arena, &mac_dmn_state->detach_processes, handle);
     result = 1;
   }
   return result;
@@ -2571,6 +2593,11 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
   if(result.count == 0)
   {
     mac_dmn_ctrl_consume_monitor_exit_event(arena, &result);
+  }
+
+  if(result.count == 0 && mac_dmn_state->detach_processes.first != 0)
+  {
+    mac_dmn_push_detach_events(arena, &result);
   }
 
   if(result.count == 0 && mac_dmn_state->halt_requested)
