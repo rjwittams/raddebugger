@@ -177,7 +177,6 @@ typedef U32 D_RunFlags;
 enum
 {
   D_RunFlag_StopOnEntryPoint = (1<<0),
-  D_RunFlag_IgnoreInitialHalt = (1<<1),
 };
 
 typedef struct D_Msg D_Msg;
