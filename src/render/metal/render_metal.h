@@ -120,6 +120,8 @@ struct R_MTL_State
   id<MTLDepthStencilState> mesh_depth_stencil;
   id<MTLSamplerState> samplers[R_Tex2DSampleKind_COUNT];
   R_MTL_Tex2D *white_texture;
+  id<MTLBuffer> static_upload_buffer;
+  U64 static_upload_buffer_cap;
   id<MTLBuffer> upload_buffers[3];
   id<MTLCommandBuffer> upload_buffer_command_buffers[3];
   U64 upload_buffer_caps[3];
@@ -146,6 +148,8 @@ internal R_MTL_Buffer *r_mtl_buffer_from_handle(R_Handle handle);
 internal MTLPixelFormat r_mtl_pixel_format_from_tex2d_format(R_Tex2DFormat format);
 internal U64 r_mtl_bytes_per_pixel_from_tex2d_format(R_Tex2DFormat format);
 internal NSUInteger r_mtl_resource_options_from_kind(R_ResourceKind kind);
+internal U64 r_mtl_blit_texture_bytes_per_row(U64 row_bytes);
+internal id<MTLBuffer> r_mtl_static_upload_buffer_from_size(U64 size);
 internal void r_mtl_log_ns_error(char *context, NSError *error);
 internal id<MTLRenderPipelineState> r_mtl_render_pipeline_from_library(id<MTLLibrary> library, NSString *vertex_name, NSString *fragment_name, MTLPixelFormat pixel_format);
 internal id<MTLRenderPipelineState> r_mtl_render_pipeline_from_library_ex(id<MTLLibrary> library, NSString *vertex_name, NSString *fragment_name, MTLPixelFormat color_pixel_format, MTLPixelFormat depth_pixel_format, B32 blend);
