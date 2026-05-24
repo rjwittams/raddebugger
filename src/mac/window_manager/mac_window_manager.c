@@ -2,6 +2,46 @@
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
 @implementation MAC_WM_WindowDelegate
+- (void)macLiveResizeStopDisplayLink
+{
+  if(live_resize_display_link != 0)
+  {
+    [live_resize_display_link invalidate];
+    live_resize_display_link = 0;
+  }
+}
+- (void)macLiveResizeTick:(CADisplayLink *)display_link
+{
+  if(window != 0 && !live_resize_update_in_progress)
+  {
+    live_resize_update_in_progress = 1;
+    update();
+    live_resize_update_in_progress = 0;
+  }
+}
+- (void)windowWillStartLiveResize:(NSNotification *)notification
+{
+  if(window != 0 && live_resize_display_link == 0)
+  {
+    live_resize_display_link = [window->ns_window displayLinkWithTarget:self selector:@selector(macLiveResizeTick:)];
+    [live_resize_display_link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+  }
+}
+- (void)windowDidResize:(NSNotification *)notification
+{
+  if(window != 0 && ![window->ns_window inLiveResize])
+  {
+    wm_send_wakeup_event();
+  }
+}
+- (void)windowDidEndLiveResize:(NSNotification *)notification
+{
+  [self macLiveResizeStopDisplayLink];
+  if(window != 0)
+  {
+    update();
+  }
+}
 - (BOOL)windowShouldClose:(id)sender
 {
   if(window != 0)
@@ -16,6 +56,11 @@
   {
     window->lose_focus_requested = 1;
   }
+}
+- (void)dealloc
+{
+  [self macLiveResizeStopDisplayLink];
+  [super dealloc];
 }
 @end
 
@@ -402,6 +447,7 @@ internal void
 mac_wm_window_release(MAC_WM_Window *window)
 {
   DLLRemove(mac_wm_state->first_window, mac_wm_state->last_window, window);
+  [window->delegate macLiveResizeStopDisplayLink];
   [window->ns_window setDelegate:0];
   [window->ns_window close];
   window->ns_window = 0;
