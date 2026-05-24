@@ -173,10 +173,18 @@ fp_raster(Arena *arena, FP_Handle handle, F32 size, FP_RasterFlags flags, String
                                                    kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big);
           if(ctx != 0)
           {
+            B32 smooth = !!(flags & FP_RasterFlag_Smooth);
+            B32 hinted = !!(flags & FP_RasterFlag_Hinted);
             CGContextSetTextMatrix(ctx, CGAffineTransformIdentity);
             CGContextSetRGBFillColor(ctx, 1.f, 1.f, 1.f, 1.f);
-            CGContextSetShouldAntialias(ctx, !!(flags & FP_RasterFlag_Smooth));
             CGContextSetAllowsAntialiasing(ctx, 1);
+            CGContextSetShouldAntialias(ctx, 1);
+            CGContextSetAllowsFontSmoothing(ctx, 1);
+            CGContextSetShouldSmoothFonts(ctx, smooth);
+            CGContextSetAllowsFontSubpixelPositioning(ctx, 1);
+            CGContextSetShouldSubpixelPositionFonts(ctx, !hinted);
+            CGContextSetAllowsFontSubpixelQuantization(ctx, 1);
+            CGContextSetShouldSubpixelQuantizeFonts(ctx, hinted);
             CTFontDrawGlyphs(ct_font, glyphs, positions, glyph_count, ctx);
 
             U64 alpha_sum = 0;
