@@ -1747,16 +1747,6 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
                        cmd_kind == D_CmdKind_FreezeMachine)
                       ? D_CmdKind_FreezeEntity
                       : D_CmdKind_ThawEntity);
-          switch(cmd->kind)
-          {
-            default:{}break;
-            case D_CmdKind_FreezeThread:
-            case D_CmdKind_ThawThread:  {params_copy.entity = params->thread;}break;
-            case D_CmdKind_FreezeProcess:
-            case D_CmdKind_ThawProcess: {params_copy.entity = params->process;}break;
-            case D_CmdKind_FreezeMachine:
-            case D_CmdKind_ThawMachine: {params_copy.entity = params->machine;}break;
-          }
           params = &params_copy;
         }break;
       }
