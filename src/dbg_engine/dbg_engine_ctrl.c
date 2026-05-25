@@ -6937,6 +6937,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   // the user breakpoint.
   //
   B32 target_thread_is_on_user_bp_and_trap_net_trap = 0;
+  U64 target_thread_user_bp_and_trap_net_trap_vaddr = 0;
   if(stop_event == 0)
   {
     // rjf: gather stuck threads
@@ -6988,6 +6989,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
               if(is_on_user_bp && is_on_net_trap && dmn_handle_match(d_dmn_from_handle(thread->handle), target_thread_dmn))
               {
                 target_thread_is_on_user_bp_and_trap_net_trap = 1;
+                target_thread_user_bp_and_trap_net_trap_vaddr = rip;
               }
             }
           }
@@ -7543,6 +7545,10 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       {
         Temp temp = temp_begin(scratch.arena);
         String8List conditions = {0};
+        B32 target_thread_overlap_trap_event =
+          (target_thread_is_on_user_bp_and_trap_net_trap &&
+           target_thread_user_bp_and_trap_net_trap_vaddr == event->instruction_pointer &&
+           dmn_handle_match(event->thread, target_thread_dmn));
         
         // rjf: entry breakpoints
         for(DMN_TrapChunkNode *n = entry_traps.first; n != 0; n = n->next)
@@ -7560,7 +7566,10 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
         
         // rjf: user breakpoints
         {
-          if(event->user_data != 0)
+          // When stepping starts on an enabled user breakpoint, the target
+          // thread must be allowed to consume same-address trap-net metadata
+          // instead of immediately reporting the user breakpoint again.
+          if(event->user_data != 0 && !target_thread_overlap_trap_event)
           {
             hit_user_bp = 1;
           }
@@ -7572,7 +7581,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
             {
               if(dmn_handle_match(trap->process, event->process) &&
                  trap->vaddr == event->instruction_pointer &&
-                 (!dmn_handle_match(event->thread, d_dmn_from_handle(target_thread)) || !target_thread_is_on_user_bp_and_trap_net_trap))
+                 !target_thread_overlap_trap_event)
               {
                 D_Breakpoint *user_bp = (D_Breakpoint *)trap->id;
                 hit_user_bp = 1;
