@@ -6032,6 +6032,8 @@ d_ctrl_thread__end_and_flush_log(void)
   append_data_to_file_path(d_ctrl_state->ctrl_thread_log_path, log.strings[LogMsgKind_Info]);
   if(log.strings[LogMsgKind_UserError].size != 0)
   {
+    String8 error_log = push_str8f(scratch.arena, "user_errors:\n{\n%S}\n", log.strings[LogMsgKind_UserError]);
+    append_data_to_file_path(d_ctrl_state->ctrl_thread_log_path, error_log);
     D_EventList evts = {0};
     D_Event *evt = d_event_list_push(scratch.arena, &evts);
     evt->kind       = D_EventKind_Error;

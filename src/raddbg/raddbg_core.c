@@ -12807,7 +12807,96 @@ rd_frame(void)
             B32 handled = 0;
 
             // IPC-only diagnostics for debugger backend smoke tests.
-            if(str8_match(cmd_name, str8_lit("dump_processes"), 0))
+            if(str8_match(cmd_name, str8_lit("dump_targets"), 0))
+            {
+              handled = 1;
+              CFG_NodePtrList targets = cfg_node_top_level_list_from_string(scratch.arena, str8_lit("target"));
+              String8List lines = {0};
+              str8_list_pushf(scratch.arena, &lines, "targets:%I64u", targets.count);
+              U64 idx = 0;
+              for(CFG_NodePtrNode *n = targets.first; n != 0; n = n->next, idx += 1)
+              {
+                CFG_Node *target = n->v;
+                D_Target target_info = rd_target_from_cfg(scratch.arena, target);
+                String8 label = rd_label_from_cfg(target);
+                String8 exe_name = str8_skip_last_slash(target_info.exe);
+                str8_list_pushf(scratch.arena, &lines, "\n#%I64u cfg:$%I64x enabled:%u label:%S executable:%S",
+                                idx, target->id, !rd_disabled_from_cfg(target), label, exe_name);
+              }
+              String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+              str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+            }
+            else if(str8_match(cmd_name, str8_lit("launch_target"), 0) ||
+                    str8_match(cmd_name, str8_lit("launch_target_step"), 0))
+            {
+              handled = 1;
+              String8 target_string = {0};
+              if(msg_parts.first != 0 && msg_parts.first->next != 0)
+              {
+                String8List target_parts = {0};
+                for(String8Node *n = msg_parts.first->next; n != 0; n = n->next)
+                {
+                  str8_list_push(scratch.arena, &target_parts, n->string);
+                }
+                target_string = str8_list_join(scratch.arena, &target_parts, &(StringJoin){.sep = str8_lit(" ")});
+              }
+              CFG_Node *target = &cfg_nil_node;
+              if(str8_match(str8_prefix(target_string, 1), str8_lit("$"), 0))
+              {
+                U64 id = u64_from_str8(str8_skip(target_string, 1), 16);
+                CFG_Node *cfg = cfg_node_from_id(id);
+                if(cfg != &cfg_nil_node && str8_match(cfg->string, str8_lit("target"), 0))
+                {
+                  target = cfg;
+                }
+              }
+              if(target == &cfg_nil_node && str8_match(str8_prefix(target_string, 1), str8_lit("#"), 0))
+              {
+                U64 target_idx = u64_from_str8(str8_skip(target_string, 1), 10);
+                U64 idx = 0;
+                CFG_NodePtrList targets = cfg_node_top_level_list_from_string(scratch.arena, str8_lit("target"));
+                for(CFG_NodePtrNode *n = targets.first; n != 0; n = n->next, idx += 1)
+                {
+                  if(idx == target_idx)
+                  {
+                    target = n->v;
+                    break;
+                  }
+                }
+              }
+              if(target == &cfg_nil_node && target_string.size != 0)
+              {
+                CFG_NodePtrList targets = cfg_node_top_level_list_from_string(scratch.arena, str8_lit("target"));
+                for(CFG_NodePtrNode *n = targets.first; n != 0; n = n->next)
+                {
+                  CFG_Node *candidate = n->v;
+                  D_Target target_info = rd_target_from_cfg(scratch.arena, candidate);
+                  String8 label = rd_label_from_cfg(candidate);
+                  String8 exe_name = str8_skip_last_slash(target_info.exe);
+                  if(str8_match(target_string, label, 0) ||
+                     str8_match(target_string, exe_name, 0) ||
+                     str8_match(target_string, target_info.exe, 0))
+                  {
+                    target = candidate;
+                    break;
+                  }
+                }
+              }
+              if(target == &cfg_nil_node)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs,
+                                target_string.size == 0 ? "error: missing target" : "error: target not found");
+              }
+              else
+              {
+                B32 step = str8_match(cmd_name, str8_lit("launch_target_step"), 0);
+                rd_cmd(RD_CmdKind_SelectTarget, .cfg = target->id);
+                rd_cmd(step ? RD_CmdKind_LaunchAndStepInto : RD_CmdKind_LaunchAndRun, .cfg = target->id);
+                String8 label = rd_label_from_cfg(target);
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "ok cfg:$%I64x label:%S", target->id, label);
+              }
+            }
+            else if(str8_match(cmd_name, str8_lit("dump_processes"), 0))
             {
               handled = 1;
               D_Entity *selected_thread = d_entity_from_handle(rd_base_regs()->thread);
@@ -18287,6 +18376,8 @@ rd_frame(void)
     if(log.strings[LogMsgKind_UserError].size != 0)
     {
       String8 error_log = log.strings[LogMsgKind_UserError];
+      String8 error_log_file = push_str8f(scratch.arena, "user_errors:\n{\n%S}\n", error_log);
+      append_data_to_file_path(rd_state->log_path, error_log_file);
       String8List error_log_lines = str8_split(scratch.arena, error_log, (U8 *)"\n", 1, 0);
       String8 error_log_string = str8_list_join(scratch.arena, &error_log_lines, &(StringJoin){.sep = str8_lit(" ")});
       for(RD_WindowState *ws = rd_state->first_window_state; ws != &rd_nil_window_state; ws = ws->order_next)
