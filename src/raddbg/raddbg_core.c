@@ -12875,6 +12875,7 @@ rd_frame(void)
             String8 msg = rd_regs()->string;
             String8List msg_parts = str8_split(scratch.arena, msg, (U8 *)" ", 1, 0);
             String8 cmd_name = str8_list_first(&msg_parts);
+            B32 handled = 0;
             if(str8_match(cmd_name, str8_lit("dump_targets"), 0))
             {
               CFG_NodePtrList targets = cfg_node_top_level_list_from_string(scratch.arena, str8_lit("target"));
@@ -13044,6 +13045,93 @@ rd_frame(void)
                   thread_idx += 1;
                 }
               }
+              String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+              str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+            }
+            else if(str8_match(cmd_name, str8_lit("dump_mac_demon_state"), 0))
+            {
+              handled = 1;
+              String8List lines = {0};
+#if OS_MAC
+              B32 access_opened = dmn_access_open();
+              str8_list_pushf(scratch.arena, &lines, "mac_demon access:%u ctrl_running:%u access_run_state:%u halt_requested:%u",
+                              access_opened, d_ctrl_targets_running(),
+                              mac_dmn_state != 0 ? mac_dmn_state->access_run_state : 0,
+                              mac_dmn_state != 0 ? mac_dmn_state->halt_requested : 0);
+              if(access_opened)
+              {
+                U64 process_count = 0;
+                U64 detach_count = 0;
+                for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+                {
+                  if(entity->kind == MAC_DMN_EntityKind_Process)
+                  {
+                    process_count += 1;
+                  }
+                }
+                for(DMN_HandleNode *node = mac_dmn_state->detach_processes.first; node != 0; node = node->next)
+                {
+                  detach_count += 1;
+                }
+                str8_list_pushf(scratch.arena, &lines, " processes:%I64u detach_pending:%I64u", process_count, detach_count);
+                for(MAC_DMN_Entity *process_entity = mac_dmn_state->first_process_entity; process_entity != 0; process_entity = process_entity->next)
+                {
+                  if(process_entity->kind != MAC_DMN_EntityKind_Process) { continue; }
+                  MAC_DMN_Process *process = &process_entity->process;
+                  U64 thread_count = 0;
+                  U64 module_count = 0;
+                  for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+                  {
+                    thread_count += 1;
+                  }
+                  for(MAC_DMN_Entity *module_entity = process->first_module_entity; module_entity != 0; module_entity = module_entity->next)
+                  {
+                    module_count += 1;
+                  }
+                  str8_list_pushf(scratch.arena, &lines,
+                                  "\nprocess handle:%S pid:%i task:0x%x arch:%S attached:%u running:%u halt_expected:%u needs_attach_events:%u mach_exceptions:%u pending_exception:{valid:%u exception:%i code0:%I64u code1:%I64u thread_id:%I64u} threads:%I64u modules:%I64u",
+                                  d_string_from_handle(scratch.arena, d_handle_from_dmn(D_MachineID_Local, mac_dmn_handle_from_entity(process_entity))),
+                                  process->pid, process->task, string_from_arch(process->arch),
+                                  process->is_attached, process->is_running, process->halt_expected,
+                                  process->needs_attach_events, process->uses_mach_exceptions,
+                                  process->pending_exception.is_valid, process->pending_exception.exception,
+                                  process->pending_exception.code[0], process->pending_exception.code[1],
+                                  process->pending_exception.thread != MACH_PORT_NULL ? mac_dmn_thread_id_from_port(process->pending_exception.thread) : 0,
+                                  thread_count, module_count);
+                  U64 thread_idx = 0;
+                  for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+                  {
+                    MAC_DMN_Thread *thread = &thread_entity->thread;
+                    thread_basic_info_data_t basic = {0};
+                    mach_msg_type_number_t basic_count = THREAD_BASIC_INFO_COUNT;
+                    kern_return_t basic_result = KERN_INVALID_ARGUMENT;
+                    if(thread->thread != MACH_PORT_NULL)
+                    {
+                      basic_result = thread_info(thread->thread, THREAD_BASIC_INFO, (thread_info_t)&basic, &basic_count);
+                    }
+                    str8_list_pushf(scratch.arena, &lines,
+                                    "\n  thread#%I64u handle:%S id:%I64u port:0x%x valid:%u suspended_for_run:%u stepping_dyld:%u stepping_debug:%u dyld_step_vaddr:0x%I64x basic:{kr:%i run_state:%i flags:0x%x suspend_count:%i}",
+                                    thread_idx,
+                                    d_string_from_handle(scratch.arena, d_handle_from_dmn(D_MachineID_Local, mac_dmn_handle_from_entity(thread_entity))),
+                                    thread->thread_id, thread->thread,
+                                    mac_dmn_thread_port_is_valid(thread),
+                                    thread->is_suspended_for_run,
+                                    thread->is_stepping_over_dyld_notification,
+                                    thread->is_stepping_over_debug_trap,
+                                    thread->dyld_notification_step_vaddr,
+                                    basic_result, basic.run_state, basic.flags, basic.suspend_count);
+                    thread_idx += 1;
+                  }
+                }
+                dmn_access_close();
+              }
+              else
+              {
+                str8_list_pushf(scratch.arena, &lines, "\nbackend snapshot unavailable while daemon has exclusive run access; halt first for exact mac daemon state");
+              }
+#else
+              str8_list_pushf(scratch.arena, &lines, "mac_demon unavailable on this platform");
+#endif
               String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
               str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
             }
@@ -13942,7 +14030,7 @@ rd_frame(void)
                   function_vaddr_string = msg_parts.first->next->next->string;
                 }
               }
-              
+
               D_Entity *thread = &d_entity_nil;
               if(str8_match(thread_or_process_string, str8_lit("selected"), 0))
               {
@@ -13983,7 +14071,7 @@ rd_frame(void)
               {
                 thread = d_entity_from_handle(rd_base_regs()->thread);
               }
-              
+
               U64 function_vaddr = 0;
               if(thread == &d_entity_nil || thread->kind != D_EntityKind_Thread)
               {
@@ -14018,7 +14106,7 @@ rd_frame(void)
                     break;
                   }
                 }
-                
+
                 if(!args_good)
                 {
                   str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad argument");
