@@ -4452,7 +4452,6 @@ d_ctrl_thread__entry_point(void *p)
     {
       D_EntityCtx *entity_ctx = &d_ctrl_state->ctrl_thread_entity_store->ctx;
       D_EntityArray threads = d_entity_array_from_kind(D_EntityKind_Thread);
-      X64_RegBlock *blocks = push_array(scratch.arena, X64_RegBlock, threads.count);
       {
         for EachIndex(idx, threads.count)
         {
