@@ -738,9 +738,18 @@ d2r2_convert(Arena *arena, D2R2_ConvertParams *params)
         DW2_LineTableFile *f = &hdr->files.v[file_idx];
         DW2_LineTableFile *dir = &hdr->dirs.v[f->dir_idx];
         PathStyle file_name_style = path_style_from_str8(f->file_name);
-        String8 full_file_path = (file_name_style == PathStyle_Relative ?
-                                  str8f(scratch2.arena, "%S%s%S", dir->file_name, dir->file_name.size != 0 ? "/" : "", f->file_name) :
-                                  f->file_name);
+        String8 full_file_path = f->file_name;
+        if(file_name_style == PathStyle_Relative)
+        {
+          String8 dir_path = dir->file_name;
+          PathStyle dir_path_style = path_style_from_str8(dir_path);
+          if(dir_path_style == PathStyle_Relative && hdr->dirs.count != 0)
+          {
+            DW2_LineTableFile *comp_dir = &hdr->dirs.v[0];
+            dir_path = path_absolute_dst_from_relative_dst_src(scratch2.arena, dir_path, comp_dir->file_name);
+          }
+          full_file_path = path_absolute_dst_from_relative_dst_src(scratch2.arena, f->file_name, dir_path);
+        }
         U64 hash = u64_hash_from_str8(full_file_path);
         U64 slot_idx = hash%slots_count;
         SrcFileNode *node = 0;
@@ -3726,7 +3735,7 @@ d2r2_convert(Arena *arena, D2R2_ConvertParams *params)
                       case DW_ExprOp_BReg30: case DW_ExprOp_BReg31:
                       {
                         regcode_dw = (U64)(opcode - DW_ExprOp_BReg0);
-                        regval_off = operand_s64s[1];
+                        regval_off = operand_s64s[0];
                         regread_is_addr = 1;
                       }goto reg_read;
                       case DW_ExprOp_BRegX:
