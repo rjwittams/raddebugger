@@ -125,6 +125,7 @@ struct MAC_DMN_Entity
 {
   MAC_DMN_Entity *next;
   MAC_DMN_EntityKind kind;
+  U32 id;
   U32 gen;
   union
   {
@@ -146,6 +147,7 @@ struct MAC_DMN_State
 {
   Arena *arena;
   MAC_DMN_Entity *free_entity;
+  U32 next_entity_id;
   MAC_DMN_Entity *first_process_entity;
   MAC_DMN_Entity *last_process_entity;
   Mutex access_mutex;
@@ -200,7 +202,7 @@ global MAC_DMN_State *mac_dmn_state = 0;
 thread_static B32 mac_dmn_ctrl_thread = 0;
 
 internal DMN_Handle mac_dmn_handle_from_entity(MAC_DMN_Entity *entity);
-internal MAC_DMN_Entity *mac_dmn_entity_from_handle(DMN_Handle handle);
+internal MAC_DMN_Entity *mac_dmn_entity_from_handle(DMN_Handle handle, MAC_DMN_EntityKind expected_kind);
 internal MAC_DMN_Entity *mac_dmn_entity_alloc(MAC_DMN_EntityKind kind);
 internal void mac_dmn_entity_release(MAC_DMN_Entity *entity);
 internal void mac_dmn_process_entity_release(MAC_DMN_Entity *entity);
