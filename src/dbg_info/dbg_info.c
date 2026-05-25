@@ -547,7 +547,7 @@ di_rdi_from_key(Access *access, DI_Key key, B32 high_priority, U64 endt_us)
       }
       
       // rjf: found current results, or out-of-time? abort
-      if(grabbed || now_time_us() >= endt_us)
+      if(grabbed || !found || now_time_us() >= endt_us)
       {
         break;
       }
