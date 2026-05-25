@@ -178,6 +178,16 @@ mac_dmn_ctrl_consume_exit_status(Arena *arena, DMN_EventList *events, pid_t pid,
     mac_dmn_process_resume_suspended_threads(process);
     mac_dmn_refresh_module_events(arena, events, process_entity);
     mac_dmn_refresh_thread_events(arena, events, process_entity);
+    if(WIFEXITED(status) || WIFSIGNALED(status))
+    {
+      int reap_status = 0;
+      pid_t reap_id = 0;
+      do
+      {
+        reap_id = waitpid(pid, &reap_status, WNOHANG);
+      }
+      while(reap_id < 0 && errno == EINTR);
+    }
     if(WIFEXITED(status))
     {
       mac_dmn_push_event_exit_process(arena, events, process_entity, (U32)WEXITSTATUS(status));
@@ -737,6 +747,26 @@ mac_dmn_process_stop_for_detach(MAC_DMN_Process *process)
             else if(entity != 0 && !entity->process.pending_exception.is_valid)
             {
               entity->process.pending_exception = exception_message;
+            }
+          }
+          int status = 0;
+          pid_t wait_id = 0;
+          do
+          {
+            wait_id = waitpid(process->pid, &status, WNOHANG|WUNTRACED);
+          }
+          while(wait_id < 0 && errno == EINTR);
+          if(wait_id == process->pid)
+          {
+            if(WIFSTOPPED(status))
+            {
+              result = 1;
+              break;
+            }
+            if(WIFEXITED(status) || WIFSIGNALED(status))
+            {
+              mac_dmn_process_monitor_push_exit_event(process->pid, status);
+              break;
             }
           }
         }
@@ -2744,21 +2774,31 @@ dmn_ctrl_kill(DMN_CtrlCtx *ctx, DMN_Handle handle, U32 exit_code)
   B32 result = 0;
   if(process != 0)
   {
-    errno = 0;
-    B32 ptrace_kill_worked = (ptrace(PT_KILL, process->pid, 0, 0) == 0);
-    mac_dmn_process_reply_pending_exception(process, 0);
-    errno = 0;
-    B32 signal_kill_worked = (kill(process->pid, SIGKILL) == 0 || errno == ESRCH);
-    result = (ptrace_kill_worked || signal_kill_worked);
-    kill(process->pid, SIGCONT);
-    if(result)
+    B32 stopped = mac_dmn_process_stop_for_detach(process);
+    mac_dmn_process_resume_suspended_threads(process);
+    if(stopped)
     {
-      int status = 0;
-      if(mac_dmn_process_wait_for_exit(process->pid, &status))
+      errno = 0;
+      if(ptrace(PT_KILL, process->pid, 0, 0) == 0)
       {
-        mac_dmn_process_monitor_push_exit_event(process->pid, status);
+        mac_dmn_process_reply_pending_exception(process, 0);
+        process->halt_expected = 0;
+        process->is_running = 1;
+        result = 1;
       }
-      process->is_running = 1;
+      else if(errno == ESRCH)
+      {
+        process->halt_expected = 0;
+        result = 1;
+      }
+      else
+      {
+        log_user_errorf("Could not kill pid %u: ptrace(PT_KILL) failed with errno %d.", (U32)process->pid, errno);
+      }
+    }
+    else
+    {
+      log_user_errorf("Could not kill pid %u: failed to stop the process for termination.", (U32)process->pid);
     }
   }
   return result;
