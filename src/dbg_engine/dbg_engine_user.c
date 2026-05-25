@@ -1671,6 +1671,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
       d_user_state->member_cache_reggen_idx = new_reg_gen;
     }
   }
+  B32 ctrl_was_running = d_ctrl_targets_running();
   
   //////////////////////////////
   //- rjf: hash ctrl parameterization state
@@ -2252,7 +2253,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
     d_msg_list_concat_in_place(&d_user_state->ctrl_msgs, &msgs_copy);
     if(d_user_state->ctrl_msgs.count != 0)
     {
-      if(d_user_state->ctrl_thread_run_state)
+      if(d_user_state->ctrl_thread_run_state || ctrl_was_running)
       {
         if(!d_user_state->ctrl_soft_halt_issued)
         {
