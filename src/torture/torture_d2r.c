@@ -271,8 +271,19 @@ TEST(d2r_line_table)
   dw_writer_push_attrib_address(writer, DW_AttribKind_HighPc, exe_base + voff);
   dw_writer_push_attrib_line_ptr(writer, DW_AttribKind_StmtList, 0);
   dw_writer_tag_end(writer);
+
+  RDI_Parsed *rdi = d2r_rdi_from_dwarf_writer(arena, writer);
   
-  d2r_rdi_from_dwarf_writer(arena, writer);
+  String8 comp_file_normal_path = rdim_normalize_path_str8(arena, comp_file->path);
+  U32 comp_src_file_idx_count = 0;
+  U32 *comp_src_file_idxs = rdi_source_file_idxs_from_normal_path(rdi, comp_file_normal_path.str, comp_file_normal_path.size, &comp_src_file_idx_count);
+  B32 saw_comp_line_map = 0;
+  for EachIndex(idx, comp_src_file_idx_count)
+  {
+    RDI_SourceFile *src_file = rdi_element_from_name_idx(rdi, SourceFiles, comp_src_file_idxs[idx]);
+    saw_comp_line_map = saw_comp_line_map || src_file->source_line_map_idx != 0;
+  }
+  T_Ok(saw_comp_line_map);
   
   for EachElement(i, test_table) {
     for EachIndex(k, test_table[i].line_size) {
@@ -280,7 +291,8 @@ TEST(d2r_line_table)
       String8 output = {0};
       t_invoke_(t_radbin_path(), cmd_line, max_U64, arena, &output);
       T_Ok(g_last_exit_code == 0);
-      T_MatchLinef(&output, "%S:%llu", test_table[i].file->path, test_table[i].ln);
+      String8 expected_line = push_str8f(arena, "%S:%S", test_table[i].file->path, str8_from_u64(arena, test_table[i].ln, 10, 0, 0));
+      T_Ok(t_match_line(&output, expected_line));
     }
   }
   

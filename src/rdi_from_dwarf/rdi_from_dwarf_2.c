@@ -1053,7 +1053,7 @@ d2r2_convert(Arena *arena, D2R2_ConvertParams *params)
         }
         
         //- rjf: sequence ended explicitly, or file change, or end of stream? -> push to line table
-        if(line_seq_src_file != 0 && (vm_regs.end_sequence || (src_file != line_seq_src_file && first_line_seq_chunk != 0) || off >= unit_line_table_data.size))
+        if(line_seq_src_file != 0 && (vm_regs.end_sequence || (emit_line && src_file != line_seq_src_file && first_line_seq_chunk != 0) || off >= unit_line_table_data.size))
         {
           // rjf: combine voffs/lines/cols
           U64 seq_line_count = total_line_seq_count;
