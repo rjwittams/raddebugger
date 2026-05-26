@@ -5388,29 +5388,20 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
             continue;
           }
           ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
-          U64 trap_inst_size = arch_info->trap_instruction.size;
           U64 rip = d_ip_from_thread(thread->handle);
-          if(trap_inst_size != 0)
+          U64 pc_offset = arch_software_breakpoint_pc_offset(OperatingSystem_CURRENT, thread->arch);
+          U64 breakpoint_vaddr = rip;
+          if(pc_offset <= breakpoint_vaddr)
+          {
+            breakpoint_vaddr -= pc_offset;
+          }
+          if(arch_info->trap_instruction.size != 0)
           {
             for(DMN_TrapChunkNode *n = user_traps.first; n != 0 && stop_event == 0; n = n->next)
             {
               for(DMN_Trap *trap = n->v, *opl = n->v+n->count; trap < opl; trap += 1)
               {
-                B32 ip_matches_trap = 0;
-                switch(thread->arch)
-                {
-                  default:{}break;
-                  case Arch_x64:
-                  {
-                    ip_matches_trap = (trap_inst_size <= rip && trap->vaddr == rip - trap_inst_size);
-                  }break;
-                  case Arch_arm64:
-                  {
-                    ip_matches_trap = (trap->vaddr == rip ||
-                                       (trap_inst_size <= rip && trap->vaddr == rip - trap_inst_size));
-                  }break;
-                }
-                if(dmn_handle_match(trap->process, process_dmn) && ip_matches_trap)
+                if(dmn_handle_match(trap->process, process_dmn) && trap->vaddr == breakpoint_vaddr)
                 {
                   void *regs_block = push_array(scratch.arena, U8, arch_info->reg_block_size);
                   if(d_thread_read_reg_block(thread->handle, regs_block))
@@ -6266,6 +6257,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
           log_infof("sp_check_value = 0x%I64x\n", sp_check_value);
         }
       }
+      D_TrapFlags pre_single_step_trap_flags = hit_trap_flags;
       
       //- rjf: trap net logic: single step after hit
       B32 single_step_stop = 0;
@@ -6307,6 +6299,27 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
                 single_step_done = dmn_handle_match(event->thread, target_thread_dmn);
                 single_step_stop_cause = d_event_cause_from_dmn_event_kind(event->kind);
               }break;
+            }
+          }
+
+          if(!single_step_stop)
+          {
+            D_TrapFlags post_step_trap_flags = 0;
+            for(D_TrapNode *node = msg->traps.first; node != 0; node = node->next)
+            {
+              if(node->v.vaddr == thread_post_rip)
+              {
+                post_step_trap_flags |= node->v.flags;
+              }
+            }
+            if(post_step_trap_flags != 0)
+            {
+              hit_trap_flags |= post_step_trap_flags;
+              if(!(pre_single_step_trap_flags & D_TrapFlag_SaveStackPointerBefore))
+              {
+                U64 sp = d_sp_from_thread(target_thread);
+                stack_pointer_check_passes = ((hit_trap_flags & D_TrapFlag_IgnoreStackPointerCheck) || (sp == sp_check_value));
+              }
             }
           }
         }
