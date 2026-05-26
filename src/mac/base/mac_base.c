@@ -982,6 +982,10 @@ file_open(AccessFlags flags, String8 path)
   {
     mac_flags |= O_APPEND;
   }
+  else if(flags & AccessFlag_Write)
+  {
+    mac_flags |= O_TRUNC;
+  }
   if(flags & (AccessFlag_Write|AccessFlag_Append))
   {
     mac_flags |= O_CREAT;
@@ -1412,13 +1416,31 @@ process_launch(ProcessLaunchParams *params)
       int chdir_code = posix_spawn_file_actions_addchdir_np(&file_actions, (char *)push_cstr(scratch.arena, params->path).str);
       Assert(chdir_code == 0);
     }
-    int stdout_code = posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdout_file.u64[0], STDOUT_FILENO);
-    int stderr_code = posix_spawn_file_actions_adddup2(&file_actions, (int)params->stderr_file.u64[0], STDERR_FILENO);
-    int stdin_code = posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdin_file.u64[0], STDIN_FILENO);
+    if(!file_match(params->stdout_file, file_zero()))
+    {
+      posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdout_file.u64[0], STDOUT_FILENO);
+    }
+    if(!file_match(params->stderr_file, file_zero()))
+    {
+      posix_spawn_file_actions_adddup2(&file_actions, (int)params->stderr_file.u64[0], STDERR_FILENO);
+    }
+    if(!file_match(params->stdin_file, file_zero()))
+    {
+      posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdin_file.u64[0], STDIN_FILENO);
+    }
     posix_spawnattr_t attr = {0};
     int attr_init_code = posix_spawnattr_init(&attr);
     if(attr_init_code == 0)
     {
+      String8 executable_path = params->cmd_line.first->string;
+      if(path_style_from_str8(executable_path) == PathStyle_Relative && params->path.size != 0)
+      {
+        String8List l = str8_split_path(scratch.arena, params->path);
+        str8_list_push(scratch.arena, &l, executable_path);
+        executable_path = str8_path_list_join_by_style(scratch.arena, &l, PathStyle_SystemAbsolute);
+      }
+      char *executable_path_cstr = (char *)push_cstr(scratch.arena, executable_path).str;
+
       // package argv
       char **argv = push_array(scratch.arena, char *, params->cmd_line.node_count + 1);
       {
@@ -1450,7 +1472,7 @@ process_launch(ProcessLaunchParams *params)
 
       // spawn process
       pid_t pid = 0;
-      int spawn_code = posix_spawnp(&pid, argv[0], &file_actions, &attr, argv, envp);
+      int spawn_code = posix_spawnp(&pid, executable_path_cstr, &file_actions, &attr, argv, envp);
       if(spawn_code == 0)
       {
         handle.u64[0] = (U64)pid;
@@ -1479,6 +1501,7 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
 {
   pid_t pid = (pid_t)process.u64[0];
   B32 result = 0;
+  int status = 0;
   if(endt_us == 0)
   {
     if(kill(pid, 0) >= 0)
@@ -1486,7 +1509,6 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
       result = (errno == ENOENT);
       if(result)
       {
-        int status;
         waitpid(pid, &status, 0);
       }
     }
@@ -1495,10 +1517,13 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
   {
     for(;;)
     {
-      int status = 0;
       int w = waitpid(pid, &status, 0);
       if(w == -1)
       {
+        if(errno == EINTR)
+        {
+          continue;
+        }
         break;
       }
       if(WIFEXITED(status) || WIFSTOPPED(status) || WIFSIGNALED(status))
@@ -1511,6 +1536,21 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
   else
   {
     NotImplemented;
+  }
+  if(result && exit_code_out != 0)
+  {
+    if(WIFEXITED(status))
+    {
+      *exit_code_out = (U64)WEXITSTATUS(status);
+    }
+    else if(WIFSIGNALED(status))
+    {
+      *exit_code_out = (U64)(128 + WTERMSIG(status));
+    }
+    else if(WIFSTOPPED(status))
+    {
+      *exit_code_out = (U64)(128 + WSTOPSIG(status));
+    }
   }
   return result;
 }
