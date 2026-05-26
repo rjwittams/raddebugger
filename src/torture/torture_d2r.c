@@ -8,6 +8,25 @@
 #undef T_Group
 #define T_Group "d2r"
 
+TEST(d2r2_vaddr_ranges_are_normalized_to_voffs)
+{
+  U64 base_vaddr = 0x100000000;
+  Rng1U64 absolute_range = r1u64(0x100001860, 0x100001b20);
+  Rng1U64 relative_range = r1u64(0x1860, 0x1b20);
+  Rng1U64 nil_range = r1u64(0, 0);
+  
+  RDIM_Rng1U64 absolute_voff_range = d2r2_voff_range_from_vaddr_range(base_vaddr, absolute_range);
+  RDIM_Rng1U64 relative_voff_range = d2r2_voff_range_from_vaddr_range(base_vaddr, relative_range);
+  RDIM_Rng1U64 nil_voff_range = d2r2_voff_range_from_vaddr_range(base_vaddr, nil_range);
+  
+  T_Ok(absolute_voff_range.min == 0x1860);
+  T_Ok(absolute_voff_range.max == 0x1b20);
+  T_Ok(relative_voff_range.min == 0x1860);
+  T_Ok(relative_voff_range.max == 0x1b20);
+  T_Ok(nil_voff_range.min == 0);
+  T_Ok(nil_voff_range.max == 0);
+}
+
 internal RDI_Parsed *
 d2r_rdi_from_dwarf_writer(Arena *arena, DW_Writer *writer)
 {
