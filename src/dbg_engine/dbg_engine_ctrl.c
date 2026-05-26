@@ -1611,7 +1611,7 @@ d_thread_write_reg_block(D_Handle thread, void *block)
     {
       // TODO(rjf): @callstacks immediately reflect this in the call stack cache
       DMN_Handle handle_dmn = d_dmn_from_handle(thread);
-      B32 result = dmn_thread_write_reg_block(handle_dmn, block);
+      result = dmn_thread_write_reg_block(handle_dmn, block);
       if(result)
       {
         ins_atomic_u64_inc_eval(&d_ctrl_state->reg_gen);
