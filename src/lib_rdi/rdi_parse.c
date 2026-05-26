@@ -961,15 +961,22 @@ rdi_source_file_from_line(RDI_Parsed *rdi, RDI_Line *line)
 
 //- source files
 
-RDI_PROC RDI_SourceFile *
-rdi_source_file_from_normal_path(RDI_Parsed *rdi, RDI_U8 *name, RDI_U64 name_size)
+RDI_PROC RDI_U32 *
+rdi_source_file_idxs_from_normal_path(RDI_Parsed *rdi, RDI_U8 *name, RDI_U64 name_size, RDI_U32 *n_out)
 {
   RDI_NameMap *map = rdi_element_from_name_idx(rdi, NameMaps, RDI_NameMapKind_NormalSourcePaths);
   RDI_ParsedNameMap map_parsed = {0};
   rdi_parsed_from_name_map(rdi, map, &map_parsed);
   RDI_NameMapNode *node = rdi_name_map_lookup(rdi, &map_parsed, name, name_size);
+  RDI_U32 *result = rdi_matches_from_map_node(rdi, node, n_out);
+  return result;
+}
+
+RDI_PROC RDI_SourceFile *
+rdi_source_file_from_normal_path(RDI_Parsed *rdi, RDI_U8 *name, RDI_U64 name_size)
+{
   RDI_U32 id_count = 0;
-  RDI_U32 *ids = rdi_matches_from_map_node(rdi, node, &id_count);
+  RDI_U32 *ids = rdi_source_file_idxs_from_normal_path(rdi, name, name_size, &id_count);
   RDI_U32 file_idx = 0;
   if(id_count > 0)
   {
@@ -2226,6 +2233,7 @@ SINTa rr_lzb_simple_encode_fast(rr_lzb_simple_context * fh,
 #undef DO_FAST_LAZY_MATCH
 #undef DO_FAST_2ND_HASH  
 
+
 //=====================================================
 
 #define FAST_HASH_DEPTH_SHIFT	(0)
@@ -2480,4 +2488,3 @@ SINTa rr_lzb_simple_encode_veryfast(rr_lzb_simple_context * fh,
 #undef DO_FAST_UPDATE_MATCH_HASHES
 #undef DO_FAST_LAZY_MATCH
 #undef DO_FAST_2ND_HASH  
-
