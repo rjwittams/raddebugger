@@ -68,6 +68,41 @@ arch_reg_code_from_name(ARCH_Info *arch_info, String8 name)
   return result;
 }
 
+internal U64
+arch_software_breakpoint_pc_offset(OperatingSystem os, Arch arch)
+{
+  ARCH_Info *arch_info = arch_info_from_arch(arch);
+  U64 result = 0;
+  switch(arch)
+  {
+    case Arch_x64:
+    case Arch_x86:
+    {
+      result = arch_info->trap_instruction.size;
+    }break;
+    case Arch_arm64:
+    case Arch_arm32:
+    {
+      switch(os)
+      {
+        case OperatingSystem_Windows:
+        {
+          result = arch_info->trap_instruction.size;
+        }break;
+        case OperatingSystem_Linux:
+        case OperatingSystem_Mac:
+        case OperatingSystem_Null:
+        default:
+        {
+          result = 0;
+        }break;
+      }
+    }break;
+    default: break;
+  }
+  return result;
+}
+
 internal ARCH_RegCode
 arch_reg_code_from_rdi(Arch arch, RDI_RegCode code)
 {

@@ -1425,6 +1425,28 @@ mac_dmn_dyld_notification_vaddr_from_process(MAC_DMN_Process *process)
   return result;
 }
 
+internal B32
+mac_dmn_process_vaddr_is_executable(MAC_DMN_Process *process, U64 vaddr)
+{
+  B32 result = 0;
+  if(process != 0 && process->task != MACH_PORT_NULL)
+  {
+    mach_vm_address_t region_address = (mach_vm_address_t)vaddr;
+    mach_vm_size_t region_size = 0;
+    natural_t depth = 0;
+    vm_region_submap_info_data_64_t info = {0};
+    mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+    kern_return_t code = mach_vm_region_recurse(process->task, &region_address, &region_size, &depth, (vm_region_recurse_info_t)&info, &count);
+    if(code == KERN_SUCCESS &&
+       region_address <= vaddr &&
+       vaddr < region_address + region_size)
+    {
+      result = !!(info.protection & VM_PROT_EXECUTE);
+    }
+  }
+  return result;
+}
+
 internal void
 mac_dmn_refresh_module_events(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity)
 {
@@ -2459,27 +2481,18 @@ mac_dmn_thread_entity_from_active_trap(MAC_DMN_Process *process, MAC_DMN_ActiveT
       if(thread_entity->kind == MAC_DMN_EntityKind_Thread)
       {
         U64 ip = mac_dmn_thread_read_ip(&thread_entity->thread);
+        U64 pc_offset = arch_software_breakpoint_pc_offset(OperatingSystem_Mac, thread_entity->thread.arch);
+        U64 breakpoint_vaddr = ip;
+        if(pc_offset <= breakpoint_vaddr)
+        {
+          breakpoint_vaddr -= pc_offset;
+        }
         for(MAC_DMN_ActiveTrap *active_trap = first; active_trap != 0; active_trap = active_trap->next)
         {
           MAC_DMN_Process *trap_process = mac_dmn_process_from_handle(active_trap->trap->process);
-          U64 trap_size = active_trap->swap_bytes.size;
-          B32 ip_matches_trap = 0;
-          switch(thread_entity->thread.arch)
-          {
-            default:{}break;
-            case Arch_x64:
-            {
-              ip_matches_trap = (trap_size <= ip && active_trap->trap->vaddr == ip - trap_size);
-            }break;
-            case Arch_arm64:
-            {
-              ip_matches_trap = (active_trap->trap->vaddr == ip ||
-                                 (trap_size <= ip && active_trap->trap->vaddr == ip - trap_size));
-            }break;
-          }
           if(active_trap->good &&
              trap_process == process &&
-             ip_matches_trap)
+             active_trap->trap->vaddr == breakpoint_vaddr)
           {
             result = thread_entity;
             result_trap = active_trap;
@@ -3307,6 +3320,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
         U64 notification_vaddr = mac_dmn_dyld_notification_vaddr_from_process(process);
         DMN_Handle process_handle = mac_dmn_handle_from_entity(entity);
         if(notification_vaddr != 0 &&
+           mac_dmn_process_vaddr_is_executable(process, notification_vaddr) &&
            !mac_dmn_process_is_stepping_over_dyld_notification(process, notification_vaddr) &&
            mac_dmn_active_trap_from_process_vaddr(first_active_trap, process_handle, notification_vaddr) == 0)
         {

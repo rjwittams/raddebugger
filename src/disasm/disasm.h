@@ -51,6 +51,7 @@ typedef struct DASM_CtrlFlowPoint DASM_CtrlFlowPoint;
 struct DASM_CtrlFlowPoint
 {
   U64 vaddr;
+  U64 vaddr_opl;
   U64 jump_dest_vaddr;
   DASM_InstFlags inst_flags;
 };

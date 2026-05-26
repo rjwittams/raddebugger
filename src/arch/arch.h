@@ -39,6 +39,7 @@ internal ARCH_Info *arch_info_from_arch(Arch arch);
 internal ARCH_RegCode arch_reg_code_from_name(ARCH_Info *arch_info, String8 name);
 internal ARCH_RegCode arch_reg_code_from_rdi(Arch arch, RDI_RegCode code);
 internal ARCH_RegCode arch_reg_code_from_dw(Arch arch, DW_Reg code);
+internal U64 arch_software_breakpoint_pc_offset(OperatingSystem os, Arch arch);
 internal B32 arch_reg_block_read_range(ARCH_Info *arch_info, void *block, Rng1U16 range, void *dst);
 internal B32 arch_reg_block_write_range(ARCH_Info *arch_info, void *block, Rng1U16 range, void *src);
 internal U64 arch_ip_from_reg_block(ARCH_Info *arch_info, void *block);
