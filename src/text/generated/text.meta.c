@@ -4,7 +4,7 @@
 //- GENERATED CODE
 
 C_LINKAGE_BEGIN
-String8 txt_lang_kind_ext_table[8] =
+String8 txt_lang_kind_ext_table[9] =
 {
 str8_lit_comp("null"),
 str8_lit_comp("c"),
@@ -14,9 +14,10 @@ str8_lit_comp("jai"),
 str8_lit_comp("zig"),
 str8_lit_comp("rs"),
 str8_lit_comp("disasm_x64_intel"),
+str8_lit_comp("disasm_arm64"),
 };
 
-struct {String8 ext; TXT_LangKind kind;} txt_ext_lang_kind_table[24] =
+struct {String8 ext; TXT_LangKind kind;} txt_ext_lang_kind_table[25] =
 {
 {str8_lit_comp("null"), TXT_LangKind_Null},
 {str8_lit_comp("c"), TXT_LangKind_C},
@@ -26,6 +27,7 @@ struct {String8 ext; TXT_LangKind kind;} txt_ext_lang_kind_table[24] =
 {str8_lit_comp("zig"), TXT_LangKind_Zig},
 {str8_lit_comp("rs"), TXT_LangKind_Rust},
 {str8_lit_comp("disasm_x64_intel"), TXT_LangKind_DisasmX64Intel},
+{str8_lit_comp("disasm_arm64"), TXT_LangKind_DisasmARM64},
 {str8_lit_comp("h"), TXT_LangKind_C},
 {str8_lit_comp("cxx"), TXT_LangKind_CPlusPlus},
 {str8_lit_comp("cc"), TXT_LangKind_CPlusPlus},
@@ -44,7 +46,7 @@ struct {String8 ext; TXT_LangKind kind;} txt_ext_lang_kind_table[24] =
 {str8_lit_comp("H"), TXT_LangKind_CPlusPlus},
 };
 
-String8Array txt_keywords_from_lang_kind_table[8] =
+String8Array txt_keywords_from_lang_kind_table[9] =
 {
 {txt_keywords__null, ArrayCount(txt_keywords__null)},
 {txt_keywords__c, ArrayCount(txt_keywords__c)},
@@ -54,9 +56,10 @@ String8Array txt_keywords_from_lang_kind_table[8] =
 {txt_keywords__zig, ArrayCount(txt_keywords__zig)},
 {txt_keywords__rust, ArrayCount(txt_keywords__rust)},
 {txt_keywords__null, ArrayCount(txt_keywords__null)},
+{txt_keywords__null, ArrayCount(txt_keywords__null)},
 };
 
-String8Array txt_multichar_symbols_from_lang_kind_table[8] =
+String8Array txt_multichar_symbols_from_lang_kind_table[9] =
 {
 {txt_multichar_symbols__null, ArrayCount(txt_multichar_symbols__null)},
 {txt_multichar_symbols__c, ArrayCount(txt_multichar_symbols__c)},
@@ -66,13 +69,15 @@ String8Array txt_multichar_symbols_from_lang_kind_table[8] =
 {txt_multichar_symbols__c, ArrayCount(txt_multichar_symbols__c)},
 {txt_multichar_symbols__c, ArrayCount(txt_multichar_symbols__c)},
 {txt_multichar_symbols__null, ArrayCount(txt_multichar_symbols__null)},
+{txt_multichar_symbols__null, ArrayCount(txt_multichar_symbols__null)},
 };
 
-TXT_TokenizerRuleArray txt_tokenizer_rules_from_lang_kind_table[8] =
+TXT_TokenizerRuleArray txt_tokenizer_rules_from_lang_kind_table[9] =
 {
 {txt_tokenizer_rules__null, ArrayCount(txt_tokenizer_rules__null)},
 {txt_tokenizer_rules__c, ArrayCount(txt_tokenizer_rules__c)},
 {txt_tokenizer_rules__c, ArrayCount(txt_tokenizer_rules__c)},
+{txt_tokenizer_rules__null, ArrayCount(txt_tokenizer_rules__null)},
 {txt_tokenizer_rules__null, ArrayCount(txt_tokenizer_rules__null)},
 {txt_tokenizer_rules__null, ArrayCount(txt_tokenizer_rules__null)},
 {txt_tokenizer_rules__null, ArrayCount(txt_tokenizer_rules__null)},
