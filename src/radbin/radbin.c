@@ -1347,13 +1347,19 @@ rb_thread_entry_point(void *p)
                   RDI_SourceFile *null_inline_src_file = rdi_element_from_name_idx(rdi, SourceFiles, 0);
                   if(inline_src_file && inline_src_file != null_inline_src_file)
                   {
-                    String8 path = str8_from_rdi_path_node_idx(scratch.arena, rdi, PathStyle_SystemAbsolute, src_file->file_path_node_idx);
+                    U64 normal_path_size = 0;
+                    U8 *normal_path = rdi_normal_path_from_source_file(rdi, inline_src_file, &normal_path_size);
+                    PathStyle path_style = path_style_from_str8(str8(normal_path, normal_path_size));
+                    String8 path = str8_from_rdi_path_node_idx(scratch.arena, rdi, path_style, inline_src_file->file_path_node_idx);
                     str8_list_pushf(arena, &output_blobs, "[inlined] %S %S:%u\n", inline_name, path, inline_line.line_num);
                   }
                 }
               }
             }
-            String8 path = str8_from_rdi_path_node_idx(scratch.arena, rdi, PathStyle_SystemAbsolute, src_file->file_path_node_idx);
+            U64 normal_path_size = 0;
+            U8 *normal_path = rdi_normal_path_from_source_file(rdi, src_file, &normal_path_size);
+            PathStyle path_style = path_style_from_str8(str8(normal_path, normal_path_size));
+            String8 path = str8_from_rdi_path_node_idx(scratch.arena, rdi, path_style, src_file->file_path_node_idx);
             str8_list_pushf(arena, &output_blobs, "%S:%u\n", path, line.line_num);
             scratch_end(scratch);
           }
