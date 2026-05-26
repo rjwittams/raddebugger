@@ -1064,6 +1064,7 @@ internal B32 txt_rng_contains(TxtRng r, TxtPt pt);
 
 internal U64 bit_size_from_arch(Arch arch);
 internal U64 byte_size_from_arch(Arch arch);
+internal B32 arch_call_pushes_return_address_to_stack(Arch arch);
 internal U64 max_ops_per_instruction_from_arch(Arch arch);
 internal U64 min_instruction_size_from_arch(Arch arch);
 internal U64 max_instruction_size_from_arch(Arch arch);

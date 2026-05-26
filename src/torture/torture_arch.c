@@ -34,6 +34,32 @@ TEST(arm64_metadata)
   T_Ok(regs.sp == new_sp);
 }
 
+TEST(call_return_address_storage)
+{
+  T_Ok(arch_call_pushes_return_address_to_stack(Arch_x64));
+  T_Ok(!arch_call_pushes_return_address_to_stack(Arch_arm64));
+}
+
+TEST(software_breakpoint_pc_offsets)
+{
+  T_Ok(arch_software_breakpoint_pc_offset(OperatingSystem_Mac, Arch_x64) == arch_info_from_arch(Arch_x64)->trap_instruction.size);
+  T_Ok(arch_software_breakpoint_pc_offset(OperatingSystem_Linux, Arch_x64) == arch_info_from_arch(Arch_x64)->trap_instruction.size);
+  T_Ok(arch_software_breakpoint_pc_offset(OperatingSystem_Windows, Arch_x64) == arch_info_from_arch(Arch_x64)->trap_instruction.size);
+  T_Ok(arch_software_breakpoint_pc_offset(OperatingSystem_Mac, Arch_arm64) == 0);
+  T_Ok(arch_software_breakpoint_pc_offset(OperatingSystem_Linux, Arch_arm64) == 0);
+  T_Ok(arch_software_breakpoint_pc_offset(OperatingSystem_Windows, Arch_arm64) == arch_info_from_arch(Arch_arm64)->trap_instruction.size);
+}
+
+TEST(arm64_ctrl_flow_point_extents)
+{
+  U8 bl_code[] = {0x02, 0x00, 0x00, 0x94};
+  DASM_CtrlFlowInfo info = dasm_ctrl_flow_info_from_arch_vaddr_code(arena, DASM_InstFlag_Call, Arch_arm64, 0x1000, str8_array_fixed(bl_code));
+  T_Ok(info.exit_points.count == 1);
+  T_Ok(info.exit_points.first->v.vaddr == 0x1000);
+  T_Ok(info.exit_points.first->v.vaddr_opl == 0x1004);
+  T_Ok(info.exit_points.first->v.jump_dest_vaddr == 0x1008);
+}
+
 TEST(arm64_rdi_dwarf_mappings)
 {
   T_Ok(rdi_arch_from_arch(Arch_arm64) == RDI_Arch_ARM64);

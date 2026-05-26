@@ -47,6 +47,7 @@ dasm_ctrl_flow_info_from_arch_vaddr_code(Arena *arena, DASM_InstFlags exit_point
       DASM_CtrlFlowPoint point = {0};
       point.inst_flags = inst.flags;
       point.vaddr = inst_vaddr;
+      point.vaddr_opl = inst_vaddr+inst.size;
       point.jump_dest_vaddr = inst.dst_vaddr;
       DASM_CtrlFlowPointNode *node = push_array(arena, DASM_CtrlFlowPointNode, 1);
       node->v = point;

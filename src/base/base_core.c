@@ -465,6 +465,27 @@ byte_size_from_arch(Arch arch)
   return bit_size_from_arch(arch) / 8;
 }
 
+internal B32
+arch_call_pushes_return_address_to_stack(Arch arch)
+{
+  B32 result = 0;
+  switch(arch)
+  {
+    case Arch_x64:
+    case Arch_x86:
+    {
+      result = 1;
+    }break;
+    case Arch_arm64:
+    case Arch_arm32:
+    {
+      result = 0;
+    }break;
+    default: break;
+  }
+  return result;
+}
+
 internal U64
 max_ops_per_instruction_from_arch(Arch arch)
 {
