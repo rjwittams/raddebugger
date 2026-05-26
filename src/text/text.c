@@ -60,6 +60,7 @@ txt_lex_function_from_lang_kind(TXT_LangKind kind)
     case TXT_LangKind_Jai:           {fn = txt_token_array_from_string__jai;}break;
     case TXT_LangKind_Zig:           {fn = txt_token_array_from_string__zig;}break;
     case TXT_LangKind_Rust:          {fn = txt_token_array_from_string__rust;}break;
+    case TXT_LangKind_Swift:         {fn = txt_token_array_from_string__swift;}break;
     case TXT_LangKind_DisasmX64Intel:{fn = txt_token_array_from_string__disasm_x64_intel;}break;
     case TXT_LangKind_DisasmARM64:   {fn = txt_token_array_from_string__disasm_arm64;}break;
   }
@@ -2054,6 +2055,37 @@ txt_token_array_from_string__rust(Arena *arena, U64 *bytes_processed_counter, St
   //- rjf: token list -> token array
   TXT_TokenArray result = txt_token_array_from_chunk_list(arena, &tokens);
   scratch_end(scratch);
+  return result;
+}
+
+internal TXT_TokenArray
+txt_token_array_from_string__swift(Arena *arena, U64 *bytes_processed_counter, String8 string)
+{
+  TXT_TokenArray result = txt_token_array_from_lang_kind_string(arena, TXT_LangKind_Swift, string);
+  U64 dst_idx = 0;
+  for(U64 src_idx = 0; src_idx < result.count; src_idx += 1)
+  {
+    TXT_Token *token = &result.v[src_idx];
+    B32 keep_token = 1;
+    if(token->kind == TXT_TokenKind_Error &&
+       token->range.max == token->range.min + 1 &&
+       token->range.min < string.size &&
+       string.str[token->range.min] == '@')
+    {
+      token->kind = TXT_TokenKind_Symbol;
+    }
+    else if(token->kind == TXT_TokenKind_Error &&
+            token->range.min >= string.size)
+    {
+      keep_token = 0;
+    }
+    if(keep_token)
+    {
+      result.v[dst_idx] = *token;
+      dst_idx += 1;
+    }
+  }
+  result.count = dst_idx;
   return result;
 }
 

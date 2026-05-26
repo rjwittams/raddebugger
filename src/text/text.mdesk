@@ -11,6 +11,7 @@ TXT_LangKindTable:
   { Jai            jai                jai                c                          null}
   { Zig            zig                zig                c                          null}
   { Rust           rs                 rust               c                          null}
+  { Swift          swift              swift              c                          c   }
   { DisasmX64Intel disasm_x64_intel   null               null                       null}
   { DisasmARM64    disasm_arm64       null               null                       null}
 }
@@ -245,3 +246,30 @@ txt_keywords__rust:
   {"raw"} {"safe"} {"union"}
 }
 @data(String8) txt_keywords__rust: {@expand(txt_keywords__rust a) `str8_lit_comp("$(a.string)")`}
+
+////////////////////////////////
+//~ Swift
+
+@table(string)
+txt_keywords__swift:
+{
+  {"Any"} {"Self"} {"Type"} {"Protocol"}
+  {"associatedtype"} {"async"} {"await"} {"break"}
+  {"case"} {"catch"} {"class"} {"continue"}
+  {"defer"} {"deinit"} {"do"} {"else"}
+  {"enum"} {"extension"} {"fallthrough"} {"false"}
+  {"fileprivate"} {"final"} {"for"} {"func"}
+  {"guard"} {"if"} {"import"} {"in"}
+  {"indirect"} {"init"} {"inout"} {"internal"}
+  {"is"} {"let"} {"nil"} {"open"}
+  {"operator"} {"private"} {"protocol"} {"public"}
+  {"repeat"} {"rethrows"} {"return"} {"self"}
+  {"static"} {"struct"} {"subscript"} {"super"}
+  {"switch"} {"throw"} {"throws"} {"true"}
+  {"try"} {"typealias"} {"var"} {"where"}
+  {"while"} {"as"} {"borrow"} {"consuming"}
+  {"discard"} {"each"} {"isolated"} {"mutating"}
+  {"nonisolated"} {"nonmutating"} {"some"} {"unowned"}
+  {"weak"}
+}
+@data(String8) txt_keywords__swift: {@expand(txt_keywords__swift a) `str8_lit_comp("$(a.string)")`}

@@ -4,7 +4,7 @@
 //- GENERATED CODE
 
 C_LINKAGE_BEGIN
-String8 txt_lang_kind_ext_table[9] =
+String8 txt_lang_kind_ext_table[10] =
 {
 str8_lit_comp("null"),
 str8_lit_comp("c"),
@@ -13,11 +13,12 @@ str8_lit_comp("odin"),
 str8_lit_comp("jai"),
 str8_lit_comp("zig"),
 str8_lit_comp("rs"),
+str8_lit_comp("swift"),
 str8_lit_comp("disasm_x64_intel"),
 str8_lit_comp("disasm_arm64"),
 };
 
-struct {String8 ext; TXT_LangKind kind;} txt_ext_lang_kind_table[25] =
+struct {String8 ext; TXT_LangKind kind;} txt_ext_lang_kind_table[26] =
 {
 {str8_lit_comp("null"), TXT_LangKind_Null},
 {str8_lit_comp("c"), TXT_LangKind_C},
@@ -26,6 +27,7 @@ struct {String8 ext; TXT_LangKind kind;} txt_ext_lang_kind_table[25] =
 {str8_lit_comp("jai"), TXT_LangKind_Jai},
 {str8_lit_comp("zig"), TXT_LangKind_Zig},
 {str8_lit_comp("rs"), TXT_LangKind_Rust},
+{str8_lit_comp("swift"), TXT_LangKind_Swift},
 {str8_lit_comp("disasm_x64_intel"), TXT_LangKind_DisasmX64Intel},
 {str8_lit_comp("disasm_arm64"), TXT_LangKind_DisasmARM64},
 {str8_lit_comp("h"), TXT_LangKind_C},
@@ -46,7 +48,7 @@ struct {String8 ext; TXT_LangKind kind;} txt_ext_lang_kind_table[25] =
 {str8_lit_comp("H"), TXT_LangKind_CPlusPlus},
 };
 
-String8Array txt_keywords_from_lang_kind_table[9] =
+String8Array txt_keywords_from_lang_kind_table[10] =
 {
 {txt_keywords__null, ArrayCount(txt_keywords__null)},
 {txt_keywords__c, ArrayCount(txt_keywords__c)},
@@ -55,11 +57,12 @@ String8Array txt_keywords_from_lang_kind_table[9] =
 {txt_keywords__jai, ArrayCount(txt_keywords__jai)},
 {txt_keywords__zig, ArrayCount(txt_keywords__zig)},
 {txt_keywords__rust, ArrayCount(txt_keywords__rust)},
+{txt_keywords__swift, ArrayCount(txt_keywords__swift)},
 {txt_keywords__null, ArrayCount(txt_keywords__null)},
 {txt_keywords__null, ArrayCount(txt_keywords__null)},
 };
 
-String8Array txt_multichar_symbols_from_lang_kind_table[9] =
+String8Array txt_multichar_symbols_from_lang_kind_table[10] =
 {
 {txt_multichar_symbols__null, ArrayCount(txt_multichar_symbols__null)},
 {txt_multichar_symbols__c, ArrayCount(txt_multichar_symbols__c)},
@@ -68,11 +71,12 @@ String8Array txt_multichar_symbols_from_lang_kind_table[9] =
 {txt_multichar_symbols__c, ArrayCount(txt_multichar_symbols__c)},
 {txt_multichar_symbols__c, ArrayCount(txt_multichar_symbols__c)},
 {txt_multichar_symbols__c, ArrayCount(txt_multichar_symbols__c)},
+{txt_multichar_symbols__c, ArrayCount(txt_multichar_symbols__c)},
 {txt_multichar_symbols__null, ArrayCount(txt_multichar_symbols__null)},
 {txt_multichar_symbols__null, ArrayCount(txt_multichar_symbols__null)},
 };
 
-TXT_TokenizerRuleArray txt_tokenizer_rules_from_lang_kind_table[9] =
+TXT_TokenizerRuleArray txt_tokenizer_rules_from_lang_kind_table[10] =
 {
 {txt_tokenizer_rules__null, ArrayCount(txt_tokenizer_rules__null)},
 {txt_tokenizer_rules__c, ArrayCount(txt_tokenizer_rules__c)},
@@ -81,6 +85,7 @@ TXT_TokenizerRuleArray txt_tokenizer_rules_from_lang_kind_table[9] =
 {txt_tokenizer_rules__null, ArrayCount(txt_tokenizer_rules__null)},
 {txt_tokenizer_rules__null, ArrayCount(txt_tokenizer_rules__null)},
 {txt_tokenizer_rules__null, ArrayCount(txt_tokenizer_rules__null)},
+{txt_tokenizer_rules__c, ArrayCount(txt_tokenizer_rules__c)},
 {txt_tokenizer_rules__null, ArrayCount(txt_tokenizer_rules__null)},
 {txt_tokenizer_rules__null, ArrayCount(txt_tokenizer_rules__null)},
 };
@@ -457,6 +462,79 @@ str8_lit_comp("macro_rules"),
 str8_lit_comp("raw"),
 str8_lit_comp("safe"),
 str8_lit_comp("union"),
+};
+
+String8 txt_keywords__swift[69] =
+{
+str8_lit_comp("Any"),
+str8_lit_comp("Self"),
+str8_lit_comp("Type"),
+str8_lit_comp("Protocol"),
+str8_lit_comp("associatedtype"),
+str8_lit_comp("async"),
+str8_lit_comp("await"),
+str8_lit_comp("break"),
+str8_lit_comp("case"),
+str8_lit_comp("catch"),
+str8_lit_comp("class"),
+str8_lit_comp("continue"),
+str8_lit_comp("defer"),
+str8_lit_comp("deinit"),
+str8_lit_comp("do"),
+str8_lit_comp("else"),
+str8_lit_comp("enum"),
+str8_lit_comp("extension"),
+str8_lit_comp("fallthrough"),
+str8_lit_comp("false"),
+str8_lit_comp("fileprivate"),
+str8_lit_comp("final"),
+str8_lit_comp("for"),
+str8_lit_comp("func"),
+str8_lit_comp("guard"),
+str8_lit_comp("if"),
+str8_lit_comp("import"),
+str8_lit_comp("in"),
+str8_lit_comp("indirect"),
+str8_lit_comp("init"),
+str8_lit_comp("inout"),
+str8_lit_comp("internal"),
+str8_lit_comp("is"),
+str8_lit_comp("let"),
+str8_lit_comp("nil"),
+str8_lit_comp("open"),
+str8_lit_comp("operator"),
+str8_lit_comp("private"),
+str8_lit_comp("protocol"),
+str8_lit_comp("public"),
+str8_lit_comp("repeat"),
+str8_lit_comp("rethrows"),
+str8_lit_comp("return"),
+str8_lit_comp("self"),
+str8_lit_comp("static"),
+str8_lit_comp("struct"),
+str8_lit_comp("subscript"),
+str8_lit_comp("super"),
+str8_lit_comp("switch"),
+str8_lit_comp("throw"),
+str8_lit_comp("throws"),
+str8_lit_comp("true"),
+str8_lit_comp("try"),
+str8_lit_comp("typealias"),
+str8_lit_comp("var"),
+str8_lit_comp("where"),
+str8_lit_comp("while"),
+str8_lit_comp("as"),
+str8_lit_comp("borrow"),
+str8_lit_comp("consuming"),
+str8_lit_comp("discard"),
+str8_lit_comp("each"),
+str8_lit_comp("isolated"),
+str8_lit_comp("mutating"),
+str8_lit_comp("nonisolated"),
+str8_lit_comp("nonmutating"),
+str8_lit_comp("some"),
+str8_lit_comp("unowned"),
+str8_lit_comp("weak"),
 };
 
 C_LINKAGE_END
