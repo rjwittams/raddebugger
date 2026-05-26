@@ -2110,6 +2110,34 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
           B32 result = d_thread_write_reg_block(thread->handle, block);
           (void)result;
         }break;
+        case D_CmdKind_TargetCallU64:
+        {
+          D_Entity *thread = d_entity_from_handle(params->thread);
+          if(thread == &d_entity_nil)
+          {
+            thread = d_entity_from_handle(d_user_state->ctrl_last_stop_event.entity);
+          }
+          if(thread == &d_entity_nil || thread->kind != D_EntityKind_Thread)
+          {
+            log_user_error(str8_lit("Must have a selected thread for target_call_u64."));
+          }
+          else if(d_ctrl_targets_running())
+          {
+            log_user_error(str8_lit("Must halt before target_call_u64."));
+          }
+          else
+          {
+            D_Entity *process = d_entity_ancestor_from_kind(thread, D_EntityKind_Process);
+            D_Msg *msg = d_msg_list_push(scratch.arena, &ctrl_msgs);
+            msg->kind = D_MsgKind_TargetCallU64;
+            msg->entity = thread->handle;
+            msg->parent = process->handle;
+            msg->vaddr = params->vaddr;
+            msg->target_call_arg_count = Min(params->target_call_arg_count, (U32)ArrayCount(msg->target_call_args));
+            MemoryCopyArray(msg->target_call_args, params->target_call_args);
+            MemoryCopyArray(msg->exception_code_filters, exception_code_filters);
+          }
+        }break;
         
         //- rjf: high-level composite target control operations
         case D_CmdKind_RunToLine:

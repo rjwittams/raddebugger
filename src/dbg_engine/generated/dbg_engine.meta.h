@@ -42,6 +42,7 @@ D_CmdKind_SetEntityColor,
 D_CmdKind_SetEntityName,
 D_CmdKind_Attach,
 D_CmdKind_OpenCrashDump,
+D_CmdKind_TargetCallU64,
 D_CmdKind_COUNT,
 } D_CmdKind;
 
