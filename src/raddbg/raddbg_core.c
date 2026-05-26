@@ -13867,6 +13867,113 @@ rd_frame(void)
                 access_close(access);
               }
             }
+            else if(str8_match(cmd_name, str8_lit("target_call_u64"), 0))
+            {
+              handled = 1;
+              String8 thread_or_process_string = {0};
+              String8 function_vaddr_string = {0};
+              if(msg_parts.first != 0 && msg_parts.first->next != 0)
+              {
+                thread_or_process_string = msg_parts.first->next->string;
+                if(msg_parts.first->next->next != 0)
+                {
+                  function_vaddr_string = msg_parts.first->next->next->string;
+                }
+              }
+
+              D_Entity *thread = &d_entity_nil;
+              if(str8_match(thread_or_process_string, str8_lit("selected"), 0))
+              {
+                thread = d_entity_from_handle(rd_base_regs()->thread);
+              }
+              else if(thread_or_process_string.size != 0)
+              {
+                D_Entity *entity = d_entity_from_handle(d_handle_from_string(thread_or_process_string));
+                if(entity != &d_entity_nil)
+                {
+                  if(entity->kind == D_EntityKind_Process)
+                  {
+                    thread = d_entity_child_from_kind(entity, D_EntityKind_Thread);
+                  }
+                  else
+                  {
+                    thread = entity;
+                  }
+                }
+                else
+                {
+                  U64 id = 0;
+                  if(try_u64_from_str8_c_rules(thread_or_process_string, &id))
+                  {
+                    D_EntityArray threads = d_entity_array_from_kind(D_EntityKind_Thread);
+                    for(U64 idx = 0; idx < threads.count; idx += 1)
+                    {
+                      if(threads.v[idx]->id == id)
+                      {
+                        thread = threads.v[idx];
+                        break;
+                      }
+                    }
+                  }
+                }
+              }
+              if(thread == &d_entity_nil)
+              {
+                thread = d_entity_from_handle(rd_base_regs()->thread);
+              }
+
+              U64 function_vaddr = 0;
+              if(thread == &d_entity_nil || thread->kind != D_EntityKind_Thread)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: thread not found");
+              }
+              else if(!try_u64_from_str8_c_rules(function_vaddr_string, &function_vaddr) || function_vaddr == 0)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: function address required");
+              }
+              else
+              {
+                D_CmdParams params = {0};
+                params.thread = thread->handle;
+                params.vaddr = function_vaddr;
+                String8Node *arg = msg_parts.first->next->next;
+                if(arg != 0)
+                {
+                  arg = arg->next;
+                }
+                B32 args_good = 1;
+                for(; arg != 0 && params.target_call_arg_count < ArrayCount(params.target_call_args); arg = arg->next)
+                {
+                  U64 arg_value = 0;
+                  if(try_u64_from_str8_c_rules(arg->string, &arg_value))
+                  {
+                    params.target_call_args[params.target_call_arg_count] = arg_value;
+                    params.target_call_arg_count += 1;
+                  }
+                  else
+                  {
+                    args_good = 0;
+                    break;
+                  }
+                }
+
+                if(!args_good)
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad argument");
+                }
+                else if(arg != 0)
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: too many arguments");
+                }
+                else
+                {
+                  d_push_cmd(D_CmdKind_TargetCallU64, &params);
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs,
+                                  "queued result:dump_output thread:%S function:0x%I64x",
+                                  thread->string, function_vaddr);
+                }
+              }
+            }
             if(!handled)
             {
             String8List msg_cmd_line_parts = {0};
