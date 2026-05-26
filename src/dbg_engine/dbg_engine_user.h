@@ -65,6 +65,8 @@ struct D_CmdParams
   String8 file_path;
   TxtPt cursor;
   U64 vaddr;
+  U64 target_call_args[4];
+  U32 target_call_arg_count;
   B32 prefer_disasm;
   U32 pid;
   U32 rgba;
@@ -165,6 +167,7 @@ typedef enum D_MsgKind
   D_MsgKind_Detach,
   D_MsgKind_Run,
   D_MsgKind_SingleStep,
+  D_MsgKind_TargetCallU64,
   D_MsgKind_SetUserEntryPoints,
   D_MsgKind_SetModuleDebugInfoPath,
   D_MsgKind_FreezeThread,
@@ -189,8 +192,11 @@ struct D_Msg
   D_Handle parent;
   U32 entity_id;
   U32 exit_code;
+  U32 target_call_arg_count;
   B32 env_inherit;
   B32 debug_subprocesses;
+  U64 vaddr;
+  U64 target_call_args[4];
   U64 exception_code_filters[(D_ExceptionCodeKind_COUNT+63)/64];
   String8 path;
   String8List entry_points;
