@@ -52,6 +52,31 @@ TEST(software_breakpoint_pc_offsets)
   T_Ok(arch_software_breakpoint_pc_offset(OperatingSystem_Windows, Arch_arm64) == arch_info_from_arch(Arch_arm64)->trap_instruction.size);
 }
 
+TEST(step_over_line_call_trap_storage)
+{
+  DASM_CtrlFlowPoint point = {0};
+  point.vaddr = 0x1000;
+  point.vaddr_opl = 0x1004;
+  point.jump_dest_vaddr = 0x2000;
+  point.inst_flags = DASM_InstFlag_Call;
+
+  Rng1U64List same_line_ranges = {0};
+  rng1u64_list_push(arena, &same_line_ranges, r1u64(0x1000, 0x1004));
+
+  D_Trap x64_trap = d_trap_from_step_over_line_call(Arch_x64, &point, &same_line_ranges);
+  T_Ok(x64_trap.vaddr == point.vaddr);
+  T_Ok(x64_trap.flags == (D_TrapFlag_BeginSpoofMode|D_TrapFlag_SingleStepAfterHit));
+
+  D_Trap arm64_line_end_trap = d_trap_from_step_over_line_call(Arch_arm64, &point, &same_line_ranges);
+  T_Ok(arm64_line_end_trap.vaddr == point.vaddr_opl);
+  T_Ok(arm64_line_end_trap.flags == D_TrapFlag_EndStepping);
+
+  rng1u64_list_push(arena, &same_line_ranges, r1u64(0x1004, 0x1008));
+  D_Trap arm64_same_line_trap = d_trap_from_step_over_line_call(Arch_arm64, &point, &same_line_ranges);
+  T_Ok(arm64_same_line_trap.vaddr == point.vaddr_opl);
+  T_Ok(arm64_same_line_trap.flags == D_TrapFlag_SingleStepAfterHit);
+}
+
 TEST(arm64_rdi_dwarf_mappings)
 {
   T_Ok(rdi_arch_from_arch(Arch_arm64) == RDI_Arch_ARM64);
