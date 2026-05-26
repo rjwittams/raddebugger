@@ -36,8 +36,10 @@ TEST(arm64_metadata)
 
 TEST(call_return_address_storage)
 {
-  T_Ok(arch_call_pushes_return_address_to_stack(Arch_x64));
-  T_Ok(!arch_call_pushes_return_address_to_stack(Arch_arm64));
+  T_Ok(arch_call_return_address_storage_kind(Arch_x64) == ArchCallReturnAddressStorageKind_Stack);
+  T_Ok(arch_call_return_address_storage_kind(Arch_x86) == ArchCallReturnAddressStorageKind_Stack);
+  T_Ok(arch_call_return_address_storage_kind(Arch_arm64) == ArchCallReturnAddressStorageKind_LinkRegister);
+  T_Ok(arch_call_return_address_storage_kind(Arch_arm32) == ArchCallReturnAddressStorageKind_LinkRegister);
 }
 
 TEST(software_breakpoint_pc_offsets)
@@ -58,6 +60,31 @@ TEST(arm64_ctrl_flow_point_extents)
   T_Ok(info.exit_points.first->v.vaddr == 0x1000);
   T_Ok(info.exit_points.first->v.vaddr_opl == 0x1004);
   T_Ok(info.exit_points.first->v.jump_dest_vaddr == 0x1008);
+}
+
+TEST(step_over_line_call_trap_storage)
+{
+  DASM_CtrlFlowPoint point = {0};
+  point.vaddr = 0x1000;
+  point.vaddr_opl = 0x1004;
+  point.jump_dest_vaddr = 0x2000;
+  point.inst_flags = DASM_InstFlag_Call;
+
+  Rng1U64List same_line_ranges = {0};
+  rng1u64_list_push(arena, &same_line_ranges, r1u64(0x1000, 0x1004));
+
+  D_Trap x64_trap = d_trap_from_step_over_line_call(Arch_x64, &point, &same_line_ranges);
+  T_Ok(x64_trap.vaddr == point.vaddr);
+  T_Ok(x64_trap.flags == (D_TrapFlag_BeginSpoofMode|D_TrapFlag_SingleStepAfterHit));
+
+  D_Trap arm64_line_end_trap = d_trap_from_step_over_line_call(Arch_arm64, &point, &same_line_ranges);
+  T_Ok(arm64_line_end_trap.vaddr == point.vaddr_opl);
+  T_Ok(arm64_line_end_trap.flags == D_TrapFlag_EndStepping);
+
+  rng1u64_list_push(arena, &same_line_ranges, r1u64(0x1004, 0x1008));
+  D_Trap arm64_same_line_trap = d_trap_from_step_over_line_call(Arch_arm64, &point, &same_line_ranges);
+  T_Ok(arm64_same_line_trap.vaddr == point.vaddr_opl);
+  T_Ok(arm64_same_line_trap.flags == D_TrapFlag_SingleStepAfterHit);
 }
 
 TEST(arm64_rdi_dwarf_mappings)

@@ -465,21 +465,21 @@ byte_size_from_arch(Arch arch)
   return bit_size_from_arch(arch) / 8;
 }
 
-internal B32
-arch_call_pushes_return_address_to_stack(Arch arch)
+internal ArchCallReturnAddressStorageKind
+arch_call_return_address_storage_kind(Arch arch)
 {
-  B32 result = 0;
+  ArchCallReturnAddressStorageKind result = ArchCallReturnAddressStorageKind_Null;
   switch(arch)
   {
     case Arch_x64:
     case Arch_x86:
     {
-      result = 1;
+      result = ArchCallReturnAddressStorageKind_Stack;
     }break;
     case Arch_arm64:
     case Arch_arm32:
     {
-      result = 0;
+      result = ArchCallReturnAddressStorageKind_LinkRegister;
     }break;
     default: break;
   }

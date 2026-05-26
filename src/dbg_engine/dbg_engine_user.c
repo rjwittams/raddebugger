@@ -277,8 +277,9 @@ d_cmd_list_push_new(Arena *arena, D_CmdList *cmds, D_CmdKind kind, D_CmdParams *
 //
 // - 'call' instruction -> on architectures where calls push return addresses
 //     to the stack, place "single-step-after | begin-spoof-mode" trap at the
-//     call instruction. otherwise, place a "single-step-after" trap at the
-//     instruction immediately after the call.
+//     call instruction. otherwise, place a trap at the instruction immediately
+//     after the call. if that instruction is outside the current source line,
+//     the trap ends stepping; otherwise, it single-steps after hit.
 // - 'jmp' (both unconditional & conditional) -> if can decode jump destination
 //     address, AND if jump leaves the line, place "end-stepping" trap at
 //     destination. if can't, "end-stepping | single-step-after" trap at jmp.
@@ -289,6 +290,45 @@ d_cmd_list_push_new(Arena *arena, D_CmdList *cmds, D_CmdKind kind, D_CmdParams *
 //     stream.
 // - for any instructions which may change the stack pointer, traps are placed
 //     at them with the "save-stack-pointer | single-step-after" behaviors.
+
+internal B32
+d_vaddr_is_in_any_rng1u64(Rng1U64List *ranges, U64 vaddr)
+{
+  B32 result = 0;
+  for EachNode(n, Rng1U64Node, ranges->first)
+  {
+    if(contains_1u64(n->v, vaddr))
+    {
+      result = 1;
+      break;
+    }
+  }
+  return result;
+}
+
+internal D_Trap
+d_trap_from_step_over_line_call(Arch arch, DASM_CtrlFlowPoint *point, Rng1U64List *all_vaddr_ranges_on_same_line)
+{
+  D_Trap trap = {0};
+  trap.vaddr = point->vaddr;
+  switch(arch_call_return_address_storage_kind(arch))
+  {
+    case ArchCallReturnAddressStorageKind_Stack:
+    {
+      trap.flags = D_TrapFlag_BeginSpoofMode|D_TrapFlag_SingleStepAfterHit;
+    }break;
+    case ArchCallReturnAddressStorageKind_LinkRegister:
+    {
+      trap.vaddr = point->vaddr_opl;
+      trap.flags = d_vaddr_is_in_any_rng1u64(all_vaddr_ranges_on_same_line, point->vaddr_opl) ? D_TrapFlag_SingleStepAfterHit : D_TrapFlag_EndStepping;
+    }break;
+    default:
+    {
+      trap.flags = D_TrapFlag_SingleStepAfterHit;
+    }break;
+  }
+  return trap;
+}
 
 internal D_TrapNet
 d_trap_net_from_thread__step_over_inst(Arena *arena, D_Entity *thread)
@@ -481,18 +521,12 @@ d_trap_net_from_thread__step_over_line(Arena *arena, D_Entity *thread)
       
     }
     
-    // rjf: call => place spoof at return spot in stack when the architecture exposes one; otherwise trap at the call fallthrough.
+    // call => place spoof at return spot in stack when the architecture exposes one; otherwise trap at the call fallthrough.
     else if(point->inst_flags & DASM_InstFlag_Call)
     {
-      flags |= D_TrapFlag_SingleStepAfterHit;
-      if(arch_call_pushes_return_address_to_stack(arch))
-      {
-        flags |= D_TrapFlag_BeginSpoofMode;
-      }
-      else
-      {
-        trap_addr = point->vaddr_opl;
-      }
+      D_Trap trap = d_trap_from_step_over_line_call(arch, point, &all_vaddr_ranges_on_same_line);
+      flags = trap.flags;
+      trap_addr = trap.vaddr;
     }
     
     // rjf: instruction changes stack pointer => save off the stack pointer, single-step over, keep stepping

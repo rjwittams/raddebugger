@@ -639,6 +639,16 @@ typedef enum Arch
   Arch_COUNT,
 }
 Arch;
+
+typedef enum ArchCallReturnAddressStorageKind
+{
+  ArchCallReturnAddressStorageKind_Null,
+  ArchCallReturnAddressStorageKind_Stack,
+  ArchCallReturnAddressStorageKind_LinkRegister,
+  ArchCallReturnAddressStorageKind_COUNT,
+}
+ArchCallReturnAddressStorageKind;
+
 #if ARCH_X64
 # define Arch_CURRENT Arch_x64
 #elif ARCH_X86
@@ -1064,7 +1074,7 @@ internal B32 txt_rng_contains(TxtRng r, TxtPt pt);
 
 internal U64 bit_size_from_arch(Arch arch);
 internal U64 byte_size_from_arch(Arch arch);
-internal B32 arch_call_pushes_return_address_to_stack(Arch arch);
+internal ArchCallReturnAddressStorageKind arch_call_return_address_storage_kind(Arch arch);
 internal U64 max_ops_per_instruction_from_arch(Arch arch);
 internal U64 min_instruction_size_from_arch(Arch arch);
 internal U64 max_instruction_size_from_arch(Arch arch);
