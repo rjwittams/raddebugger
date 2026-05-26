@@ -42,6 +42,7 @@ txt_lang_kind_from_arch(Arch arch)
   {
     default:{}break;
     case Arch_x64:{kind = TXT_LangKind_DisasmX64Intel;}break;
+    case Arch_arm64:{kind = TXT_LangKind_DisasmARM64;}break;
   }
   return kind;
 }
@@ -60,6 +61,7 @@ txt_lex_function_from_lang_kind(TXT_LangKind kind)
     case TXT_LangKind_Zig:           {fn = txt_token_array_from_string__zig;}break;
     case TXT_LangKind_Rust:          {fn = txt_token_array_from_string__rust;}break;
     case TXT_LangKind_DisasmX64Intel:{fn = txt_token_array_from_string__disasm_x64_intel;}break;
+    case TXT_LangKind_DisasmARM64:   {fn = txt_token_array_from_string__disasm_arm64;}break;
   }
   return fn;
 }
@@ -2274,6 +2276,24 @@ txt_token_array_from_string__disasm_x64_intel(Arena *arena, U64 *bytes_processed
   //- rjf: token list -> token array
   TXT_TokenArray result = txt_token_array_from_chunk_list(arena, &tokens);
   scratch_end(scratch);
+  return result;
+}
+
+internal TXT_TokenArray
+txt_token_array_from_string__disasm_arm64(Arena *arena, U64 *bytes_processed_counter, String8 string)
+{
+  TXT_TokenArray result = txt_token_array_from_string__disasm_x64_intel(arena, bytes_processed_counter, string);
+  for(U64 idx = 0; idx < result.count; idx += 1)
+  {
+    TXT_Token *token = &result.v[idx];
+    if(token->kind == TXT_TokenKind_Error &&
+       token->range.max == token->range.min + 1 &&
+       token->range.min < string.size &&
+       string.str[token->range.min] == '#')
+    {
+      token->kind = TXT_TokenKind_Symbol;
+    }
+  }
   return result;
 }
 
