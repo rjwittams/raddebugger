@@ -2233,6 +2233,7 @@ SINTa rr_lzb_simple_encode_fast(rr_lzb_simple_context * fh,
 #undef DO_FAST_LAZY_MATCH
 #undef DO_FAST_2ND_HASH  
 
+
 //=====================================================
 
 #define FAST_HASH_DEPTH_SHIFT	(0)

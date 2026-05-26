@@ -4504,25 +4504,16 @@ d_ctrl_thread__append_resolved_module_user_bp_traps(Arena *arena, D_EvalScope *e
       U64 trap_count_before = traps_out->trap_count;
       
       U32 id_count = 0;
-      U32 *ids = 0;
-      {
-        RDI_NameMap *mapptr = rdi_element_from_name_idx(rdi, NameMaps, RDI_NameMapKind_NormalSourcePaths);
-        if(mapptr != 0)
-        {
-          RDI_ParsedNameMap map = {0};
-          rdi_parsed_from_name_map(rdi, mapptr, &map);
-          RDI_NameMapNode *node = rdi_name_map_lookup(rdi, &map, filename_normalized.str, filename_normalized.size);
-          if(node != 0)
-          {
-            ids = rdi_matches_from_map_node(rdi, node, &id_count);
-          }
-        }
-      }
+      U32 *ids = rdi_source_file_idxs_from_normal_path(rdi, filename_normalized.str, filename_normalized.size, &id_count);
       
       for(U32 id_idx = 0; id_idx < id_count; id_idx += 1)
       {
         U32 src_id = ids[id_idx];
         RDI_SourceFile *src = rdi_element_from_name_idx(rdi, SourceFiles, src_id);
+        if(src->source_line_map_idx == 0)
+        {
+          continue;
+        }
         RDI_SourceLineMap *src_line_map = rdi_element_from_name_idx(rdi, SourceLineMaps, src->source_line_map_idx);
         RDI_ParsedSourceLineMap line_map = {0};
         rdi_parsed_from_source_line_map(rdi, src_line_map, &line_map);
@@ -4551,6 +4542,10 @@ d_ctrl_thread__append_resolved_module_user_bp_traps(Arena *arena, D_EvalScope *e
           }
           if(filename_normalized.size > src_path.size &&
              filename_normalized.str[filename_normalized.size - src_path.size - 1] != '/')
+          {
+            continue;
+          }
+          if(src->source_line_map_idx == 0)
           {
             continue;
           }
