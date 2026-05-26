@@ -807,6 +807,10 @@ file_open(AccessFlags flags, String8 path)
   {
     lnx_flags |= O_APPEND;
   }
+  else if(flags & AccessFlag_Write)
+  {
+    lnx_flags |= O_TRUNC;
+  }
   if(flags & (AccessFlag_Write|AccessFlag_Append))
   {
     lnx_flags |= O_CREAT;
@@ -1299,6 +1303,7 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
 {
   pid_t pid = (pid_t)process.u64[0];
   B32 result = 0;
+  int status = 0;
   if(endt_us == 0)
   {
     if(kill(pid, 0) >= 0)
@@ -1306,7 +1311,6 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
       result = (errno == ENOENT);
       if(result)
       {
-        int status;
         waitpid(pid, &status, 0);
       }
     }
@@ -1315,10 +1319,13 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
   {
     for(;;)
     {
-      int status = 0;
       int w = waitpid(pid, &status, 0);
       if(w == -1)
       {
+        if(errno == EINTR)
+        {
+          continue;
+        }
         break;
       }
       if(WIFEXITED(status) || WIFSTOPPED(status) || WIFSIGNALED(status))
@@ -1331,6 +1338,21 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
   else
   {
     NotImplemented;
+  }
+  if(result && exit_code_out != 0)
+  {
+    if(WIFEXITED(status))
+    {
+      *exit_code_out = (U64)WEXITSTATUS(status);
+    }
+    else if(WIFSIGNALED(status))
+    {
+      *exit_code_out = (U64)(128 + WTERMSIG(status));
+    }
+    else if(WIFSTOPPED(status))
+    {
+      *exit_code_out = (U64)(128 + WSTOPSIG(status));
+    }
   }
   return result;
 }

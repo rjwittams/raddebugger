@@ -22,7 +22,7 @@ tp_run_tasks(TP_Context *pool, TP_Worker *worker)
 
     // on last task ping main thread
     U64 task_done = ins_atomic_u64_inc_eval(&pool->task_done);
-    if (task_done == task_count) {
+    if (task_done == task_count && pool->main_semaphore.u64[0] != 0) {
       semaphore_drop(pool->main_semaphore);
     }
   }
@@ -118,8 +118,11 @@ tp_release(TP_Context *pool)
       semaphore_drop(pool->exec_semaphore);
     }
   }
-  for EachIndex(i, pool->worker_count) {
-    semaphore_drop(pool->task_semaphore);
+  if (pool->task_semaphore.u64[0] != 0)
+  {
+    for EachIndex(i, pool->worker_count) {
+      semaphore_drop(pool->task_semaphore);
+    }
   }
   for (U64 i = 1; i < pool->worker_count; i += 1) {
     thread_detach(pool->worker_arr[i].handle);
@@ -128,8 +131,14 @@ tp_release(TP_Context *pool)
     semaphore_release(pool->exec_semaphore);
   }
   barrier_release(pool->barrier);
-  semaphore_release(pool->task_semaphore);
-  semaphore_release(pool->main_semaphore);
+  if (pool->task_semaphore.u64[0] != 0)
+  {
+    semaphore_release(pool->task_semaphore);
+  }
+  if (pool->main_semaphore.u64[0] != 0)
+  {
+    semaphore_release(pool->main_semaphore);
+  }
 
   MemoryZeroStruct(pool);
 }
@@ -218,15 +227,21 @@ tp_for_parallel(TP_Context *pool, TP_Arena *task_arena, U64 task_count, TP_TaskF
     }
     
     // ping shared semaphore
-    for (U64 worker_idx = 0; worker_idx < drop_count; worker_idx += 1) {
-      semaphore_drop(pool->task_semaphore);
+    if (pool->task_semaphore.u64[0] != 0)
+    {
+      for (U64 worker_idx = 0; worker_idx < drop_count; worker_idx += 1) {
+        semaphore_drop(pool->task_semaphore);
+      }
     }
     
     // run tasks on main worker
     tp_run_tasks(pool, &pool->worker_arr[0]);
     
     // wait for workers to finish tasks
-    semaphore_take(pool->main_semaphore, max_U64);
+    if (pool->main_semaphore.u64[0] != 0)
+    {
+      semaphore_take(pool->main_semaphore, max_U64);
+    }
   }
 }
 
@@ -276,4 +291,3 @@ tp_sum_u64(TP_Context *tp, U64 task_id, U64 v)
   barrier_wait(tp->barrier);
   return result;
 }
-
