@@ -275,8 +275,10 @@ d_cmd_list_push_new(Arena *arena, D_CmdList *cmds, D_CmdKind kind, D_CmdParams *
 // thread's current source line. Every instruction in this range is decoded.
 // Traps are then built in the following way:
 //
-// - 'call' instruction -> place "single-step-after | begin-spoof-mode" trap at
-//     call instruction.
+// - 'call' instruction -> on architectures where calls push return addresses
+//     to the stack, place "single-step-after | begin-spoof-mode" trap at the
+//     call instruction. otherwise, place a "single-step-after" trap at the
+//     instruction immediately after the call.
 // - 'jmp' (both unconditional & conditional) -> if can decode jump destination
 //     address, AND if jump leaves the line, place "end-stepping" trap at
 //     destination. if can't, "end-stepping | single-step-after" trap at jmp.
@@ -434,7 +436,7 @@ d_trap_net_from_thread__step_over_line(Arena *arena, D_Entity *thread)
     {
       LogInfoNamedBlockF("exit_points") for(DASM_CtrlFlowPointNode *n = ctrl_flow_info.exit_points.first; n != 0; n = n->next)
       {
-        log_infof("{vaddr:0x%I64x, jump_dest_vaddr:0x%I64x, inst_flags:%x}\n", n->v.vaddr, n->v.jump_dest_vaddr, n->v.inst_flags);
+        log_infof("{vaddr:0x%I64x, vaddr_opl:0x%I64x, jump_dest_vaddr:0x%I64x, inst_flags:%x}\n", n->v.vaddr, n->v.vaddr_opl, n->v.jump_dest_vaddr, n->v.inst_flags);
       }
     }
   }
@@ -479,10 +481,18 @@ d_trap_net_from_thread__step_over_line(Arena *arena, D_Entity *thread)
       
     }
     
-    // rjf: call => place spoof at return spot in stack, single-step after hitting
+    // rjf: call => place spoof at return spot in stack when the architecture exposes one; otherwise trap at the call fallthrough.
     else if(point->inst_flags & DASM_InstFlag_Call)
     {
-      flags |= (D_TrapFlag_BeginSpoofMode|D_TrapFlag_SingleStepAfterHit);
+      flags |= D_TrapFlag_SingleStepAfterHit;
+      if(arch_call_pushes_return_address_to_stack(arch))
+      {
+        flags |= D_TrapFlag_BeginSpoofMode;
+      }
+      else
+      {
+        trap_addr = point->vaddr_opl;
+      }
     }
     
     // rjf: instruction changes stack pointer => save off the stack pointer, single-step over, keep stepping

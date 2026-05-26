@@ -2332,27 +2332,18 @@ mac_dmn_thread_entity_from_active_trap(MAC_DMN_Process *process, MAC_DMN_ActiveT
       if(thread_entity->kind == MAC_DMN_EntityKind_Thread)
       {
         U64 ip = mac_dmn_thread_read_ip(&thread_entity->thread);
+        U64 pc_offset = arch_software_breakpoint_pc_offset(OperatingSystem_Mac, thread_entity->thread.arch);
+        U64 breakpoint_vaddr = ip;
+        if(pc_offset <= breakpoint_vaddr)
+        {
+          breakpoint_vaddr -= pc_offset;
+        }
         for(MAC_DMN_ActiveTrap *active_trap = first; active_trap != 0; active_trap = active_trap->next)
         {
           MAC_DMN_Process *trap_process = mac_dmn_process_from_handle(active_trap->trap->process);
-          U64 trap_size = active_trap->swap_bytes.size;
-          B32 ip_matches_trap = 0;
-          switch(thread_entity->thread.arch)
-          {
-            default:{}break;
-            case Arch_x64:
-            {
-              ip_matches_trap = (trap_size <= ip && active_trap->trap->vaddr == ip - trap_size);
-            }break;
-            case Arch_arm64:
-            {
-              ip_matches_trap = (active_trap->trap->vaddr == ip ||
-                                 (trap_size <= ip && active_trap->trap->vaddr == ip - trap_size));
-            }break;
-          }
           if(active_trap->good &&
              trap_process == process &&
-             ip_matches_trap)
+             active_trap->trap->vaddr == breakpoint_vaddr)
           {
             result = thread_entity;
             result_trap = active_trap;
