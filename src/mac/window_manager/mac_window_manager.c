@@ -44,9 +44,14 @@
 }
 - (BOOL)windowShouldClose:(id)sender
 {
-  if(window != 0)
+  if(window != 0 && mac_wm_state != 0)
   {
-    window->close_requested = 1;
+    U64 live_window_count = 0;
+    for(MAC_WM_Window *w = mac_wm_state->first_window; w != 0; w = w->next)
+    {
+      live_window_count += 1;
+    }
+    mac_wm_push_menu_command_for_window(window, live_window_count > 1 ? str8_lit("close_window") : str8_lit("exit"));
   }
   return NO;
 }
@@ -162,9 +167,9 @@ mac_wm_chrome_mode_has_native_controls(MAC_WM_ChromeMode mode)
 }
 
 internal void
-mac_wm_push_menu_command(String8 command_name)
+mac_wm_push_menu_command_for_window(MAC_WM_Window *window, String8 command_name)
 {
-  if(mac_wm_state != 0)
+  if(mac_wm_state != 0 && window != 0)
   {
     MAC_WM_MenuCommandNode *node = mac_wm_state->free_menu_command_node;
     if(node != 0)
@@ -177,10 +182,16 @@ mac_wm_push_menu_command(String8 command_name)
       node = push_array(mac_wm_state->arena, MAC_WM_MenuCommandNode, 1);
     }
     node->command_name = push_str8_copy(mac_wm_state->arena, command_name);
-    node->window = mac_wm_handle_from_window(mac_wm_window_from_ns_window([NSApp keyWindow]));
+    node->window = mac_wm_handle_from_window(window);
     SLLQueuePush(mac_wm_state->first_pending_menu_command, mac_wm_state->last_pending_menu_command, node);
     wm_send_wakeup_event();
   }
+}
+
+internal void
+mac_wm_push_menu_command(String8 command_name)
+{
+  mac_wm_push_menu_command_for_window(mac_wm_window_from_ns_window([NSApp keyWindow]), command_name);
 }
 
 internal B32
