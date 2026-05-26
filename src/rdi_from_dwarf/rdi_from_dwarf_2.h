@@ -62,6 +62,7 @@ struct D2R2_ConvertParams
 //~ rjf: Helpers
 
 internal int d2r2_unique_tag_node_is_less_than(D2R2_UniqueTagNode **l, D2R2_UniqueTagNode **r);
+internal RDIM_Rng1U64 d2r2_voff_range_from_vaddr_range(U64 base_vaddr, Rng1U64 range);
 
 ////////////////////////////////
 //~ rjf: Main Conversion Entry Point (New)
