@@ -3526,10 +3526,15 @@ d2r2_convert(Arena *arena, D2R2_ConvertParams *params)
                 Rng1U64 range = n->v.range;
                 String8 expr = n->v.expr;
                 
-                //- rjf: iterate each frame base location case, or once if there are none,
+                //- iterate each frame base location case, or once if there are none,
                 // and convert the location in that context
                 RDIM_LocationCase nil_framebase_loc_case = {0, {0}, {0, max_U64}};
-                for(RDIM_LocationCase *framebase_loc_n = top_parent ? top_parent->framebase_location_cases.first : &nil_framebase_loc_case;
+                RDIM_LocationCase *first_framebase_loc_case = &nil_framebase_loc_case;
+                if(top_parent != 0 && top_parent->framebase_location_cases.first != 0)
+                {
+                  first_framebase_loc_case = top_parent->framebase_location_cases.first;
+                }
+                for(RDIM_LocationCase *framebase_loc_n = first_framebase_loc_case;
                     framebase_loc_n != 0;
                     framebase_loc_n = framebase_loc_n->next)
                 {
@@ -4185,9 +4190,9 @@ d2r2_convert(Arena *arena, D2R2_ConvertParams *params)
                     }
                   }
                   
-                  //- rjf: collect
+                  //- collect
                   {
-                    RDIM_Rng1U64 voff_range = {range.min - base_vaddr, range.max - base_vaddr};
+                    RDIM_Rng1U64 voff_range = d2r2_voff_range_from_vaddr_range(base_vaddr, range);
                     if(bytecode_is_framebase_dependent)
                     {
                       voff_range.min = Max(voff_range.min, framebase_voff_range.min);

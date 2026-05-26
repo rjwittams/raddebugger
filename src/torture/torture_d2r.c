@@ -81,6 +81,89 @@ d2rt_type_from_name(RDI_Parsed *rdi, RDI_ParsedNameMap *map, char *name)
   return 0;
 }
 
+internal RDI_Symbol *
+d2rt_global_from_name(RDI_Parsed *rdi, char *name)
+{
+  RDI_Symbol *result = 0;
+  String8 name_str = str8_cstring(name);
+  U64 globals_count = 0;
+  RDI_Symbol *globals = rdi_table_from_name(rdi, GlobalVariables, &globals_count);
+  for(U64 idx = 1; idx < globals_count; idx += 1)
+  {
+    RDI_Symbol *gvar = &globals[idx];
+    String8 gvar_name = str8_from_rdi_string_idx(rdi, gvar->name_string_idx);
+    if(str8_match(gvar_name, name_str, 0))
+    {
+      result = gvar;
+      break;
+    }
+  }
+  return result;
+}
+
+TEST(d2r2_locations_under_parent_without_framebase)
+{
+  DW_Writer *writer = dw_writer_begin(DW_Format_32Bit, DW_Version_5, DW_CompUnitKind_Compile, Arch_x64);
+  U64 image_base = coff_default_exe_base_from_machine(COFF_MachineType_X64);
+  U64 proc_voff = 0x1000;
+  U64 global_voff = 0x3000;
+  {
+    dw_writer_tag_begin(writer, DW_TagKind_CompileUnit);
+    dw_writer_push_attrib_stringf(writer, DW_AttribKind_Producer, "Test");
+
+    DW_WriterTag *int_type = dw_writer_tag_begin(writer, DW_TagKind_BaseType);
+    dw_writer_push_attrib_sint(writer, DW_AttribKind_ByteSize, 4);
+    dw_writer_push_attrib_enum(writer, DW_AttribKind_Encoding, DW_ATE_Signed);
+    dw_writer_push_attrib_stringf(writer, DW_AttribKind_Name, "int");
+    dw_writer_tag_end(writer);
+
+    dw_writer_tag_begin(writer, DW_TagKind_Module);
+    dw_writer_push_attrib_stringf(writer, DW_AttribKind_Name, "ParentWithoutFrameBase");
+
+    dw_writer_tag_begin(writer, DW_TagKind_Variable);
+    dw_writer_push_attrib_stringf(writer, DW_AttribKind_Name, "ParentedGlobal");
+    dw_writer_push_attrib_ref(writer, DW_AttribKind_Type, int_type);
+    dw_writer_push_attrib_exprv(writer, DW_AttribKind_Location, DW_ExprEnc_Op(Addr), DW_ExprEnc_Addr(image_base + global_voff));
+    dw_writer_tag_end(writer);
+
+    dw_writer_tag_begin(writer, DW_TagKind_SubProgram);
+    dw_writer_push_attrib_stringf(writer, DW_AttribKind_Name, "ParentedFunc");
+    dw_writer_push_attrib_address(writer, DW_AttribKind_LowPc, image_base + proc_voff);
+    dw_writer_push_attrib_address(writer, DW_AttribKind_HighPc, image_base + proc_voff + 0x10);
+    dw_writer_push_attrib_exprv(writer, DW_AttribKind_FrameBase, DW_ExprEnc_Op(Reg7));
+
+    dw_writer_tag_begin(writer, DW_TagKind_Variable);
+    dw_writer_push_attrib_stringf(writer, DW_AttribKind_Name, "ParentedLocal");
+    dw_writer_push_attrib_ref(writer, DW_AttribKind_Type, int_type);
+    dw_writer_push_attrib_exprv(writer, DW_AttribKind_Location, DW_ExprEnc_Op(FBReg), DW_ExprEnc_SLEB128(-16));
+    dw_writer_tag_end(writer);
+
+    dw_writer_tag_end(writer);
+    dw_writer_tag_end(writer);
+    dw_writer_tag_end(writer);
+  }
+
+  RDI_Parsed *rdi = d2r_rdi_from_dwarf_writer(arena, writer);
+
+  RDI_Symbol *gvar = d2rt_global_from_name(rdi, "ParentedGlobal");
+  T_Ok(gvar);
+  T_Ok(rdi_kind_from_location(gvar->location) == RDI_LocationKind_ModuleOff);
+  T_Ok(rdi_voff_from_location(gvar->location) == global_voff);
+
+  RDI_Symbol *proc = rdi_procedure_from_name_cstr(rdi, "ParentedFunc");
+  T_Ok(proc);
+  RDI_Scope *root_scope = rdi_root_scope_from_procedure(rdi, proc);
+  T_Ok(root_scope);
+  T_Ok(root_scope->local_count == 1);
+  RDI_Symbol *local = rdi_element_from_name_idx(rdi, LocalVariables, root_scope->local_first);
+  T_Ok(local);
+  T_Ok(rdi_kind_from_location(local->location) == RDI_LocationKind_AddrRegPlusOff);
+  T_Ok(rdi_regcode_from_location(local->location) == RDI_RegCodeX64_rsp);
+  T_Ok(rdi_regoff_from_location(local->location) == -16);
+
+  dw_writer_end(&writer);
+}
+
 TEST(d2r_types)
 {
   DW_Writer *writer = dw_writer_begin(DW_Format_32Bit, DW_Version_5, DW_CompUnitKind_Compile, Arch_x64);
