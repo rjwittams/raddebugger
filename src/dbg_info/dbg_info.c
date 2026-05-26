@@ -70,6 +70,44 @@ di_rdi_cache_path_from_original(Arena *arena, String8 og_path, U64 og_size, U64 
   return result;
 }
 
+internal B32
+di_rdi_path_is_writable(String8 path)
+{
+  Temp scratch = scratch_begin(0, 0);
+  B32 result = 0;
+  FileProperties existing_props = properties_from_file_path(path);
+  if(existing_props.modified != 0)
+  {
+    File file = file_open(AccessFlag_Write|AccessFlag_Append|AccessFlag_ShareRead|AccessFlag_ShareWrite, path);
+    result = !file_match(file, file_zero());
+    file_close(file);
+  }
+  else
+  {
+    String8 folder = str8_chop_last_slash(path);
+    U64 pid = get_process_info()->pid;
+    U64 time = now_time_us();
+    String8 test_path = {0};
+    if(folder.size != 0)
+    {
+      test_path = push_str8f(scratch.arena, "%S/.raddbg-rdi-write-test-%I64x-%I64x.tmp", folder, pid, time);
+    }
+    else
+    {
+      test_path = push_str8f(scratch.arena, ".raddbg-rdi-write-test-%I64x-%I64x.tmp", pid, time);
+    }
+    File file = file_open(AccessFlag_Write|AccessFlag_ShareRead|AccessFlag_ShareWrite, test_path);
+    result = !file_match(file, file_zero());
+    file_close(file);
+    if(result)
+    {
+      delete_file_at_path(test_path);
+    }
+  }
+  scratch_end(scratch);
+  return result;
+}
+
 internal void
 di_key_list_push(Arena *arena, DI_KeyList *list, DI_Key key)
 {
@@ -761,7 +799,15 @@ di_async_tick(void)
           }
           else
           {
-            rdi_path = di_rdi_cache_path_from_original(scratch.arena, og_path, og_size, og_min_timestamp);
+            String8 alongside_rdi_path = str8f(scratch.arena, "%S.rdi", str8_chop_last_dot(og_path));
+            if(di_rdi_path_is_writable(alongside_rdi_path))
+            {
+              rdi_path = alongside_rdi_path;
+            }
+            else
+            {
+              rdi_path = di_rdi_cache_path_from_original(scratch.arena, og_path, og_size, og_min_timestamp);
+            }
           }
         }
         
