@@ -12788,39 +12788,149 @@ rd_frame(void)
           {
             String8 msg = rd_regs()->string;
             String8List msg_parts = str8_split(scratch.arena, msg, (U8 *)" ", 1, 0);
-            String8List msg_cmd_line_parts = {0};
-            str8_list_push(scratch.arena, &msg_cmd_line_parts, str8_lit("ipc"));
-            str8_list_concat_in_place(&msg_cmd_line_parts, &msg_parts);
-            CmdLine msg_cmd_line = cmd_line_from_string_list(scratch.arena, msg_cmd_line_parts);
-            String8 cmd_kind_name = str8_list_first(&msg_cmd_line.inputs);
-            RD_CmdKindInfo *cmd_kind_info = rd_cmd_kind_info_from_string(cmd_kind_name);
-            if(cmd_kind_info != &rd_nil_cmd_kind_info) RD_RegsScope()
+            String8 cmd_name = str8_list_first(&msg_parts);
+            if(str8_match(cmd_name, str8_lit("target_call_u64"), 0))
             {
-              for EachNonZeroEnumVal(RD_RegSlot, s)
+              String8 thread_or_process_string = {0};
+              String8 function_vaddr_string = {0};
+              if(msg_parts.first != 0 && msg_parts.first->next != 0)
               {
-                String8 reg_slot_name = rd_reg_slot_code_name_table[s];
-                String8 value = cmd_line_string(&msg_cmd_line, reg_slot_name);
-                if(value.size != 0)
+                thread_or_process_string = msg_parts.first->next->string;
+                if(msg_parts.first->next->next != 0)
                 {
-                  rd_regs_fill_slot_from_string(s, cmd_kind_info->query.expr, value);
+                  function_vaddr_string = msg_parts.first->next->next->string;
                 }
               }
-              String8 primary_args_string = {0};
-              if(msg_cmd_line.inputs.first != 0)
+
+              D_Entity *thread = &d_entity_nil;
+              if(str8_match(thread_or_process_string, str8_lit("selected"), 0))
               {
-                String8List primary_args_strings = {0};
-                for(String8Node *n = msg_cmd_line.inputs.first->next; n != 0; n = n->next)
-                {
-                  str8_list_push(scratch.arena, &primary_args_strings, n->string);
-                }
-                primary_args_string = str8_list_join(scratch.arena, &primary_args_strings, &(StringJoin){.sep = str8_lit(" ")});
+                thread = d_entity_from_handle(rd_base_regs()->thread);
               }
-              rd_regs_fill_slot_from_string(cmd_kind_info->query.slot, cmd_kind_info->query.expr, primary_args_string);
-              rd_push_cmd(cmd_kind_name, rd_regs());
+              else if(thread_or_process_string.size != 0)
+              {
+                D_Entity *entity = d_entity_from_handle(d_handle_from_string(thread_or_process_string));
+                if(entity != &d_entity_nil)
+                {
+                  if(entity->kind == D_EntityKind_Process)
+                  {
+                    thread = d_entity_child_from_kind(entity, D_EntityKind_Thread);
+                  }
+                  else
+                  {
+                    thread = entity;
+                  }
+                }
+                else
+                {
+                  U64 id = 0;
+                  if(try_u64_from_str8_c_rules(thread_or_process_string, &id))
+                  {
+                    D_EntityArray threads = d_entity_array_from_kind(D_EntityKind_Thread);
+                    for(U64 idx = 0; idx < threads.count; idx += 1)
+                    {
+                      if(threads.v[idx]->id == id)
+                      {
+                        thread = threads.v[idx];
+                        break;
+                      }
+                    }
+                  }
+                }
+              }
+              if(thread == &d_entity_nil)
+              {
+                thread = d_entity_from_handle(rd_base_regs()->thread);
+              }
+
+              U64 function_vaddr = 0;
+              if(thread == &d_entity_nil || thread->kind != D_EntityKind_Thread)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: thread not found");
+              }
+              else if(!try_u64_from_str8_c_rules(function_vaddr_string, &function_vaddr) || function_vaddr == 0)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: function address required");
+              }
+              else
+              {
+                D_CmdParams params = {0};
+                params.thread = thread->handle;
+                params.vaddr = function_vaddr;
+                String8Node *arg = msg_parts.first->next->next;
+                if(arg != 0)
+                {
+                  arg = arg->next;
+                }
+                B32 args_good = 1;
+                for(; arg != 0 && params.target_call_arg_count < ArrayCount(params.target_call_args); arg = arg->next)
+                {
+                  U64 arg_value = 0;
+                  if(try_u64_from_str8_c_rules(arg->string, &arg_value))
+                  {
+                    params.target_call_args[params.target_call_arg_count] = arg_value;
+                    params.target_call_arg_count += 1;
+                  }
+                  else
+                  {
+                    args_good = 0;
+                    break;
+                  }
+                }
+
+                if(!args_good)
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad argument");
+                }
+                else if(arg != 0)
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: too many arguments");
+                }
+                else
+                {
+                  d_push_cmd(D_CmdKind_TargetCallU64, &params);
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs,
+                                  "queued result:dump_output thread:%S function:0x%I64x",
+                                  thread->string, function_vaddr);
+                }
+              }
             }
             else
             {
-              log_user_errorf("`%S` is not a command.", cmd_kind_name);
+              String8List msg_cmd_line_parts = {0};
+              str8_list_push(scratch.arena, &msg_cmd_line_parts, str8_lit("ipc"));
+              str8_list_concat_in_place(&msg_cmd_line_parts, &msg_parts);
+              CmdLine msg_cmd_line = cmd_line_from_string_list(scratch.arena, msg_cmd_line_parts);
+              String8 cmd_kind_name = str8_list_first(&msg_cmd_line.inputs);
+              RD_CmdKindInfo *cmd_kind_info = rd_cmd_kind_info_from_string(cmd_kind_name);
+              if(cmd_kind_info != &rd_nil_cmd_kind_info) RD_RegsScope()
+              {
+                for EachNonZeroEnumVal(RD_RegSlot, s)
+                {
+                  String8 reg_slot_name = rd_reg_slot_code_name_table[s];
+                  String8 value = cmd_line_string(&msg_cmd_line, reg_slot_name);
+                  if(value.size != 0)
+                  {
+                    rd_regs_fill_slot_from_string(s, cmd_kind_info->query.expr, value);
+                  }
+                }
+                String8 primary_args_string = {0};
+                if(msg_cmd_line.inputs.first != 0)
+                {
+                  String8List primary_args_strings = {0};
+                  for(String8Node *n = msg_cmd_line.inputs.first->next; n != 0; n = n->next)
+                  {
+                    str8_list_push(scratch.arena, &primary_args_strings, n->string);
+                  }
+                  primary_args_string = str8_list_join(scratch.arena, &primary_args_strings, &(StringJoin){.sep = str8_lit(" ")});
+                }
+                rd_regs_fill_slot_from_string(cmd_kind_info->query.slot, cmd_kind_info->query.expr, primary_args_string);
+                rd_push_cmd(cmd_kind_name, rd_regs());
+              }
+              else
+              {
+                log_user_errorf("`%S` is not a command.", cmd_kind_name);
+              }
             }
           }break;
           

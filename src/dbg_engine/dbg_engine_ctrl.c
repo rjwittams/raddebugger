@@ -99,6 +99,7 @@ d_string_from_msg_kind(D_MsgKind kind)
     case D_MsgKind_Detach:                    {result = str8_lit("Detach");}break;
     case D_MsgKind_Run:                       {result = str8_lit("Run");}break;
     case D_MsgKind_SingleStep:                {result = str8_lit("SingleStep");}break;
+    case D_MsgKind_TargetCallU64:             {result = str8_lit("TargetCallU64");}break;
     case D_MsgKind_SetUserEntryPoints:        {result = str8_lit("SetUserEntryPoints");}break;
     case D_MsgKind_SetModuleDebugInfoPath:    {result = str8_lit("SetModuleDebugInfoPath");}break;
   }
@@ -391,8 +392,11 @@ d_serialized_string_from_msg_list(Arena *arena, D_MsgList *msgs)
       str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->parent);
       str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->entity_id);
       str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->exit_code);
+      str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->target_call_arg_count);
       str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->env_inherit);
       str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->debug_subprocesses);
+      str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->vaddr);
+      str8_serial_push_array (scratch.arena, &msgs_srlzed, &msg->target_call_args[0], ArrayCount(msg->target_call_args));
       str8_serial_push_array (scratch.arena, &msgs_srlzed, &msg->exception_code_filters[0], ArrayCount(msg->exception_code_filters));
       
       // rjf: write path string
@@ -491,8 +495,11 @@ d_msg_list_from_serialized_string(Arena *arena, String8 string)
       read_off += str8_deserial_read_struct(string, read_off, &msg->parent);
       read_off += str8_deserial_read_struct(string, read_off, &msg->entity_id);
       read_off += str8_deserial_read_struct(string, read_off, &msg->exit_code);
+      read_off += str8_deserial_read_struct(string, read_off, &msg->target_call_arg_count);
       read_off += str8_deserial_read_struct(string, read_off, &msg->env_inherit);
       read_off += str8_deserial_read_struct(string, read_off, &msg->debug_subprocesses);
+      read_off += str8_deserial_read_struct(string, read_off, &msg->vaddr);
+      read_off += str8_deserial_read_array (string, read_off, &msg->target_call_args[0], ArrayCount(msg->target_call_args));
       read_off += str8_deserial_read_array (string, read_off, &msg->exception_code_filters[0], ArrayCount(msg->exception_code_filters));
       
       // rjf: read path string
@@ -4365,6 +4372,7 @@ d_ctrl_thread__entry_point(void *p)
           case D_MsgKind_Detach:            {d_ctrl_thread__detach              (ctrl_ctx, msg);}break;
           case D_MsgKind_Run:               {d_ctrl_thread__run                 (ctrl_ctx, msg);}break;
           case D_MsgKind_SingleStep:        {d_ctrl_thread__single_step         (ctrl_ctx, msg);}break;
+          case D_MsgKind_TargetCallU64:     {d_ctrl_thread__target_call_u64     (ctrl_ctx, msg);}break;
           
           //- rjf: configuration
           case D_MsgKind_SetUserEntryPoints:
@@ -8024,6 +8032,170 @@ d_ctrl_thread__single_step(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
     d_c2u_push_events(&evts);
   }
   
+  scratch_end(scratch);
+  ProfEnd();
+}
+
+internal void
+d_ctrl_thread__target_call_u64(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
+{
+  ProfBeginFunction();
+  Temp scratch = scratch_begin(0, 0);
+
+  D_Entity *thread = d_entity_from_handle(msg->entity);
+  D_Entity *process = d_entity_ancestor_from_kind(thread, D_EntityKind_Process);
+  String8 output = {0};
+
+  if(thread == &d_entity_nil || thread->kind != D_EntityKind_Thread)
+  {
+    output = str8_lit("[target_call_u64] error: thread not found\n");
+  }
+  else if(process == &d_entity_nil || process->kind != D_EntityKind_Process)
+  {
+    output = str8_lit("[target_call_u64] error: process not found\n");
+  }
+  else if(OperatingSystem_CURRENT != OperatingSystem_Mac || thread->arch != Arch_arm64)
+  {
+    output = push_str8f(scratch.arena, "[target_call_u64] error: unsupported target arch/os arch:%S os:%S\n",
+                        string_from_arch(thread->arch), string_from_operating_system(OperatingSystem_CURRENT));
+  }
+  else if(msg->vaddr == 0)
+  {
+    output = str8_lit("[target_call_u64] error: function address is zero\n");
+  }
+  else
+  {
+    ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
+    ARM64_RegBlock *saved_regs = push_array(scratch.arena, ARM64_RegBlock, 1);
+    ARM64_RegBlock *call_regs = push_array(scratch.arena, ARM64_RegBlock, 1);
+    B32 read_saved_regs = d_thread_read_reg_block(thread->handle, saved_regs);
+    if(!read_saved_regs)
+    {
+      output = str8_lit("[target_call_u64] error: could not read thread registers\n");
+    }
+    else
+    {
+      MemoryCopyStruct(call_regs, saved_regs);
+      U64 return_vaddr = arch_ip_from_reg_block(arch_info, saved_regs);
+      call_regs->x0 = msg->target_call_args[0];
+      call_regs->x1 = msg->target_call_args[1];
+      call_regs->x2 = msg->target_call_args[2];
+      call_regs->x3 = msg->target_call_args[3];
+      call_regs->lr = return_vaddr;
+      arch_reg_block_write_ip(arch_info, call_regs, msg->vaddr);
+
+      B32 wrote_call_regs = d_thread_write_reg_block(thread->handle, call_regs);
+      if(!wrote_call_regs)
+      {
+        output = str8_lit("[target_call_u64] error: could not write call registers\n");
+      }
+      else
+      {
+        DMN_Handle process_dmn = d_dmn_from_handle(process->handle);
+        DMN_Handle thread_dmn = d_dmn_from_handle(thread->handle);
+        DMN_TrapChunkList traps = {0};
+        DMN_Trap return_trap = {process_dmn, return_vaddr, 0};
+        dmn_trap_chunk_list_push(scratch.arena, &traps, 1, &return_trap);
+
+        B32 done = 0;
+        B32 success = 0;
+        U64 return_value = 0;
+        String8 error = {0};
+        for(U64 run_idx = 0; run_idx < 64 && !done; run_idx += 1)
+        {
+          DMN_Handle run_thread = thread_dmn;
+          DMN_RunCtrls run_ctrls = {0};
+          run_ctrls.priority_thread = thread_dmn;
+          run_ctrls.run_entities = &run_thread;
+          run_ctrls.run_entity_count = 1;
+          run_ctrls.run_entities_are_unfrozen = 1;
+          run_ctrls.ignore_previous_exception = 1;
+          run_ctrls.traps = traps;
+
+          DMN_EventList events = dmn_ctrl_run(scratch.arena, ctrl_ctx, &run_ctrls);
+          ins_atomic_u64_inc_eval(&d_ctrl_state->mem_gen);
+          ins_atomic_u64_inc_eval(&d_ctrl_state->reg_gen);
+          ins_atomic_u64_inc_eval(&d_ctrl_state->run_gen);
+
+          if(events.count == 0)
+          {
+            done = 1;
+            error = str8_lit("no event returned");
+          }
+          for(DMN_EventNode *n = events.first; n != 0 && !done; n = n->next)
+          {
+            DMN_Event *event = &n->v;
+            if(event->kind == DMN_EventKind_Breakpoint &&
+               dmn_handle_match(event->process, process_dmn) &&
+               dmn_handle_match(event->thread, thread_dmn) &&
+               event->address == return_vaddr)
+            {
+              ARM64_RegBlock *return_regs = push_array(scratch.arena, ARM64_RegBlock, 1);
+              if(d_thread_read_reg_block(thread->handle, return_regs))
+              {
+                return_value = return_regs->x0;
+                success = 1;
+              }
+              else
+              {
+                error = str8_lit("could not read return registers");
+              }
+              done = 1;
+            }
+            else switch(event->kind)
+            {
+              default:{}break;
+              case DMN_EventKind_Error:
+              case DMN_EventKind_ExitProcess:
+              case DMN_EventKind_ExitThread:
+              case DMN_EventKind_Trap:
+              case DMN_EventKind_Exception:
+              case DMN_EventKind_Halt:
+              {
+                done = 1;
+                error = push_str8f(scratch.arena, "unexpected event %S", dmn_event_kind_string_table[event->kind]);
+              }break;
+            }
+          }
+        }
+
+        B32 restored = d_thread_write_reg_block(thread->handle, saved_regs);
+        if(success && restored)
+        {
+          output = push_str8f(scratch.arena, "[target_call_u64] ok result:0x%I64x return_vaddr:0x%I64x\n", return_value, return_vaddr);
+        }
+        else if(success && !restored)
+        {
+          output = push_str8f(scratch.arena, "[target_call_u64] error: call returned 0x%I64x but original registers were not restored\n", return_value);
+        }
+        else if(error.size != 0 && restored)
+        {
+          output = push_str8f(scratch.arena, "[target_call_u64] error: %S\n", error);
+        }
+        else if(error.size != 0 && !restored)
+        {
+          output = push_str8f(scratch.arena, "[target_call_u64] error: %S; original registers were not restored\n", error);
+        }
+        else
+        {
+          output = push_str8f(scratch.arena, "[target_call_u64] error: call did not reach return trap within run limit%s\n",
+                              restored ? "" : "; original registers were not restored");
+        }
+      }
+    }
+  }
+
+  if(output.size != 0)
+  {
+    D_EventList evts = {0};
+    D_Event *evt = d_event_list_push(scratch.arena, &evts);
+    evt->kind = D_EventKind_DebugString;
+    evt->entity = msg->entity;
+    evt->parent = msg->parent;
+    evt->string = output;
+    d_c2u_push_events(&evts);
+  }
+
   scratch_end(scratch);
   ProfEnd();
 }
