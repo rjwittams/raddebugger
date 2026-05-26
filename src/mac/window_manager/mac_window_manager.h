@@ -114,6 +114,7 @@ global MAC_WM_State *mac_wm_state = 0;
 internal WM_Window mac_wm_handle_from_window(MAC_WM_Window *window);
 internal MAC_WM_Window *mac_wm_window_from_handle(WM_Window handle);
 internal MAC_WM_Window *mac_wm_window_from_ns_window(NSWindow *ns_window);
+internal void mac_wm_push_menu_command_for_window(MAC_WM_Window *window, String8 command_name);
 internal MAC_WM_ChromeMode mac_wm_chrome_mode_from_environment(void);
 internal MAC_WM_MenuMode mac_wm_menu_mode_from_environment(void);
 internal B32 mac_wm_chrome_mode_has_native_controls(MAC_WM_ChromeMode mode);
