@@ -53,6 +53,9 @@ D_CmdTable:     //               |        |              |                |     
   
   //- rjf: crash dump opening
   {OpenCrashDump                  0        0              0                0                `folder:\\"$input\\"`        FilePath           null              Nil            Null                    0  0  0  0  0  1  1                                                           FileOutline           "open_crash_dump"             "Open Crash Dump"                             "Opens a crash dump file and recreates debuggee state at the time of the crash."                                   ""                               ""                                                                                            }
+
+  //- experimental target call plumbing
+  {TargetCallU64                  0        0              0                0                ""                           Null               null              Nil            Null                    0  0  0  0  0  0  0                                                           Null                  "target_call_u64"             "Target Call U64"                             "Calls a function in a stopped target thread and reports a 64-bit return value."                                   ""                               ""                                                                                            }
 }
 
 @enum D_CmdKind:
