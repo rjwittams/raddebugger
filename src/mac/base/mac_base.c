@@ -965,6 +965,10 @@ file_open(AccessFlags flags, String8 path)
   {
     mac_flags |= O_APPEND;
   }
+  else if(flags & AccessFlag_Write)
+  {
+    mac_flags |= O_TRUNC;
+  }
   if(flags & (AccessFlag_Write|AccessFlag_Append))
   {
     mac_flags |= O_CREAT;
@@ -1389,9 +1393,25 @@ process_launch(ProcessLaunchParams *params)
   int file_actions_init_code = posix_spawn_file_actions_init(&file_actions);
   if(file_actions_init_code == 0)
   {
-    int stdout_code = posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdout_file.u64[0], STDOUT_FILENO);
-    int stderr_code = posix_spawn_file_actions_adddup2(&file_actions, (int)params->stderr_file.u64[0], STDERR_FILENO);
-    int stdin_code = posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdin_file.u64[0], STDIN_FILENO);
+    if(!file_match(params->stdout_file, file_zero()))
+    {
+      posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdout_file.u64[0], STDOUT_FILENO);
+    }
+    if(!file_match(params->stderr_file, file_zero()))
+    {
+      posix_spawn_file_actions_adddup2(&file_actions, (int)params->stderr_file.u64[0], STDERR_FILENO);
+    }
+    if(!file_match(params->stdin_file, file_zero()))
+    {
+      posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdin_file.u64[0], STDIN_FILENO);
+    }
+    if(params->path.size != 0)
+    {
+      Temp scratch = scratch_begin(0, 0);
+      String8 path_copy = push_cstr(scratch.arena, params->path);
+      posix_spawn_file_actions_addchdir_np(&file_actions, (char *)path_copy.str);
+      scratch_end(scratch);
+    }
     posix_spawnattr_t attr = {0};
     int attr_init_code = posix_spawnattr_init(&attr);
     if(attr_init_code == 0)
@@ -1401,9 +1421,13 @@ process_launch(ProcessLaunchParams *params)
       // package argv
       char **argv = push_array(scratch.arena, char *, params->cmd_line.node_count + 1);
       {
-        String8List l = str8_split_path(scratch.arena, params->path);
-        str8_list_push(scratch.arena, &l, params->cmd_line.first->string);
-        String8 path_to_exe = str8_path_list_join_by_style(scratch.arena, &l, PathStyle_SystemAbsolute);
+        String8 path_to_exe = params->cmd_line.first->string;
+        if(path_style_from_str8(path_to_exe) == PathStyle_Relative && params->path.size != 0)
+        {
+          String8List l = str8_split_path(scratch.arena, params->path);
+          str8_list_push(scratch.arena, &l, path_to_exe);
+          path_to_exe = str8_path_list_join_by_style(scratch.arena, &l, PathStyle_SystemAbsolute);
+        }
         argv[0] = (char *)path_to_exe.str;
         U64 arg_idx = 1;
         for EachNode(n, String8Node, params->cmd_line.first->next)
@@ -1454,6 +1478,7 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
 {
   pid_t pid = (pid_t)process.u64[0];
   B32 result = 0;
+  int status = 0;
   if(endt_us == 0)
   {
     if(kill(pid, 0) >= 0)
@@ -1461,7 +1486,6 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
       result = (errno == ENOENT);
       if(result)
       {
-        int status;
         waitpid(pid, &status, 0);
       }
     }
@@ -1470,10 +1494,13 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
   {
     for(;;)
     {
-      int status = 0;
       int w = waitpid(pid, &status, 0);
       if(w == -1)
       {
+        if(errno == EINTR)
+        {
+          continue;
+        }
         break;
       }
       if(WIFEXITED(status) || WIFSTOPPED(status) || WIFSIGNALED(status))
@@ -1486,6 +1513,21 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
   else
   {
     NotImplemented;
+  }
+  if(result && exit_code_out != 0)
+  {
+    if(WIFEXITED(status))
+    {
+      *exit_code_out = (U64)WEXITSTATUS(status);
+    }
+    else if(WIFSIGNALED(status))
+    {
+      *exit_code_out = (U64)(128 + WTERMSIG(status));
+    }
+    else if(WIFSTOPPED(status))
+    {
+      *exit_code_out = (U64)(128 + WSTOPSIG(status));
+    }
   }
   return result;
 }
