@@ -1790,6 +1790,35 @@ d_macho_unwind_info_data_from_module(Arena *arena, D_Handle module_handle)
   return result;
 }
 
+internal Rng1U64
+d_macho_function_start_voff_range_from_module_voff(D_Handle module_handle, U64 voff)
+{
+  Rng1U64 result = {0};
+  Access *access = access_open();
+  U64Array starts = d_info_from_module(access, module_handle)->macho_function_start_voffs;
+  if(starts.count != 0 && starts.v[0] <= voff)
+  {
+    U64 min_idx = 0;
+    U64 opl_idx = starts.count;
+    for(; min_idx + 1 < opl_idx;)
+    {
+      U64 mid_idx = (min_idx + opl_idx)/2;
+      if(starts.v[mid_idx] <= voff)
+      {
+        min_idx = mid_idx;
+      }
+      else
+      {
+        opl_idx = mid_idx;
+      }
+    }
+    result.min = starts.v[min_idx];
+    result.max = (min_idx + 1 < starts.count) ? starts.v[min_idx + 1] : max_U64;
+  }
+  access_close(access);
+  return result;
+}
+
 ////////////////////////////////
 //~ rjf: Unwinding Functions
 
@@ -2498,15 +2527,17 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
           MachO_UnwindInfoLookupResult lookup = {0};
           U64 pc_voff = start_ip - module_entity->vaddr_range.min;
           B32 compact_lookup_good = macho_unwind_info_lookup(module_info->macho_unwind_info_data, pc_voff, &lookup);
+          Rng1U64 function_voff_range = d_macho_function_start_voff_range_from_module_voff(module_entity->handle, pc_voff);
+          B32 function_start_good = (function_voff_range.max > function_voff_range.min);
+          B32 near_function_start = function_start_good ? (pc_voff - function_voff_range.min < 16) : (!compact_lookup_good ||
+                                                                                                      (lookup.voff_range.min <= pc_voff &&
+                                                                                                       pc_voff - lookup.voff_range.min < 16));
           U64 lr_vaddr = regs_arm64->lr >= 4 ? regs_arm64->lr - 4 : regs_arm64->lr;
           B32 lr_module_good = (d_module_from_process_vaddr(process_entity, lr_vaddr) != &d_entity_nil);
-          B32 near_unwind_entry = (!compact_lookup_good ||
-                                   (lookup.voff_range.min <= pc_voff &&
-                                    pc_voff - lookup.voff_range.min < 16));
           B32 prefer_entry_lr = (frame_node_count == 1 &&
                                  regs_arm64->lr != 0 &&
                                  lr_module_good &&
-                                 near_unwind_entry);
+                                 near_function_start);
           B32 compact_dwarf = (compact_lookup_good &&
                                (lookup.encoding & MACHO_UNWIND_ARM64_MODE_MASK) == MACHO_UNWIND_ARM64_MODE_DWARF);
           B32 compact_supported = compact_lookup_good && d_macho_compact_unwind_arm64_mode_is_supported(lookup.encoding);
@@ -3318,6 +3349,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
   //
   Arena *arena = arena_alloc();
   String8 macho_unwind_info_data = {0};
+  U64Array macho_function_start_voffs = {0};
   EH_UWND_ModuleUnwindInfo *synthesized_eh_unwind_info = 0;
   DMN_ModuleInfo synthesized_module_info = {0};
   if(module_info == 0 || module_info == &dmn_module_info_nil)
@@ -3433,6 +3465,15 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
             {
               synthesized_eh_unwind_info->header = eh_parse_frame_hdr(eh_frame_hdr_data, byte_size_from_arch(arch), &synthesized_eh_unwind_info->ptr_ctx);
             }
+          }
+        }
+        if(path.size != 0)
+        {
+          String8 file_data = data_from_file_path(scratch.arena, path);
+          if(file_data.size != 0)
+          {
+            MachO_Bin file_bin = macho_bin_from_data(scratch.arena, file_data);
+            macho_function_start_voffs = macho_function_start_voffs_from_data(arena, file_data, &file_bin);
           }
         }
       }
@@ -3565,6 +3606,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
     info.unwinder                     = unwinder;
     info.unwind_info                  = unwind_info_opaque;
     info.macho_unwind_info_data       = str8_copy(arena, macho_unwind_info_data);
+    info.macho_function_start_voffs   = macho_function_start_voffs;
     info.local_debug_info_path        = initial_debug_info_path;
     info.dbg_name                     = str8_copy(arena, str8_skip_last_slash(module_info->debug_info_path));
     info.dbg_guid                     = module_info->debug_info_guid;
