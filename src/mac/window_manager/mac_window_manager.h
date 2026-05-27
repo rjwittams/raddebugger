@@ -40,14 +40,13 @@ typedef struct MAC_WM_Window MAC_WM_Window;
 typedef enum MAC_WM_ChromeMode
 {
   MAC_WM_ChromeMode_Integrated,
-  MAC_WM_ChromeMode_Native,
   MAC_WM_ChromeMode_Custom,
 }
 MAC_WM_ChromeMode;
 
 typedef enum MAC_WM_MenuMode
 {
-  MAC_WM_MenuMode_Self,
+  MAC_WM_MenuMode_PerWindow,
   MAC_WM_MenuMode_Native,
 }
 MAC_WM_MenuMode;
@@ -100,6 +99,7 @@ struct MAC_WM_State
   MAC_WM_Window *first_window;
   MAC_WM_Window *last_window;
   MAC_WM_Window *free_window;
+  MAC_WM_Window *focused_window;
   MAC_WM_ChromeMode chrome_mode;
   MAC_WM_MenuMode menu_mode;
   MAC_WM_MenuTarget *menu_target;
@@ -114,10 +114,18 @@ global MAC_WM_State *mac_wm_state = 0;
 internal WM_Window mac_wm_handle_from_window(MAC_WM_Window *window);
 internal MAC_WM_Window *mac_wm_window_from_handle(WM_Window handle);
 internal MAC_WM_Window *mac_wm_window_from_ns_window(NSWindow *ns_window);
+internal B32 mac_wm_window_is_live(MAC_WM_Window *window);
+internal void mac_wm_set_focused_window(MAC_WM_Window *window);
+internal MAC_WM_Window *mac_wm_menu_command_target_window(void);
+internal B32 mac_wm_event_type_should_activate_window(NSEventType type);
+internal void mac_wm_activate_window(MAC_WM_Window *window);
+internal MAC_WM_Window *mac_wm_window_to_focus_after_close(MAC_WM_Window *window);
 internal void mac_wm_push_menu_command_for_window(MAC_WM_Window *window, String8 command_name);
-internal MAC_WM_ChromeMode mac_wm_chrome_mode_from_environment(void);
-internal MAC_WM_MenuMode mac_wm_menu_mode_from_environment(void);
+internal MAC_WM_ChromeMode mac_wm_chrome_mode_from_window_decorations(B32 enabled);
+internal MAC_WM_MenuMode mac_wm_menu_mode_from_native_menu_bar(B32 enabled);
 internal B32 mac_wm_chrome_mode_has_native_controls(MAC_WM_ChromeMode mode);
+internal void mac_wm_apply_chrome_mode_to_window(MAC_WM_Window *window, MAC_WM_ChromeMode mode);
+internal void mac_wm_apply_menu_mode(MAC_WM_MenuMode mode);
 internal void mac_wm_push_menu_command(String8 command_name);
 internal B32 mac_wm_window_pos_is_native_title_bar_control_area(MAC_WM_Window *window, Vec2F32 pos);
 internal B32 mac_wm_window_pos_is_title_bar_client_area(MAC_WM_Window *window, Vec2F32 pos);
