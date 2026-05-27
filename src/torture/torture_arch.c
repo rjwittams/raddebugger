@@ -100,6 +100,17 @@ TEST(step_out_return_exit_points_do_not_have_static_traps)
   T_Ok(trap_vaddr == 0x3000);
 }
 
+TEST(step_out_return_traps_use_link_register_continuation)
+{
+  X64_RegBlock x64_regs = {0};
+  x64_regs.rip = 0x1000;
+  T_Ok(d_step_out_trap_vaddr_from_return_frame(Arch_x64, &x64_regs) == 0x1000);
+
+  ARM64_RegBlock arm64_regs = {0};
+  arm64_regs.pc = 0x2000;
+  T_Ok(d_step_out_trap_vaddr_from_return_frame(Arch_arm64, &arm64_regs) == 0x2004);
+}
+
 TEST(arm64_rdi_dwarf_mappings)
 {
   T_Ok(rdi_arch_from_arch(Arch_arm64) == RDI_Arch_ARM64);
