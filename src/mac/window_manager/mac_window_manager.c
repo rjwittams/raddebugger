@@ -53,9 +53,8 @@
     }
     if(live_window_count > 1)
     {
-      MAC_WM_Window *focus_after_close = mac_wm_window_to_focus_after_close(window);
-      mac_wm_activate_window(focus_after_close);
-      mac_wm_push_menu_command_for_window(window, str8_lit("close_window"));
+      mac_wm_activate_window(window);
+      mac_wm_push_menu_command_for_window_at_pos(window, str8_lit("window_close_menu"), mac_wm_close_menu_pos_from_window(window));
     }
     else
     {
@@ -210,6 +209,18 @@ mac_wm_window_to_focus_after_close(MAC_WM_Window *window)
   return result;
 }
 
+internal Vec2F32
+mac_wm_close_menu_pos_from_window(MAC_WM_Window *window)
+{
+  Vec2F32 result = {0.f, 28.f};
+  if(window != 0 && window->ns_window != 0)
+  {
+    F32 title_bar_height = Max(window->custom_border_title_thickness, 28.f);
+    result = v2f32(0.f, title_bar_height);
+  }
+  return result;
+}
+
 internal MAC_WM_ChromeMode
 mac_wm_chrome_mode_from_window_decorations(B32 enabled)
 {
@@ -267,7 +278,7 @@ mac_wm_apply_chrome_mode_to_window(MAC_WM_Window *window, MAC_WM_ChromeMode mode
 }
 
 internal void
-mac_wm_push_menu_command_for_window(MAC_WM_Window *window, String8 command_name)
+mac_wm_push_menu_command_for_window_at_pos(MAC_WM_Window *window, String8 command_name, Vec2F32 pos)
 {
   if(mac_wm_state != 0 && window != 0)
   {
@@ -283,9 +294,16 @@ mac_wm_push_menu_command_for_window(MAC_WM_Window *window, String8 command_name)
     }
     node->command_name = push_str8_copy(mac_wm_state->arena, command_name);
     node->window = mac_wm_handle_from_window(window);
+    node->pos = pos;
     SLLQueuePush(mac_wm_state->first_pending_menu_command, mac_wm_state->last_pending_menu_command, node);
     wm_send_wakeup_event();
   }
+}
+
+internal void
+mac_wm_push_menu_command_for_window(MAC_WM_Window *window, String8 command_name)
+{
+  mac_wm_push_menu_command_for_window_at_pos(window, command_name, v2f32(0, 0));
 }
 
 internal void
@@ -1132,6 +1150,8 @@ wm_get_events(Arena *arena, B32 wait)
           key = WM_Key_MiddleMouseButton;
         }
         Vec2F32 pos = mac_wm_client_pos_from_ns_point(window, [event locationInWindow]);
+        B32 handled_by_native_title_bar_control = (window != 0 &&
+                                                   mac_wm_window_pos_is_native_title_bar_control_area(window, pos));
         B32 handled_by_chrome = 0;
         if(window != 0 &&
            window->custom_border &&
@@ -1144,7 +1164,7 @@ wm_get_events(Arena *arena, B32 wait)
           handled_by_chrome = 1;
           send_to_nsapp = 0;
         }
-        if(!handled_by_chrome)
+        if(!handled_by_chrome && !handled_by_native_title_bar_control)
         {
           WM_Event *wm_event = mac_wm_push_event(arena, &result, is_release ? WM_EventKind_Release : WM_EventKind_Press, window);
           wm_event->modifiers = mac_wm_modifiers_from_ns_flags([event modifierFlags]);
@@ -1199,6 +1219,7 @@ wm_get_events(Arena *arena, B32 wait)
     WM_Event *event = wm_event_list_push_new(arena, &result, WM_EventKind_MenuCommand);
     event->window = node->window;
     event->string = push_str8_copy(arena, node->command_name);
+    event->pos = node->pos;
     SLLStackPush(mac_wm_state->free_menu_command_node, node);
   }
   mac_wm_state->first_pending_menu_command = 0;
