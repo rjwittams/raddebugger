@@ -62,6 +62,14 @@ dmn_thread_call(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread, DMN_ThreadCal
   return result;
 }
 
+internal DMN_TLSAddressResult
+dmn_tls_vaddr_from_thread(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread, U64 platform_tls_vaddr)
+{
+  DMN_TLSAddressResult result = {0};
+  result.error = str8_lit("platform TLS address resolution is unsupported by this demon backend");
+  return result;
+}
+
 internal void
 dmn_halt(U64 code, U64 user_data)
 {

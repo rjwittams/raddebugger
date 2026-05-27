@@ -76,6 +76,7 @@ d_string_from_event_kind(D_EventKind kind)
     case D_EventKind_ModuleDebugInfoPathChange:         { result = str8_lit("ModuleDebugInfoPathChange");}break;
     case D_EventKind_DebugString:                       { result = str8_lit("DebugString");}break;
     case D_EventKind_ThreadName:                        { result = str8_lit("ThreadName");}break;
+    case D_EventKind_PlatformTLSResolved:               { result = str8_lit("PlatformTLSResolved");}break;
     case D_EventKind_MemReserve:                        { result = str8_lit("MemReserve");}break;
     case D_EventKind_MemCommit:                         { result = str8_lit("MemCommit");}break;
     case D_EventKind_MemDecommit:                       { result = str8_lit("MemDecommit");}break;
@@ -100,6 +101,8 @@ d_string_from_msg_kind(D_MsgKind kind)
     case D_MsgKind_Run:                       {result = str8_lit("Run");}break;
     case D_MsgKind_SingleStep:                {result = str8_lit("SingleStep");}break;
     case D_MsgKind_TargetCallU64:             {result = str8_lit("TargetCallU64");}break;
+    case D_MsgKind_DarwinTLVProbe:            {result = str8_lit("DarwinTLVProbe");}break;
+    case D_MsgKind_ResolvePlatformTLS:        {result = str8_lit("ResolvePlatformTLS");}break;
     case D_MsgKind_SetUserEntryPoints:        {result = str8_lit("SetUserEntryPoints");}break;
     case D_MsgKind_SetModuleDebugInfoPath:    {result = str8_lit("SetModuleDebugInfoPath");}break;
   }
@@ -4373,6 +4376,8 @@ d_ctrl_thread__entry_point(void *p)
           case D_MsgKind_Run:               {d_ctrl_thread__run                 (ctrl_ctx, msg);}break;
           case D_MsgKind_SingleStep:        {d_ctrl_thread__single_step         (ctrl_ctx, msg);}break;
           case D_MsgKind_TargetCallU64:     {d_ctrl_thread__target_call_u64     (ctrl_ctx, msg);}break;
+          case D_MsgKind_DarwinTLVProbe:    {d_ctrl_thread__darwin_tlv_probe    (ctrl_ctx, msg);}break;
+          case D_MsgKind_ResolvePlatformTLS:{d_ctrl_thread__resolve_platform_tls(ctrl_ctx, msg);}break;
           
           //- rjf: configuration
           case D_MsgKind_SetUserEntryPoints:
@@ -8101,6 +8106,131 @@ d_ctrl_thread__target_call_u64(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
     d_c2u_push_events(&evts);
   }
 
+  scratch_end(scratch);
+  ProfEnd();
+}
+
+internal void
+d_ctrl_thread__darwin_tlv_probe(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
+{
+  ProfBeginFunction();
+  Temp scratch = scratch_begin(0, 0);
+  D_Entity *thread = d_entity_from_handle(msg->entity);
+  D_Entity *process = d_entity_ancestor_from_kind(thread, D_EntityKind_Process);
+  String8 output = {0};
+  if(thread == &d_entity_nil || thread->kind != D_EntityKind_Thread)
+  {
+    output = str8_lit("[darwin_tlv_probe] error: thread not found\n");
+  }
+  else if(process == &d_entity_nil || process->kind != D_EntityKind_Process)
+  {
+    output = str8_lit("[darwin_tlv_probe] error: process not found\n");
+  }
+  else if(OperatingSystem_CURRENT != OperatingSystem_Mac || (thread->arch != Arch_arm64 && thread->arch != Arch_x64))
+  {
+    output = push_str8f(scratch.arena, "[darwin_tlv_probe] error: unsupported target arch/os arch:%S os:%S\n",
+                        string_from_arch(thread->arch), string_from_operating_system(OperatingSystem_CURRENT));
+  }
+  else if(msg->vaddr == 0)
+  {
+    output = str8_lit("[darwin_tlv_probe] error: TLV descriptor address is zero\n");
+  }
+  else
+  {
+    DMN_Handle process_dmn = d_dmn_from_handle(process->handle);
+    U64 descriptor_vaddr = msg->vaddr;
+    DMN_TLSAddressResult tls_address = dmn_tls_vaddr_from_thread(scratch.arena, ctrl_ctx, d_dmn_from_handle(thread->handle), descriptor_vaddr);
+    ins_atomic_u64_inc_eval(&d_ctrl_state->mem_gen);
+    ins_atomic_u64_inc_eval(&d_ctrl_state->reg_gen);
+    ins_atomic_u64_inc_eval(&d_ctrl_state->run_gen);
+    if(!tls_address.success)
+    {
+      output = push_str8f(scratch.arena, "[darwin_tlv_probe] error: %S\n",
+                          tls_address.error.size != 0 ? tls_address.error : str8_lit("platform TLS resolution failed"));
+    }
+    else
+    {
+      U32 value_size = (msg->target_call_arg_count != 0 && msg->target_call_args[0] != 0) ? (U32)msg->target_call_args[0] : 4;
+      value_size = Clamp(1, value_size, 16);
+      U8 value_bytes[16] = {0};
+      U64 value_vaddr = tls_address.vaddr;
+      U64 value_read_size = dmn_process_read(process_dmn, r1u64(value_vaddr, value_vaddr+value_size), value_bytes);
+      if(value_read_size != value_size)
+      {
+        output = push_str8f(scratch.arena,
+                            "[darwin_tlv_probe] error: resolved descriptor:0x%I64x value_vaddr:0x%I64x but could not read %u bytes\n",
+                            descriptor_vaddr, value_vaddr, value_size);
+      }
+      else
+      {
+        String8List lines = {0};
+        str8_list_pushf(scratch.arena, &lines,
+                        "[darwin_tlv_probe] ok descriptor:0x%I64x value_vaddr:0x%I64x size:%u bytes:",
+                        descriptor_vaddr, value_vaddr, value_size);
+        for(U32 idx = 0; idx < value_size; idx += 1)
+        {
+          str8_list_pushf(scratch.arena, &lines, "%s%02x", idx == 0 ? "" : " ", value_bytes[idx]);
+        }
+        if(value_size >= 4)
+        {
+          U32 u32 = 0;
+          MemoryCopy(&u32, value_bytes, sizeof(u32));
+          str8_list_pushf(scratch.arena, &lines, " u32:0x%x s32:%d", u32, (S32)u32);
+        }
+        if(value_size >= 8)
+        {
+          U64 u64 = 0;
+          MemoryCopy(&u64, value_bytes, sizeof(u64));
+          str8_list_pushf(scratch.arena, &lines, " u64:0x%I64x", u64);
+        }
+        str8_list_push(scratch.arena, &lines, str8_lit("\n"));
+        output = str8_list_join(scratch.arena, &lines, 0);
+      }
+    }
+  }
+  if(output.size != 0)
+  {
+    D_EventList evts = {0};
+    D_Event *evt = d_event_list_push(scratch.arena, &evts);
+    evt->kind = D_EventKind_DebugString;
+    evt->entity = msg->entity;
+    evt->parent = msg->parent;
+    evt->string = output;
+    d_c2u_push_events(&evts);
+  }
+  scratch_end(scratch);
+  ProfEnd();
+}
+
+internal void
+d_ctrl_thread__resolve_platform_tls(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
+{
+  ProfBeginFunction();
+  Temp scratch = scratch_begin(0, 0);
+  D_Entity *thread = d_entity_from_handle(msg->entity);
+  U64 platform_tls_vaddr = msg->vaddr;
+  U64 resolved_vaddr = 0;
+  B32 success = 0;
+  if(thread != &d_entity_nil && thread->kind == D_EntityKind_Thread && platform_tls_vaddr != 0)
+  {
+    DMN_TLSAddressResult tls_address = dmn_tls_vaddr_from_thread(scratch.arena, ctrl_ctx, d_dmn_from_handle(thread->handle), platform_tls_vaddr);
+    ins_atomic_u64_inc_eval(&d_ctrl_state->mem_gen);
+    ins_atomic_u64_inc_eval(&d_ctrl_state->reg_gen);
+    ins_atomic_u64_inc_eval(&d_ctrl_state->run_gen);
+    if(tls_address.success)
+    {
+      success = 1;
+      resolved_vaddr = tls_address.vaddr;
+    }
+  }
+  D_EventList evts = {0};
+  D_Event *evt = d_event_list_push(scratch.arena, &evts);
+  evt->kind = D_EventKind_PlatformTLSResolved;
+  evt->msg_id = msg->msg_id;
+  evt->entity = msg->entity;
+  evt->u64_code = success;
+  evt->vaddr_rng = r1u64(platform_tls_vaddr, resolved_vaddr);
+  d_c2u_push_events(&evts);
   scratch_end(scratch);
   ProfEnd();
 }
