@@ -538,4 +538,3 @@ str8_lit_comp("weak"),
 };
 
 C_LINKAGE_END
-

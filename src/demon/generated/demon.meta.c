@@ -39,4 +39,3 @@ str8_lit_comp("CppThrow"),
 };
 
 C_LINKAGE_END
-

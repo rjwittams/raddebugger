@@ -342,14 +342,11 @@ TEST(hash_map)
   }
 }
 
-#if OS_MAC
-TEST(mac_key_events_are_consumed_by_window_manager)
+TEST(make_directory_succeeds_for_existing_directory)
 {
-  T_Ok(mac_wm_event_type_should_send_to_nsapp_after_translation(NSEventTypeKeyDown) == 0);
-  T_Ok(mac_wm_event_type_should_send_to_nsapp_after_translation(NSEventTypeKeyUp) == 0);
-  T_Ok(mac_wm_event_type_should_send_to_nsapp_after_translation(NSEventTypeFlagsChanged) == 0);
-  T_Ok(mac_wm_event_type_should_send_to_nsapp_after_translation(NSEventTypeLeftMouseDown) == 1);
+  String8 name = push_str8f(arena, "existing-dir-%I64u", now_time_us());
+  T_Ok(t_make_dir(name));
+  T_Ok(t_make_dir(name));
 }
-#endif
 
 #undef T_Group

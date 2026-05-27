@@ -266,6 +266,8 @@ internal Vec2F32        wm_mouse_from_window(WM_Window window);
 
 internal void           wm_set_main_menu(WM_MenuArray menu_array);
 internal B32            wm_application_menu_bar_is_native(void);
+internal void           wm_set_preferred_window_decorations(B32 enabled);
+internal void           wm_set_preferred_native_menu_bar(B32 enabled);
 
 ////////////////////////////////
 //~ rjf: @os_hooks Cursors (Implemented Per-OS)

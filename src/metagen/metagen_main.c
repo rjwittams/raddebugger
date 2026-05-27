@@ -616,7 +616,11 @@ entry_point(CmdLine *cmdline)
               }
               if(!layer->is_library)
               {
-                fprintf(c, "C_LINKAGE_END\n\n");
+                fprintf(c, "C_LINKAGE_END\n");
+                if(layer->c_functions.first != 0 || layer->c_footer.first != 0)
+                {
+                  fprintf(c, "\n");
+                }
               }
             }
             for(String8Node *n = layer->c_functions.first; n != 0; n = n->next)
