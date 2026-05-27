@@ -11397,7 +11397,18 @@ rd_frame(void)
       if(!take && event->kind == WM_EventKind_MenuCommand && event->string.size != 0)
       {
         take = 1;
-        rd_cmd(RD_CmdKind_RunCommand, .cmd_name = event->string);
+        if(ws != &rd_nil_window_state && str8_match(event->string, str8_lit("window_close_menu"), 0))
+        {
+          UI_State *last_ui = ui_get_selected_state();
+          ui_select_state(ws->ui);
+          UI_Key close_ctx_menu_key = ui_key_from_stringf(ui_key_zero(), "###close_ctx_menu");
+          ui_ctx_menu_open(close_ctx_menu_key, ui_key_zero(), event->pos);
+          ui_select_state(last_ui);
+        }
+        else
+        {
+          rd_cmd(RD_CmdKind_RunCommand, .cmd_name = event->string);
+        }
         rd_request_frame();
       }
 

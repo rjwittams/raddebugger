@@ -57,6 +57,7 @@ struct MAC_WM_MenuCommandNode
   MAC_WM_MenuCommandNode *next;
   WM_Window window;
   String8 command_name;
+  Vec2F32 pos;
 };
 
 @interface MAC_WM_WindowDelegate : NSObject<NSWindowDelegate>
@@ -120,6 +121,8 @@ internal MAC_WM_Window *mac_wm_menu_command_target_window(void);
 internal B32 mac_wm_event_type_should_activate_window(NSEventType type);
 internal void mac_wm_activate_window(MAC_WM_Window *window);
 internal MAC_WM_Window *mac_wm_window_to_focus_after_close(MAC_WM_Window *window);
+internal Vec2F32 mac_wm_close_menu_pos_from_window(MAC_WM_Window *window);
+internal void mac_wm_push_menu_command_for_window_at_pos(MAC_WM_Window *window, String8 command_name, Vec2F32 pos);
 internal void mac_wm_push_menu_command_for_window(MAC_WM_Window *window, String8 command_name);
 internal MAC_WM_ChromeMode mac_wm_chrome_mode_from_window_decorations(B32 enabled);
 internal MAC_WM_MenuMode mac_wm_menu_mode_from_native_menu_bar(B32 enabled);
