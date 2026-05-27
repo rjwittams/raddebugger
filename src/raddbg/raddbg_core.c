@@ -12308,6 +12308,33 @@ rd_frame(void)
   }
   
   //////////////////////////////
+  //////////////////////////////
+  //- apply window manager preferences from config
+  //
+  {
+    local_persist B32 initialized = 0;
+    local_persist B32 last_mac_window_decorations = 0;
+    local_persist B32 last_mac_native_menu_bar = 0;
+    B32 mac_window_decorations = rd_setting_b32_from_name(str8_lit("mac_window_decorations"));
+    B32 mac_native_menu_bar = rd_setting_b32_from_name(str8_lit("mac_native_menu_bar"));
+    if(!initialized || last_mac_window_decorations != mac_window_decorations)
+    {
+      wm_set_preferred_window_decorations(mac_window_decorations);
+      last_mac_window_decorations = mac_window_decorations;
+    }
+    if(!initialized || last_mac_native_menu_bar != mac_native_menu_bar)
+    {
+      wm_set_preferred_native_menu_bar(mac_native_menu_bar);
+      if(wm_application_menu_bar_is_native())
+      {
+        rd_wm_set_main_menu();
+      }
+      last_mac_native_menu_bar = mac_native_menu_bar;
+    }
+    initialized = 1;
+  }
+
+  //////////////////////////////
   //- rjf: consume events
   //
   ProfScope("consume events")

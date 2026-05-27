@@ -51,7 +51,16 @@
     {
       live_window_count += 1;
     }
-    mac_wm_push_menu_command_for_window(window, live_window_count > 1 ? str8_lit("close_window") : str8_lit("exit"));
+    if(live_window_count > 1)
+    {
+      MAC_WM_Window *focus_after_close = mac_wm_window_to_focus_after_close(window);
+      mac_wm_activate_window(focus_after_close);
+      mac_wm_push_menu_command_for_window(window, str8_lit("close_window"));
+    }
+    else
+    {
+      mac_wm_push_menu_command_for_window(window, str8_lit("exit"));
+    }
   }
   return NO;
 }
@@ -61,6 +70,10 @@
   {
     window->lose_focus_requested = 1;
   }
+}
+- (void)windowDidBecomeKey:(NSNotification *)notification
+{
+  mac_wm_set_focused_window(window);
 }
 - (void)dealloc
 {
@@ -103,67 +116,154 @@ mac_wm_window_from_ns_window(NSWindow *ns_window)
   {
     ns_window = [NSApp keyWindow];
   }
-  for(MAC_WM_Window *window = mac_wm_state->first_window; window != 0; window = window->next)
+  if(ns_window != 0)
   {
-    if(window->ns_window == ns_window)
+    for(MAC_WM_Window *window = mac_wm_state->first_window; window != 0; window = window->next)
     {
-      result = window;
-      break;
-    }
-  }
-  return result;
-}
-
-internal MAC_WM_ChromeMode
-mac_wm_chrome_mode_from_environment(void)
-{
-  MAC_WM_ChromeMode result = MAC_WM_ChromeMode_Integrated;
-  char *env = getenv("RADDBG_MAC_CHROME");
-  if(env != 0)
-  {
-    String8 string = str8_cstring(env);
-    if(str8_match(string, str8_lit("native"), 0))
-    {
-      result = MAC_WM_ChromeMode_Native;
-    }
-    else if(str8_match(string, str8_lit("custom"), 0))
-    {
-      result = MAC_WM_ChromeMode_Custom;
-    }
-    else if(str8_match(string, str8_lit("integrated"), 0))
-    {
-      result = MAC_WM_ChromeMode_Integrated;
-    }
-  }
-  return result;
-}
-
-internal MAC_WM_MenuMode
-mac_wm_menu_mode_from_environment(void)
-{
-  MAC_WM_MenuMode result = MAC_WM_MenuMode_Self;
-  char *env = getenv("RADDBG_MAC_MENU");
-  if(env != 0)
-  {
-    String8 string = str8_cstring(env);
-    if(str8_match(string, str8_lit("native"), 0))
-    {
-      result = MAC_WM_MenuMode_Native;
-    }
-    else if(str8_match(string, str8_lit("self"), 0))
-    {
-      result = MAC_WM_MenuMode_Self;
+      if(window->ns_window == ns_window)
+      {
+        result = window;
+        break;
+      }
     }
   }
   return result;
 }
 
 internal B32
+mac_wm_window_is_live(MAC_WM_Window *window)
+{
+  B32 result = 0;
+  if(mac_wm_state != 0 && window != 0)
+  {
+    for(MAC_WM_Window *w = mac_wm_state->first_window; w != 0; w = w->next)
+    {
+      if(w == window)
+      {
+        result = 1;
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+internal void
+mac_wm_set_focused_window(MAC_WM_Window *window)
+{
+  if(mac_wm_state != 0 && (window == 0 || mac_wm_window_is_live(window)))
+  {
+    mac_wm_state->focused_window = window;
+  }
+}
+
+internal MAC_WM_Window *
+mac_wm_menu_command_target_window(void)
+{
+  MAC_WM_Window *result = 0;
+  if(mac_wm_state != 0)
+  {
+    result = mac_wm_state->focused_window;
+    if(!mac_wm_window_is_live(result))
+    {
+      result = mac_wm_window_from_ns_window([NSApp keyWindow]);
+    }
+    if(result == 0)
+    {
+      result = mac_wm_window_from_ns_window([NSApp mainWindow]);
+    }
+  }
+  return result;
+}
+
+internal B32
+mac_wm_event_type_should_activate_window(NSEventType type)
+{
+  B32 result = (type == NSEventTypeLeftMouseDown ||
+                type == NSEventTypeRightMouseDown ||
+                type == NSEventTypeOtherMouseDown);
+  return result;
+}
+
+internal void
+mac_wm_activate_window(MAC_WM_Window *window)
+{
+  if(window != 0 && window->ns_window != 0)
+  {
+    mac_wm_set_focused_window(window);
+    [window->ns_window makeKeyAndOrderFront:0];
+  }
+}
+
+internal MAC_WM_Window *
+mac_wm_window_to_focus_after_close(MAC_WM_Window *window)
+{
+  MAC_WM_Window *result = 0;
+  if(window != 0)
+  {
+    result = window->next;
+    if(result == 0)
+    {
+      result = window->prev;
+    }
+  }
+  return result;
+}
+
+internal MAC_WM_ChromeMode
+mac_wm_chrome_mode_from_window_decorations(B32 enabled)
+{
+  MAC_WM_ChromeMode result = enabled ? MAC_WM_ChromeMode_Integrated : MAC_WM_ChromeMode_Custom;
+  return result;
+}
+
+internal MAC_WM_MenuMode
+mac_wm_menu_mode_from_native_menu_bar(B32 enabled)
+{
+  MAC_WM_MenuMode result = enabled ? MAC_WM_MenuMode_Native : MAC_WM_MenuMode_PerWindow;
+  return result;
+}
+
+internal B32
 mac_wm_chrome_mode_has_native_controls(MAC_WM_ChromeMode mode)
 {
-  B32 result = (mode == MAC_WM_ChromeMode_Integrated ||
-                mode == MAC_WM_ChromeMode_Native);
+  B32 result = (mode == MAC_WM_ChromeMode_Integrated);
   return result;
+}
+
+internal void
+mac_wm_apply_chrome_mode_to_window(MAC_WM_Window *window, MAC_WM_ChromeMode mode)
+{
+  if(window != 0 && window->ns_window != 0)
+  {
+    window->chrome_mode = mode;
+    NSUInteger style_mask = [window->ns_window styleMask];
+    if(window->custom_border)
+    {
+      style_mask |= NSWindowStyleMaskFullSizeContentView;
+    }
+    else
+    {
+      style_mask &= ~NSWindowStyleMaskFullSizeContentView;
+    }
+    [window->ns_window setStyleMask:style_mask];
+
+    if(window->custom_border)
+    {
+      [window->ns_window setTitleVisibility:NSWindowTitleHidden];
+      [window->ns_window setTitlebarAppearsTransparent:YES];
+    }
+    else
+    {
+      [window->ns_window setTitleVisibility:NSWindowTitleVisible];
+      [window->ns_window setTitlebarAppearsTransparent:NO];
+    }
+
+    B32 native_buttons_hidden = (window->custom_border && mode == MAC_WM_ChromeMode_Custom);
+    [[window->ns_window standardWindowButton:NSWindowCloseButton] setHidden:native_buttons_hidden];
+    [[window->ns_window standardWindowButton:NSWindowMiniaturizeButton] setHidden:native_buttons_hidden];
+    [[window->ns_window standardWindowButton:NSWindowZoomButton] setHidden:native_buttons_hidden];
+  }
 }
 
 internal void
@@ -191,7 +291,7 @@ mac_wm_push_menu_command_for_window(MAC_WM_Window *window, String8 command_name)
 internal void
 mac_wm_push_menu_command(String8 command_name)
 {
-  mac_wm_push_menu_command_for_window(mac_wm_window_from_ns_window([NSApp keyWindow]), command_name);
+  mac_wm_push_menu_command_for_window(mac_wm_menu_command_target_window(), command_name);
 }
 
 internal B32
@@ -474,13 +574,23 @@ mac_wm_window_alloc(void)
 internal void
 mac_wm_window_release(MAC_WM_Window *window)
 {
+  MAC_WM_Window *focus_after_close = 0;
+  if(mac_wm_state->focused_window == window)
+  {
+    focus_after_close = mac_wm_window_to_focus_after_close(window);
+  }
   DLLRemove(mac_wm_state->first_window, mac_wm_state->last_window, window);
+  if(mac_wm_state->focused_window == window)
+  {
+    mac_wm_state->focused_window = 0;
+  }
   [window->delegate macLiveResizeStopDisplayLink];
   [window->ns_window setDelegate:0];
   [window->ns_window close];
   window->ns_window = 0;
   window->delegate = 0;
   SLLStackPush(mac_wm_state->free_window, window);
+  mac_wm_activate_window(focus_after_close);
 }
 
 ////////////////////////////////
@@ -495,13 +605,14 @@ wm_init(void)
   mac_wm_state->gfx_info.double_click_time = 0.5f;
   mac_wm_state->gfx_info.caret_blink_time = 0.5f;
   mac_wm_state->gfx_info.default_refresh_rate = 60.f;
-  mac_wm_state->chrome_mode = mac_wm_chrome_mode_from_environment();
-  mac_wm_state->menu_mode = mac_wm_menu_mode_from_environment();
+  mac_wm_state->chrome_mode = mac_wm_chrome_mode_from_window_decorations(1);
+  mac_wm_state->menu_mode = mac_wm_menu_mode_from_native_menu_bar(0);
   mac_wm_state->menu_target = [MAC_WM_MenuTarget new];
 
   [NSApplication sharedApplication];
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
   [NSApp finishLaunching];
+  mac_wm_apply_menu_mode(mac_wm_state->menu_mode);
 }
 
 ////////////////////////////////
@@ -556,7 +667,7 @@ wm_window_open(Rng2F32 rect, WM_WindowFlags flags, String8 title)
                            NSWindowStyleMaskClosable |
                            NSWindowStyleMaskMiniaturizable |
                            NSWindowStyleMaskResizable);
-  if(custom_border && chrome_mode != MAC_WM_ChromeMode_Native)
+  if(custom_border)
   {
     style_mask |= NSWindowStyleMaskFullSizeContentView;
   }
@@ -571,17 +682,7 @@ wm_window_open(Rng2F32 rect, WM_WindowFlags flags, String8 title)
   [window->ns_window setDelegate:window->delegate];
   [window->ns_window setReleasedWhenClosed:NO];
   [window->ns_window setAcceptsMouseMovedEvents:YES];
-  if(custom_border && chrome_mode != MAC_WM_ChromeMode_Native)
-  {
-    [window->ns_window setTitleVisibility:NSWindowTitleHidden];
-    [window->ns_window setTitlebarAppearsTransparent:YES];
-  }
-  if(custom_border && chrome_mode == MAC_WM_ChromeMode_Custom)
-  {
-    [[window->ns_window standardWindowButton:NSWindowCloseButton] setHidden:YES];
-    [[window->ns_window standardWindowButton:NSWindowMiniaturizeButton] setHidden:YES];
-    [[window->ns_window standardWindowButton:NSWindowZoomButton] setHidden:YES];
-  }
+  mac_wm_apply_chrome_mode_to_window(window, chrome_mode);
   wm_window_set_title(mac_wm_handle_from_window(window), title);
   return mac_wm_handle_from_window(window);
 }
@@ -615,6 +716,7 @@ wm_window_first_paint(WM_Window handle)
   MAC_WM_Window *window = mac_wm_window_from_handle(handle);
   if(window != 0)
   {
+    mac_wm_set_focused_window(window);
     [window->ns_window makeKeyAndOrderFront:0];
     [NSApp activateIgnoringOtherApps:YES];
   }
@@ -626,6 +728,7 @@ wm_window_focus(WM_Window handle)
   MAC_WM_Window *window = mac_wm_window_from_handle(handle);
   if(window != 0)
   {
+    mac_wm_set_focused_window(window);
     [window->ns_window makeKeyAndOrderFront:0];
   }
 }
@@ -947,6 +1050,10 @@ wm_get_events(Arena *arena, B32 wait)
     MAC_WM_Window *window = mac_wm_window_from_ns_window([event window]);
     NSEventType type = [event type];
     B32 send_to_nsapp = 1;
+    if(mac_wm_event_type_should_activate_window(type))
+    {
+      mac_wm_activate_window(window);
+    }
     switch(type)
     {
       default:{}break;
@@ -1028,7 +1135,6 @@ wm_get_events(Arena *arena, B32 wait)
         B32 handled_by_chrome = 0;
         if(window != 0 &&
            window->custom_border &&
-           window->chrome_mode != MAC_WM_ChromeMode_Native &&
            type == NSEventTypeLeftMouseDown &&
            pos.y <= window->custom_border_title_thickness &&
            !mac_wm_window_pos_is_native_title_bar_control_area(window, pos) &&
@@ -1143,6 +1249,38 @@ mac_wm_persistent_ns_string_from_string8(String8 string)
 }
 
 internal void
+mac_wm_set_minimal_main_menu(void)
+{
+  NSMenu *main_menu = [[NSMenu alloc] initWithTitle:@""];
+  NSMenuItem *app_menu_item = [[NSMenuItem alloc] initWithTitle:@"" action:0 keyEquivalent:@""];
+  [main_menu addItem:app_menu_item];
+
+  NSMenu *app_menu = [[NSMenu alloc] initWithTitle:@"RAD Debugger"];
+  NSMenuItem *quit_item = [[NSMenuItem alloc] initWithTitle:@"Quit RAD Debugger"
+                                                     action:@selector(menuItemSelected:)
+                                              keyEquivalent:@"q"];
+  [quit_item setTarget:mac_wm_state->menu_target];
+  [quit_item setRepresentedObject:mac_wm_persistent_ns_string_from_string8(str8_lit("exit"))];
+  [app_menu addItem:quit_item];
+  [main_menu setSubmenu:app_menu forItem:app_menu_item];
+
+  [NSApp setMainMenu:main_menu];
+}
+
+internal void
+mac_wm_apply_menu_mode(MAC_WM_MenuMode mode)
+{
+  if(mac_wm_state != 0)
+  {
+    mac_wm_state->menu_mode = mode;
+    if(mode == MAC_WM_MenuMode_PerWindow)
+    {
+      mac_wm_set_minimal_main_menu();
+    }
+  }
+}
+
+internal void
 wm_set_main_menu(WM_MenuArray menu_array)
 {
   if(mac_wm_state->menu_mode == MAC_WM_MenuMode_Native)
@@ -1204,6 +1342,36 @@ wm_application_menu_bar_is_native(void)
 {
   B32 result = (mac_wm_state->menu_mode == MAC_WM_MenuMode_Native);
   return result;
+}
+
+internal void
+wm_set_preferred_window_decorations(B32 enabled)
+{
+  if(mac_wm_state != 0)
+  {
+    MAC_WM_ChromeMode mode = mac_wm_chrome_mode_from_window_decorations(enabled);
+    if(mac_wm_state->chrome_mode != mode)
+    {
+      mac_wm_state->chrome_mode = mode;
+      for(MAC_WM_Window *window = mac_wm_state->first_window; window != 0; window = window->next)
+      {
+        mac_wm_apply_chrome_mode_to_window(window, mode);
+      }
+    }
+  }
+}
+
+internal void
+wm_set_preferred_native_menu_bar(B32 enabled)
+{
+  if(mac_wm_state != 0)
+  {
+    MAC_WM_MenuMode mode = mac_wm_menu_mode_from_native_menu_bar(enabled);
+    if(mac_wm_state->menu_mode != mode)
+    {
+      mac_wm_apply_menu_mode(mode);
+    }
+  }
 }
 
 ////////////////////////////////
