@@ -2444,9 +2444,21 @@ RD_VIEW_UI_FUNCTION_DEF(disasm)
     }
     else
     {
+      D_Entity *selected_process = d_entity_from_handle(rd_regs()->process);
       auto_selected = 1;
-      auto_space = rd_eval_space_from_ctrl_entity(d_entity_from_handle(rd_regs()->process), D_EvalSpaceKind_Entity);
-      eval = e_eval_from_stringf("(reg:rip & (~(0x4000 - 1)))");
+      auto_space = rd_eval_space_from_ctrl_entity(selected_process, D_EvalSpaceKind_Entity);
+      String8 ip_register_name = str8_lit("rip");
+      ARCH_Info *arch_info = arch_info_from_arch(selected_process->arch);
+      if(arch_info != &arch_info_nil &&
+         arch_info->instruction_pointer_reg_code < arch_info->reg_code_count)
+      {
+        String8 name = arch_info->reg_code_name_table[arch_info->instruction_pointer_reg_code];
+        if(name.size != 0)
+        {
+          ip_register_name = name;
+        }
+      }
+      eval = e_eval_from_stringf("(reg:%S & (~(0x4000 - 1)))", ip_register_name);
     }
   }
   
@@ -2491,6 +2503,29 @@ RD_VIEW_UI_FUNCTION_DEF(disasm)
   Rng1U64 range = rd_space_range_from_eval(eval);
   Arch arch = rd_arch_from_eval(eval);
   D_Entity *space_entity = rd_ctrl_entity_from_eval_space(space);
+  if(auto_selected && space_entity->kind == D_EntityKind_Process)
+  {
+    U64 anchor_vaddr = 0;
+    if(dv->temp_look_vaddr != 0 && dv->temp_look_run_gen == d_run_gen())
+    {
+      anchor_vaddr = dv->temp_look_vaddr;
+    }
+    else
+    {
+      D_Entity *selected_thread = d_entity_from_handle(rd_regs()->thread);
+      if(d_entity_ancestor_from_kind(selected_thread, D_EntityKind_Process) == space_entity)
+      {
+        anchor_vaddr = d_query_cached_rip_from_thread(selected_thread);
+      }
+    }
+    D_Entity *anchor_module = d_module_from_process_vaddr(space_entity, anchor_vaddr);
+    if(anchor_module != &d_entity_nil &&
+       range.min < anchor_module->vaddr_range.min &&
+       contains_1u64(range, anchor_vaddr))
+    {
+      range.min = anchor_module->vaddr_range.min;
+    }
+  }
   D_Entity *dasm_module = &d_entity_nil;
   DI_Key dbgi_key = {0};
   U64 base_vaddr = 0;
