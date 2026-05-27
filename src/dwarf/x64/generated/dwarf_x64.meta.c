@@ -198,4 +198,3 @@ DW_RegCodeX64_mm7,
 };
 
 C_LINKAGE_END
-

@@ -269,4 +269,3 @@ str8_lit_comp("Malformed bytecode."),
 };
 
 C_LINKAGE_END
-

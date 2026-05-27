@@ -66,4 +66,3 @@ sizeof(R_D3D11_Uniforms_Mesh),
 };
 
 C_LINKAGE_END
-

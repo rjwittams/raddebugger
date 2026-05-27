@@ -1217,6 +1217,10 @@ make_directory(String8 path)
   {
     result = 1;
   }
+  else if(errno == EEXIST)
+  {
+    result = folder_path_exists(path);
+  }
   scratch_end(scratch);
   return result;
 }

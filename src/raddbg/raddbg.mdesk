@@ -297,6 +297,12 @@ RD_VocabTable:
       @default(1.f) @display_name('Rounded Corner Amount') @description("Controls the degree to which UI corners are rounded.")
         'rounded_corner_amount': @range[0, 1] f32,
       
+      //- mac window settings
+      @default(1) @display_name('Native Window Decorations') @description("Shows native traffic lights in custom window title bars.")
+        'mac_window_decorations': bool,
+      @default(0) @display_name('Native Menu Bar') @description("Uses the macOS menu bar instead of RAD's per-window menu.")
+        'mac_native_menu_bar': bool,
+
       //- rjf: code formatting settings
       @default(2) @display_name('User Tab Width') 'tab_width': @range[1, 32] u64,
       

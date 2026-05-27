@@ -777,4 +777,3 @@ Rng1U16 x64_reg_code_rng_table[189] =
 };
 
 C_LINKAGE_END
-

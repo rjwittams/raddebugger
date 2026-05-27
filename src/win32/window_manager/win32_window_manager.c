@@ -1598,6 +1598,16 @@ wm_application_menu_bar_is_native(void)
   return 0;
 }
 
+internal void
+wm_set_preferred_window_decorations(B32 enabled)
+{
+}
+
+internal void
+wm_set_preferred_native_menu_bar(B32 enabled)
+{
+}
+
 ////////////////////////////////
 //~ rjf: @os_hooks Cursors (Implemented Per-OS)
 
