@@ -238,6 +238,58 @@ TEST(macho_function_starts_from_lc_function_starts)
   T_Ok(starts.v[2] == 0xb8);
 }
 
+TEST(macho_function_starts_vrange_from_linkedit_data_command)
+{
+  U64 data_size = 0x200;
+  U8 *data = push_array(arena, U8, data_size);
+  String8 string = str8(data, data_size);
+
+  U64 header_off = 0;
+  U64 text_segment_off = sizeof(MachO_Header64);
+  U64 linkedit_segment_off = text_segment_off + sizeof(MachO_SegmentCommand64);
+  U64 function_starts_command_off = linkedit_segment_off + sizeof(MachO_SegmentCommand64);
+
+  MachO_Header64 header = {0};
+  header.magic = MACHO_MAGIC_64;
+  header.cpu_type = MACHO_CPU_TYPE_ARM64;
+  header.load_command_count = 3;
+  header.load_commands_size = 2*sizeof(MachO_SegmentCommand64) + sizeof(MachO_LinkeditDataCommand);
+  MemoryCopy(data + header_off, &header, sizeof(header));
+
+  MachO_SegmentCommand64 text_segment = {0};
+  text_segment.cmd = MACHO_LC_SEGMENT_64;
+  text_segment.cmd_size = sizeof(text_segment);
+  MemoryCopy(text_segment.segment_name, "__TEXT", sizeof("__TEXT")-1);
+  text_segment.vmaddr = 0x100000000ull;
+  text_segment.vmsize = 0x4000;
+  text_segment.fileoff = 0;
+  text_segment.filesize = 0x4000;
+  MemoryCopy(data + text_segment_off, &text_segment, sizeof(text_segment));
+
+  MachO_SegmentCommand64 linkedit_segment = {0};
+  linkedit_segment.cmd = MACHO_LC_SEGMENT_64;
+  linkedit_segment.cmd_size = sizeof(linkedit_segment);
+  MemoryCopy(linkedit_segment.segment_name, "__LINKEDIT", sizeof("__LINKEDIT")-1);
+  linkedit_segment.vmaddr = 0x100008000ull;
+  linkedit_segment.vmsize = 0x4000;
+  linkedit_segment.fileoff = 0x6000;
+  linkedit_segment.filesize = 0x4000;
+  MemoryCopy(data + linkedit_segment_off, &linkedit_segment, sizeof(linkedit_segment));
+
+  MachO_LinkeditDataCommand function_starts_command = {0};
+  function_starts_command.cmd = MACHO_LC_FUNCTION_STARTS;
+  function_starts_command.cmd_size = sizeof(function_starts_command);
+  function_starts_command.dataoff = 0x6120;
+  function_starts_command.datasize = 0x30;
+  MemoryCopy(data + function_starts_command_off, &function_starts_command, sizeof(function_starts_command));
+
+  MachO_Bin bin = macho_bin_from_data(arena, string);
+  Rng1U64 vrange = {0};
+  T_Ok(macho_linkedit_data_vrange_from_bin(string, &bin, MACHO_LC_FUNCTION_STARTS, 0x50000000ull, &vrange));
+  T_Ok(vrange.min == 0x150008120ull);
+  T_Ok(vrange.max == 0x150008150ull);
+}
+
 #if OS_MAC && ARCH_ARM64
 TEST(arm64_darwin_neon_state_conversion)
 {
