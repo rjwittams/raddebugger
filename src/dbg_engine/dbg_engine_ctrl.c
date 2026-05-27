@@ -8054,134 +8054,39 @@ d_ctrl_thread__target_call_u64(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   {
     output = str8_lit("[target_call_u64] error: process not found\n");
   }
-  else if(OperatingSystem_CURRENT != OperatingSystem_Mac || thread->arch != Arch_arm64)
-  {
-    output = push_str8f(scratch.arena, "[target_call_u64] error: unsupported target arch/os arch:%S os:%S\n",
-                        string_from_arch(thread->arch), string_from_operating_system(OperatingSystem_CURRENT));
-  }
   else if(msg->vaddr == 0)
   {
     output = str8_lit("[target_call_u64] error: function address is zero\n");
   }
   else
   {
-    ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
-    ARM64_RegBlock *saved_regs = push_array(scratch.arena, ARM64_RegBlock, 1);
-    ARM64_RegBlock *call_regs = push_array(scratch.arena, ARM64_RegBlock, 1);
-    B32 read_saved_regs = d_thread_read_reg_block(thread->handle, saved_regs);
-    if(!read_saved_regs)
+    DMN_ThreadCallParams params = {0};
+    params.function_vaddr = msg->vaddr;
+    params.arg_count = Min(msg->target_call_arg_count, (U32)DMN_ThreadCallMaxArgCount);
+    params.return_value_kind = DMN_ThreadCallValueKind_U64;
+    for(U32 idx = 0; idx < params.arg_count; idx += 1)
     {
-      output = str8_lit("[target_call_u64] error: could not read thread registers\n");
+      params.args[idx].kind = DMN_ThreadCallValueKind_U64;
+      params.args[idx].u64 = msg->target_call_args[idx];
+    }
+
+    DMN_ThreadCallResult call = dmn_thread_call(scratch.arena, ctrl_ctx, d_dmn_from_handle(thread->handle), &params);
+    ins_atomic_u64_inc_eval(&d_ctrl_state->mem_gen);
+    ins_atomic_u64_inc_eval(&d_ctrl_state->reg_gen);
+    ins_atomic_u64_inc_eval(&d_ctrl_state->run_gen);
+
+    if(call.success)
+    {
+      output = push_str8f(scratch.arena, "[target_call_u64] ok result:0x%I64x scratch_return_vaddr:0x%I64x\n",
+                          call.return_value.u64, call.stop_vaddr);
+    }
+    else if(call.error.size != 0)
+    {
+      output = push_str8f(scratch.arena, "[target_call_u64] error: %S\n", call.error);
     }
     else
     {
-      MemoryCopyStruct(call_regs, saved_regs);
-      U64 return_vaddr = arch_ip_from_reg_block(arch_info, saved_regs);
-      call_regs->x0 = msg->target_call_args[0];
-      call_regs->x1 = msg->target_call_args[1];
-      call_regs->x2 = msg->target_call_args[2];
-      call_regs->x3 = msg->target_call_args[3];
-      call_regs->lr = return_vaddr;
-      arch_reg_block_write_ip(arch_info, call_regs, msg->vaddr);
-
-      B32 wrote_call_regs = d_thread_write_reg_block(thread->handle, call_regs);
-      if(!wrote_call_regs)
-      {
-        output = str8_lit("[target_call_u64] error: could not write call registers\n");
-      }
-      else
-      {
-        DMN_Handle process_dmn = d_dmn_from_handle(process->handle);
-        DMN_Handle thread_dmn = d_dmn_from_handle(thread->handle);
-        DMN_TrapChunkList traps = {0};
-        DMN_Trap return_trap = {process_dmn, return_vaddr, 0};
-        dmn_trap_chunk_list_push(scratch.arena, &traps, 1, &return_trap);
-
-        B32 done = 0;
-        B32 success = 0;
-        U64 return_value = 0;
-        String8 error = {0};
-        for(U64 run_idx = 0; run_idx < 64 && !done; run_idx += 1)
-        {
-          DMN_Handle run_thread = thread_dmn;
-          DMN_RunCtrls run_ctrls = {0};
-          run_ctrls.priority_thread = thread_dmn;
-          run_ctrls.run_entities = &run_thread;
-          run_ctrls.run_entity_count = 1;
-          run_ctrls.run_entities_are_unfrozen = 1;
-          run_ctrls.ignore_previous_exception = 1;
-          run_ctrls.traps = traps;
-
-          DMN_EventList events = dmn_ctrl_run(scratch.arena, ctrl_ctx, &run_ctrls);
-          ins_atomic_u64_inc_eval(&d_ctrl_state->mem_gen);
-          ins_atomic_u64_inc_eval(&d_ctrl_state->reg_gen);
-          ins_atomic_u64_inc_eval(&d_ctrl_state->run_gen);
-
-          if(events.count == 0)
-          {
-            done = 1;
-            error = str8_lit("no event returned");
-          }
-          for(DMN_EventNode *n = events.first; n != 0 && !done; n = n->next)
-          {
-            DMN_Event *event = &n->v;
-            if(event->kind == DMN_EventKind_Breakpoint &&
-               dmn_handle_match(event->process, process_dmn) &&
-               dmn_handle_match(event->thread, thread_dmn) &&
-               event->address == return_vaddr)
-            {
-              ARM64_RegBlock *return_regs = push_array(scratch.arena, ARM64_RegBlock, 1);
-              if(d_thread_read_reg_block(thread->handle, return_regs))
-              {
-                return_value = return_regs->x0;
-                success = 1;
-              }
-              else
-              {
-                error = str8_lit("could not read return registers");
-              }
-              done = 1;
-            }
-            else switch(event->kind)
-            {
-              default:{}break;
-              case DMN_EventKind_Error:
-              case DMN_EventKind_ExitProcess:
-              case DMN_EventKind_ExitThread:
-              case DMN_EventKind_Trap:
-              case DMN_EventKind_Exception:
-              case DMN_EventKind_Halt:
-              {
-                done = 1;
-                error = push_str8f(scratch.arena, "unexpected event %S", dmn_event_kind_string_table[event->kind]);
-              }break;
-            }
-          }
-        }
-
-        B32 restored = d_thread_write_reg_block(thread->handle, saved_regs);
-        if(success && restored)
-        {
-          output = push_str8f(scratch.arena, "[target_call_u64] ok result:0x%I64x return_vaddr:0x%I64x\n", return_value, return_vaddr);
-        }
-        else if(success && !restored)
-        {
-          output = push_str8f(scratch.arena, "[target_call_u64] error: call returned 0x%I64x but original registers were not restored\n", return_value);
-        }
-        else if(error.size != 0 && restored)
-        {
-          output = push_str8f(scratch.arena, "[target_call_u64] error: %S\n", error);
-        }
-        else if(error.size != 0 && !restored)
-        {
-          output = push_str8f(scratch.arena, "[target_call_u64] error: %S; original registers were not restored\n", error);
-        }
-        else
-        {
-          output = push_str8f(scratch.arena, "[target_call_u64] error: call did not reach return trap within run limit%s\n",
-                              restored ? "" : "; original registers were not restored");
-        }
-      }
+      output = str8_lit("[target_call_u64] error: target call failed\n");
     }
   }
 
