@@ -2902,6 +2902,14 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
   return events;
 }
 
+internal DMN_ThreadCallResult
+dmn_thread_call(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread, DMN_ThreadCallParams *params)
+{
+  DMN_ThreadCallResult result = {0};
+  result.error = str8_lit("target thread calls are unsupported by the Linux demon backend");
+  return result;
+}
+
 ////////////////////////////////
 //~ rjf: @dmn_os_hooks Halting (Implemented Per-OS)
 

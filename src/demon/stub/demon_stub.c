@@ -54,6 +54,14 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
   return result;
 }
 
+internal DMN_ThreadCallResult
+dmn_thread_call(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread, DMN_ThreadCallParams *params)
+{
+  DMN_ThreadCallResult result = {0};
+  result.error = str8_lit("target thread calls are unsupported by this demon backend");
+  return result;
+}
+
 internal void
 dmn_halt(U64 code, U64 user_data)
 {
