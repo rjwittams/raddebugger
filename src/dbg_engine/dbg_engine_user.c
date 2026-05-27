@@ -342,6 +342,18 @@ d_step_out_static_trap_vaddr_from_exit_point(DASM_CtrlFlowPoint *point, U64 *vad
   return result;
 }
 
+internal U64
+d_step_out_trap_vaddr_from_return_frame(Arch arch, void *regs)
+{
+  ARCH_Info *arch_info = arch_info_from_arch(arch);
+  U64 result = arch_ip_from_reg_block(arch_info, regs);
+  if(arch_call_return_address_storage_kind(arch) == ArchCallReturnAddressStorageKind_LinkRegister && result != 0)
+  {
+    result += min_instruction_size_from_arch(arch);
+  }
+  return result;
+}
+
 internal D_TrapNet
 d_trap_net_from_thread__step_over_inst(Arena *arena, D_Entity *thread)
 {
@@ -898,8 +910,7 @@ d_trap_net_from_thread__step_out_scope(Arena *arena, D_Entity *thread)
     // rjf: use first unwind frame to generate trap
     if(result.good_read && callstack.concrete_frames_count > 1)
     {
-      ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
-      U64 vaddr = arch_ip_from_reg_block(arch_info, callstack.concrete_frames[1]->regs);
+      U64 vaddr = d_step_out_trap_vaddr_from_return_frame(thread->arch, callstack.concrete_frames[1]->regs);
       D_Trap trap = {D_TrapFlag_EndStepping|D_TrapFlag_IgnoreStackPointerCheck, vaddr};
       d_trap_list_push(arena, &result.traps, &trap);
     }
