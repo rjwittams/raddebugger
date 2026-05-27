@@ -678,6 +678,8 @@ internal void d_ctrl_thread__detach(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg);
 internal void d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg);
 internal void d_ctrl_thread__single_step(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg);
 internal void d_ctrl_thread__target_call_u64(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg);
+internal void d_ctrl_thread__darwin_tlv_probe(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg);
+internal void d_ctrl_thread__resolve_platform_tls(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg);
 
 ////////////////////////////////
 //~ rjf: Process Memory Artifact Cache Hooks / Lookups

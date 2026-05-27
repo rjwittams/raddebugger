@@ -206,6 +206,14 @@ struct DMN_ThreadCallResult
   U64 stop_vaddr;
 };
 
+typedef struct DMN_TLSAddressResult DMN_TLSAddressResult;
+struct DMN_TLSAddressResult
+{
+  B32 success;
+  U64 vaddr;
+  String8 error;
+};
+
 ////////////////////////////////
 //~ rjf: System Process Listing Types
 
@@ -265,6 +273,7 @@ internal B32 dmn_ctrl_kill(DMN_CtrlCtx *ctx, DMN_Handle process, U32 exit_code);
 internal B32 dmn_ctrl_detach(DMN_CtrlCtx *ctx, DMN_Handle process);
 internal DMN_EventList dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls);
 internal DMN_ThreadCallResult dmn_thread_call(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread, DMN_ThreadCallParams *params);
+internal DMN_TLSAddressResult dmn_tls_vaddr_from_thread(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread, U64 platform_tls_vaddr);
 
 ////////////////////////////////
 //~ rjf: @dmn_os_hooks Halting (Implemented Per-OS)

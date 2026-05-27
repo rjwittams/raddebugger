@@ -674,6 +674,7 @@ internal String8 rd_cmd_name_from_eval(E_Eval eval);
 internal U64 rd_eval_space_gen(E_Space space);
 internal B32 rd_eval_space_read(E_Space space, void *out, E_SpaceRangeInfo *out_range_info, Rng1U64 range);
 internal B32 rd_eval_space_write(E_Space space, void *in, Rng1U64 range);
+internal B32 rd_tls_vaddr_from_platform_vaddr(E_Space space, U64 platform_tls_vaddr, U64 *vaddr_out);
 
 //- rjf: asynchronous streamed reads -> hashes from spaces
 internal C_Key rd_key_from_eval_space_range(E_Space space, Rng1U64 range, B32 zero_terminated);

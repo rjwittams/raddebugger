@@ -776,6 +776,7 @@ struct E_SpaceRangeInfo
 typedef U64 E_SpaceGenFunction(E_Space space);
 typedef B32 E_SpaceReadFunction(E_Space space, void *out, E_SpaceRangeInfo *out_range_info, Rng1U64 offset_range);
 typedef B32 E_SpaceWriteFunction(E_Space space, void *out, Rng1U64 offset_range);
+typedef B32 E_TLSVAddrFromPlatformVAddrFunction(E_Space space, U64 platform_tls_vaddr, U64 *vaddr_out);
 
 //- rjf: base context
 
@@ -804,6 +805,7 @@ struct E_BaseCtx
   E_SpaceGenFunction *space_gen;
   E_SpaceReadFunction *space_read;
   E_SpaceWriteFunction *space_write;
+  E_TLSVAddrFromPlatformVAddrFunction *tls_vaddr_from_platform_vaddr;
 };
 
 //- rjf: ir generation context

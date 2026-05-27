@@ -1427,6 +1427,28 @@ rd_file_path_from_eval_string(Arena *arena, String8 string)
   return result;
 }
 
+internal B32
+rd_tls_vaddr_from_platform_vaddr(E_Space space, U64 platform_tls_vaddr, U64 *vaddr_out)
+{
+  B32 result = 0;
+  D_Entity *process = rd_ctrl_entity_from_eval_space(space);
+  D_Entity *thread = rd_ctrl_entity_from_eval_space(e_base_ctx->thread_reg_space);
+  if(process != &d_entity_nil &&
+     process->kind == D_EntityKind_Process &&
+     process->target_os == OperatingSystem_Mac &&
+     thread != &d_entity_nil &&
+     thread->kind == D_EntityKind_Thread)
+  {
+    U64 vaddr = d_query_cached_platform_tls_vaddr_from_thread_vaddr(thread, platform_tls_vaddr);
+    result = 1;
+    if(vaddr != 0)
+    {
+      *vaddr_out = vaddr;
+    }
+  }
+  return result;
+}
+
 internal String8
 rd_eval_string_from_file_path(Arena *arena, String8 string)
 {
@@ -11717,6 +11739,7 @@ rd_frame(void)
       ctx->space_gen   = rd_eval_space_gen;
       ctx->space_read  = rd_eval_space_read;
       ctx->space_write = rd_eval_space_write;
+      ctx->tls_vaddr_from_platform_vaddr = rd_tls_vaddr_from_platform_vaddr;
     }
     e_select_base_ctx(eval_base_ctx);
     
@@ -13865,6 +13888,94 @@ rd_frame(void)
                 String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
                 str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
                 access_close(access);
+              }
+            }
+            else if(str8_match(cmd_name, str8_lit("darwin_tlv_probe"), 0))
+            {
+              handled = 1;
+              String8 thread_or_process_string = {0};
+              String8 descriptor_vaddr_string = {0};
+              String8 value_size_string = {0};
+              if(msg_parts.first != 0 && msg_parts.first->next != 0)
+              {
+                thread_or_process_string = msg_parts.first->next->string;
+                if(msg_parts.first->next->next != 0)
+                {
+                  descriptor_vaddr_string = msg_parts.first->next->next->string;
+                  if(msg_parts.first->next->next->next != 0)
+                  {
+                    value_size_string = msg_parts.first->next->next->next->string;
+                  }
+                }
+              }
+
+              D_Entity *thread = &d_entity_nil;
+              if(str8_match(thread_or_process_string, str8_lit("selected"), 0))
+              {
+                thread = d_entity_from_handle(rd_base_regs()->thread);
+              }
+              else if(thread_or_process_string.size != 0)
+              {
+                D_Entity *entity = d_entity_from_handle(d_handle_from_string(thread_or_process_string));
+                if(entity != &d_entity_nil)
+                {
+                  if(entity->kind == D_EntityKind_Process)
+                  {
+                    thread = d_entity_child_from_kind(entity, D_EntityKind_Thread);
+                  }
+                  else
+                  {
+                    thread = entity;
+                  }
+                }
+                else
+                {
+                  U64 id = 0;
+                  if(try_u64_from_str8_c_rules(thread_or_process_string, &id))
+                  {
+                    D_EntityArray threads = d_entity_array_from_kind(D_EntityKind_Thread);
+                    for(U64 idx = 0; idx < threads.count; idx += 1)
+                    {
+                      if(threads.v[idx]->id == id)
+                      {
+                        thread = threads.v[idx];
+                        break;
+                      }
+                    }
+                  }
+                }
+              }
+              if(thread == &d_entity_nil)
+              {
+                thread = d_entity_from_handle(rd_base_regs()->thread);
+              }
+
+              U64 descriptor_vaddr = 0;
+              U64 value_size = 4;
+              if(thread == &d_entity_nil || thread->kind != D_EntityKind_Thread)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: thread not found");
+              }
+              else if(!try_u64_from_str8_c_rules(descriptor_vaddr_string, &descriptor_vaddr) || descriptor_vaddr == 0)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: TLV descriptor address required");
+              }
+              else if(value_size_string.size != 0 && (!try_u64_from_str8_c_rules(value_size_string, &value_size) || value_size == 0 || value_size > 16))
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: value size must be 1..16");
+              }
+              else
+              {
+                D_CmdParams params = {0};
+                params.thread = thread->handle;
+                params.vaddr = descriptor_vaddr;
+                params.string = str8_lit("darwin_tlv_probe");
+                params.target_call_arg_count = 1;
+                params.target_call_args[0] = value_size;
+                d_push_cmd(D_CmdKind_TargetCallU64, &params);
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs,
+                                "queued result:dump_output thread:%S descriptor:0x%I64x size:%I64u",
+                                thread->string, descriptor_vaddr, value_size);
               }
             }
             else if(str8_match(cmd_name, str8_lit("target_call_u64"), 0))
