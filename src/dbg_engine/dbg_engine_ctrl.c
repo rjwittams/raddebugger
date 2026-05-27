@@ -8065,7 +8065,7 @@ d_ctrl_thread__darwin_tlv_probe(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   {
     output = str8_lit("[darwin_tlv_probe] error: process not found\n");
   }
-  else if(OperatingSystem_CURRENT != OperatingSystem_Mac || thread->arch != Arch_arm64)
+  else if(OperatingSystem_CURRENT != OperatingSystem_Mac || (thread->arch != Arch_arm64 && thread->arch != Arch_x64))
   {
     output = push_str8f(scratch.arena, "[darwin_tlv_probe] error: unsupported target arch/os arch:%S os:%S\n",
                         string_from_arch(thread->arch), string_from_operating_system(OperatingSystem_CURRENT));
