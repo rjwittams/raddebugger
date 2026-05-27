@@ -102,6 +102,10 @@ d_init(void)
     {
       d_user_state->tls_base_caches[idx].arena = arena_alloc();
     }
+    for(U64 idx = 0; idx < ArrayCount(d_user_state->platform_tls_caches); idx += 1)
+    {
+      d_user_state->platform_tls_caches[idx].arena = arena_alloc();
+    }
     for(U64 idx = 0; idx < ArrayCount(d_user_state->locals_caches); idx += 1)
     {
       d_user_state->locals_caches[idx].arena = arena_alloc();

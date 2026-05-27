@@ -127,6 +127,34 @@ struct D_RunTLSBaseCache
   D_RunTLSBaseCacheSlot *slots;
 };
 
+//- per-run platform tls-vaddr cache
+
+typedef struct D_RunPlatformTLSCacheNode D_RunPlatformTLSCacheNode;
+struct D_RunPlatformTLSCacheNode
+{
+  D_RunPlatformTLSCacheNode *hash_next;
+  D_Handle thread;
+  U64 platform_tls_vaddr;
+  U64 resolved_vaddr;
+  B32 resolved;
+  B32 requested;
+};
+
+typedef struct D_RunPlatformTLSCacheSlot D_RunPlatformTLSCacheSlot;
+struct D_RunPlatformTLSCacheSlot
+{
+  D_RunPlatformTLSCacheNode *first;
+  D_RunPlatformTLSCacheNode *last;
+};
+
+typedef struct D_RunPlatformTLSCache D_RunPlatformTLSCache;
+struct D_RunPlatformTLSCache
+{
+  Arena *arena;
+  U64 slots_count;
+  D_RunPlatformTLSCacheSlot *slots;
+};
+
 //- rjf: per-run locals cache
 
 typedef struct D_RunLocalsCacheNode D_RunLocalsCacheNode;
@@ -168,6 +196,8 @@ typedef enum D_MsgKind
   D_MsgKind_Run,
   D_MsgKind_SingleStep,
   D_MsgKind_TargetCallU64,
+  D_MsgKind_DarwinTLVProbe,
+  D_MsgKind_ResolvePlatformTLS,
   D_MsgKind_SetUserEntryPoints,
   D_MsgKind_SetModuleDebugInfoPath,
   D_MsgKind_FreezeThread,
@@ -258,6 +288,7 @@ typedef enum D_EventKind
   D_EventKind_SetBreakpoint,
   D_EventKind_UnsetBreakpoint,
   D_EventKind_SetVAddrRangeNote,
+  D_EventKind_PlatformTLSResolved,
   
   //- rjf: memory
   D_EventKind_MemReserve,
@@ -358,6 +389,10 @@ struct D_UserState
   U64 tls_base_cache_memgen_idx;
   D_RunTLSBaseCache tls_base_caches[2];
   U64 tls_base_cache_gen;
+  U64 platform_tls_cache_reggen_idx;
+  U64 platform_tls_cache_memgen_idx;
+  D_RunPlatformTLSCache platform_tls_caches[2];
+  U64 platform_tls_cache_gen;
   U64 locals_cache_reggen_idx;
   D_RunLocalsCache locals_caches[2];
   U64 locals_cache_gen;
@@ -475,6 +510,7 @@ internal U64 d_query_cached_rip_from_thread(D_Entity *thread);
 internal U64 d_query_cached_rip_from_thread_unwind(D_Entity *thread, U64 unwind_count);
 internal U64 d_query_cached_cfa_from_thread_unwind(D_Entity *thread, U64 unwind_count);
 internal U64 d_query_cached_tls_base_vaddr_from_process_root_rip(D_Entity *process, U64 root_vaddr, U64 rip_vaddr);
+internal U64 d_query_cached_platform_tls_vaddr_from_thread_vaddr(D_Entity *thread, U64 platform_tls_vaddr);
 internal E_String2NumMap *d_query_cached_locals_map_from_dbgi_key_voff(DI_Key dbgi_key, U64 voff);
 internal E_String2NumMap *d_query_cached_member_map_from_dbgi_key_voff(DI_Key dbgi_key, U64 voff);
 
