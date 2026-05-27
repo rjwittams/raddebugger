@@ -397,6 +397,23 @@ mac_wm_key_from_key_code(unsigned short key_code, B32 *right_sided_out)
   return result;
 }
 
+internal B32
+mac_wm_event_type_should_send_to_nsapp_after_translation(NSEventType type)
+{
+  B32 result = 1;
+  switch(type)
+  {
+    default:{}break;
+    case NSEventTypeKeyDown:
+    case NSEventTypeKeyUp:
+    case NSEventTypeFlagsChanged:
+    {
+      result = 0;
+    }break;
+  }
+  return result;
+}
+
 internal void
 mac_wm_push_text_events_from_ns_string(Arena *arena, WM_EventList *events, MAC_WM_Window *window, NSString *string)
 {
@@ -940,6 +957,7 @@ wm_get_events(Arena *arena, B32 wait)
       case NSEventTypeKeyDown:
       case NSEventTypeKeyUp:
       {
+        send_to_nsapp = mac_wm_event_type_should_send_to_nsapp_after_translation(type);
         B32 is_release = (type == NSEventTypeKeyUp);
         B32 right_sided = 0;
         WM_Key key = mac_wm_key_from_key_code([event keyCode], &right_sided);
@@ -963,6 +981,7 @@ wm_get_events(Arena *arena, B32 wait)
       }break;
       case NSEventTypeFlagsChanged:
       {
+        send_to_nsapp = mac_wm_event_type_should_send_to_nsapp_after_translation(type);
         B32 right_sided = 0;
         WM_Key key = mac_wm_key_from_key_code([event keyCode], &right_sided);
         if(key != WM_Key_Null)

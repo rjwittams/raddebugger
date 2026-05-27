@@ -341,4 +341,14 @@ TEST(hash_map)
   }
 }
 
+#if OS_MAC
+TEST(mac_key_events_are_consumed_by_window_manager)
+{
+  T_Ok(mac_wm_event_type_should_send_to_nsapp_after_translation(NSEventTypeKeyDown) == 0);
+  T_Ok(mac_wm_event_type_should_send_to_nsapp_after_translation(NSEventTypeKeyUp) == 0);
+  T_Ok(mac_wm_event_type_should_send_to_nsapp_after_translation(NSEventTypeFlagsChanged) == 0);
+  T_Ok(mac_wm_event_type_should_send_to_nsapp_after_translation(NSEventTypeLeftMouseDown) == 1);
+}
+#endif
+
 #undef T_Group
