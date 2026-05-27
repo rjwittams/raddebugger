@@ -330,6 +330,18 @@ d_trap_from_step_over_line_call(Arch arch, DASM_CtrlFlowPoint *point, Rng1U64Lis
   return trap;
 }
 
+internal B32
+d_step_out_static_trap_vaddr_from_exit_point(DASM_CtrlFlowPoint *point, U64 *vaddr_out)
+{
+  B32 result = 0;
+  if(!(point->inst_flags & DASM_InstFlag_Return) && point->jump_dest_vaddr != 0)
+  {
+    *vaddr_out = point->jump_dest_vaddr;
+    result = 1;
+  }
+  return result;
+}
+
 internal D_TrapNet
 d_trap_net_from_thread__step_over_inst(Arena *arena, D_Entity *thread)
 {
@@ -837,20 +849,23 @@ d_trap_net_from_thread__step_out_scope(Arena *arena, D_Entity *thread)
         // rjf: add traps at all jump destinations which do *not* fall into any of the scope's ranges
         for EachNode(exit_pt_n, DASM_CtrlFlowPointNode, ctrl_flow_info.exit_points.first)
         {
-          U64 jump_dest_vaddr = exit_pt_n->v.jump_dest_vaddr;
-          B32 jump_dest_vaddr_is_out_of_scope = 1;
-          for EachNode(scope_n, Rng1U64Node, scope_voff_rngs.first)
+          U64 jump_dest_vaddr = 0;
+          if(d_step_out_static_trap_vaddr_from_exit_point(&exit_pt_n->v, &jump_dest_vaddr))
           {
-            if(contains_1u64(scope_n->v, d_voff_from_vaddr(module, jump_dest_vaddr)))
+            B32 jump_dest_vaddr_is_out_of_scope = 1;
+            for EachNode(scope_n, Rng1U64Node, scope_voff_rngs.first)
             {
-              jump_dest_vaddr_is_out_of_scope = 0;
-              break;
+              if(contains_1u64(scope_n->v, d_voff_from_vaddr(module, jump_dest_vaddr)))
+              {
+                jump_dest_vaddr_is_out_of_scope = 0;
+                break;
+              }
             }
-          }
-          if(jump_dest_vaddr_is_out_of_scope)
-          {
-            D_Trap trap = {D_TrapFlag_EndStepping|D_TrapFlag_IgnoreStackPointerCheck, jump_dest_vaddr};
-            d_trap_list_push(arena, &result.traps, &trap);
+            if(jump_dest_vaddr_is_out_of_scope)
+            {
+              D_Trap trap = {D_TrapFlag_EndStepping|D_TrapFlag_IgnoreStackPointerCheck, jump_dest_vaddr};
+              d_trap_list_push(arena, &result.traps, &trap);
+            }
           }
         }
         
