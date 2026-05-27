@@ -184,6 +184,7 @@ struct D_ModuleImageInfoCacheNode
   B32 is_unwind_eh;
   String8 dwarf_unwind_data;
   String8 macho_unwind_info_data;
+  U64Array macho_function_start_voffs;
   EH_FrameHdr eh_frame_hdr;
   EH_PtrCtx eh_ptr_ctx;
   U64 entry_point_voff;
