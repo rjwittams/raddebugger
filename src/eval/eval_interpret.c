@@ -390,7 +390,19 @@ e_interpret(String8 bytecode)
       
       case RDI_EvalOp_TLSOff:
       {
-        if(e_interpret_ctx->tls_base != 0)
+        U64 platform_tls_vaddr = base_off + imm.u64;
+        U64 resolved_tls_vaddr = 0;
+        if(e_base_ctx->tls_vaddr_from_platform_vaddr != 0 &&
+           e_base_ctx->tls_vaddr_from_platform_vaddr(selected_space, platform_tls_vaddr, &resolved_tls_vaddr))
+        {
+          if(resolved_tls_vaddr == 0)
+          {
+            result.code = E_InterpretationCode_BadTLSBase;
+            goto done;
+          }
+          nval.u64 = resolved_tls_vaddr;
+        }
+        else if(e_interpret_ctx->tls_base != 0 && *e_interpret_ctx->tls_base != 0)
         {
           nval.u64 = *e_interpret_ctx->tls_base + imm.u64;
         }
