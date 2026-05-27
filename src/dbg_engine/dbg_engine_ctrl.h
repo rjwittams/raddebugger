@@ -169,6 +169,7 @@ struct D_ModuleInfo
   UWND_Unwinder unwinder;
   void *unwind_info;
   String8 macho_unwind_info_data;
+  U64Array macho_function_start_voffs;
   String8 local_debug_info_path;
   String8 dbg_name;
   Guid dbg_guid;
@@ -553,6 +554,7 @@ internal D_ModuleInfo *d_info_from_module(Access *access, D_Handle module);
 internal U64 d_entry_point_voff_from_module(D_Handle module_handle);
 internal String8 d_initial_debug_info_path_from_module(Arena *arena, D_Handle module_handle);
 internal String8 d_macho_unwind_info_data_from_module(Arena *arena, D_Handle module_handle);
+internal Rng1U64 d_macho_function_start_voff_range_from_module_voff(D_Handle module_handle, U64 voff);
 
 ////////////////////////////////
 //~ rjf: Unwinding Functions
