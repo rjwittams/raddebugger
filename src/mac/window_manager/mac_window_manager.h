@@ -126,6 +126,7 @@ internal Vec2F32 mac_wm_client_pos_from_ns_point(MAC_WM_Window *window, NSPoint 
 internal NSString *mac_wm_ns_string_from_string8(Arena *arena, String8 string);
 internal WM_Modifiers mac_wm_modifiers_from_ns_flags(NSEventModifierFlags flags);
 internal WM_Key mac_wm_key_from_key_code(unsigned short key_code, B32 *right_sided_out);
+internal B32 mac_wm_event_type_should_send_to_nsapp_after_translation(NSEventType type);
 internal void mac_wm_push_text_events_from_ns_string(Arena *arena, WM_EventList *events, MAC_WM_Window *window, NSString *string);
 internal WM_Event *mac_wm_push_event(Arena *arena, WM_EventList *events, WM_EventKind kind, MAC_WM_Window *window);
 
