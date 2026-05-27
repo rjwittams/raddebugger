@@ -166,6 +166,47 @@ struct DMN_RunCtrls
 };
 
 ////////////////////////////////
+//~ rjf: Thread Call Types
+
+typedef enum DMN_ThreadCallValueKind
+{
+  DMN_ThreadCallValueKind_Null,
+  DMN_ThreadCallValueKind_U64,
+} DMN_ThreadCallValueKind;
+
+typedef struct DMN_ThreadCallValue DMN_ThreadCallValue;
+struct DMN_ThreadCallValue
+{
+  DMN_ThreadCallValueKind kind;
+  union
+  {
+    U64 u64;
+  };
+};
+
+#define DMN_ThreadCallMaxArgCount 8
+
+typedef struct DMN_ThreadCallParams DMN_ThreadCallParams;
+struct DMN_ThreadCallParams
+{
+  U64 function_vaddr;
+  DMN_ThreadCallValue args[DMN_ThreadCallMaxArgCount];
+  U32 arg_count;
+  DMN_ThreadCallValueKind return_value_kind;
+};
+
+typedef struct DMN_ThreadCallResult DMN_ThreadCallResult;
+struct DMN_ThreadCallResult
+{
+  B32 success;
+  B32 returned;
+  B32 regs_restored;
+  DMN_ThreadCallValue return_value;
+  String8 error;
+  U64 stop_vaddr;
+};
+
+////////////////////////////////
 //~ rjf: System Process Listing Types
 
 typedef struct DMN_ProcessIter DMN_ProcessIter;
@@ -223,6 +264,7 @@ internal B32 dmn_ctrl_attach(DMN_CtrlCtx *ctx, U32 pid);
 internal B32 dmn_ctrl_kill(DMN_CtrlCtx *ctx, DMN_Handle process, U32 exit_code);
 internal B32 dmn_ctrl_detach(DMN_CtrlCtx *ctx, DMN_Handle process);
 internal DMN_EventList dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls);
+internal DMN_ThreadCallResult dmn_thread_call(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread, DMN_ThreadCallParams *params);
 
 ////////////////////////////////
 //~ rjf: @dmn_os_hooks Halting (Implemented Per-OS)
