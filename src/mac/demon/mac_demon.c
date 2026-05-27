@@ -3979,7 +3979,10 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
 }
 
 internal B32
-mac_dmn_thread_call_lower(Arena *arena, Arch arch, DMN_ThreadCallParams *params, U64 return_vaddr, void *call_regs, String8 *error_out)
+mac_dmn_thread_call_lower(Arena *arena, Arch arch, DMN_Handle process_handle,
+                          DMN_ThreadCallParams *params, U64 return_vaddr,
+                          U64 stack_top_vaddr, void *call_regs,
+                          String8 *error_out)
 {
   B32 result = 0;
   switch(arch)
@@ -4001,6 +4004,46 @@ mac_dmn_thread_call_lower(Arena *arena, Arch arch, DMN_ThreadCallParams *params,
       regs->pc = params->function_vaddr;
       result = 1;
     }break;
+#if ARCH_X64
+    case Arch_x64:
+    {
+      if(params->arg_count > 6)
+      {
+        *error_out = push_str8f(arena, "too many x64 target-call register arguments: %u", params->arg_count);
+      }
+      else
+      {
+        X64_RegBlock *regs = (X64_RegBlock *)call_regs;
+        U64 *arg_regs[] =
+        {
+          &regs->rdi,
+          &regs->rsi,
+          &regs->rdx,
+          &regs->rcx,
+          &regs->r8,
+          &regs->r9,
+        };
+        for(U32 idx = 0; idx < params->arg_count; idx += 1)
+        {
+          *arg_regs[idx] = params->args[idx].u64;
+        }
+        U64 rsp = stack_top_vaddr & ~0xfull;
+        rsp -= 8;
+        // x64 has no link register, so synthesize the return address a call would have pushed.
+        if(!dmn_process_write(process_handle, r1u64(rsp, rsp+sizeof(return_vaddr)), &return_vaddr))
+        {
+          *error_out = push_str8f(arena, "could not write x64 target-call return address at 0x%I64x", rsp);
+        }
+        else
+        {
+          regs->rax = 0;
+          regs->rsp = rsp;
+          regs->rip = params->function_vaddr;
+          result = 1;
+        }
+      }
+    }break;
+#endif
   }
   return result;
 }
@@ -4034,6 +4077,26 @@ mac_dmn_thread_call_read_return_value(Arena *arena, Arch arch, DMN_ThreadCallVal
         }break;
       }
     }break;
+#if ARCH_X64
+    case Arch_x64:
+    {
+      X64_RegBlock *regs = (X64_RegBlock *)return_regs;
+      switch(kind)
+      {
+        default:
+        {
+          *error_out = str8_lit("unsupported target-call return kind");
+        }break;
+
+        case DMN_ThreadCallValueKind_U64:
+        {
+          value_out->kind = DMN_ThreadCallValueKind_U64;
+          value_out->u64 = regs->rax;
+          result = 1;
+        }break;
+      }
+    }break;
+#endif
   }
   return result;
 }
@@ -4137,12 +4200,17 @@ dmn_thread_call(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread_handle, DMN_Th
             {
               dmn_process_memory_commit(process_handle, return_vaddr, page_size);
               dmn_process_memory_protect(process_handle, return_vaddr, page_size, AccessFlag_Read|AccessFlag_Execute);
+              U64 stack_vaddr = scratch_base_vaddr + page_size*2;
+              dmn_process_memory_commit(process_handle, stack_vaddr, page_size);
+              dmn_process_memory_protect(process_handle, stack_vaddr, page_size, AccessFlag_Read|AccessFlag_Write);
               result.stop_vaddr = return_vaddr;
 
               MemoryCopy(call_regs, saved_regs, arch_info->reg_block_size);
               String8 lower_error = {0};
 
-              if(!mac_dmn_thread_call_lower(arena, thread_entity->thread.arch, params, return_vaddr, call_regs, &lower_error))
+              if(!mac_dmn_thread_call_lower(arena, thread_entity->thread.arch, process_handle,
+                                            params, return_vaddr, stack_vaddr+page_size,
+                                            call_regs, &lower_error))
               {
                 result.error = lower_error;
               }
