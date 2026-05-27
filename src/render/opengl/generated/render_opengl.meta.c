@@ -35,4 +35,3 @@ R_OGL_AttributeArray r_ogl_shader_kind_output_attributes_table[2] =
 };
 
 C_LINKAGE_END
-
