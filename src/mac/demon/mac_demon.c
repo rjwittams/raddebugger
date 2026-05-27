@@ -190,12 +190,16 @@ mac_dmn_ctrl_consume_exit_status(Arena *arena, DMN_EventList *events, pid_t pid,
     }
     if(WIFEXITED(status))
     {
+      mac_dmn_process_clear_thread_entities(arena, events, process_entity);
+      mac_dmn_process_clear_module_entities(arena, events, process_entity);
       mac_dmn_push_event_exit_process(arena, events, process_entity, (U32)WEXITSTATUS(status));
       mac_dmn_process_entity_release(process_entity);
       result = 1;
     }
     else if(WIFSIGNALED(status))
     {
+      mac_dmn_process_clear_thread_entities(arena, events, process_entity);
+      mac_dmn_process_clear_module_entities(arena, events, process_entity);
       mac_dmn_push_event_exit_process(arena, events, process_entity, (U32)WTERMSIG(status));
       mac_dmn_process_entity_release(process_entity);
       result = 1;
@@ -4309,6 +4313,79 @@ dmn_thread_call(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread_handle, DMN_Th
             }
           }
         }
+      }
+    }
+  }
+
+  return result;
+}
+
+internal DMN_TLSAddressResult
+dmn_tls_vaddr_from_thread(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread_handle, U64 platform_tls_vaddr)
+{
+  DMN_TLSAddressResult result = {0};
+  MAC_DMN_Entity *thread_entity = mac_dmn_entity_from_handle(thread_handle);
+  if(thread_entity != 0 && thread_entity->kind != MAC_DMN_EntityKind_Thread)
+  {
+    thread_entity = 0;
+  }
+  MAC_DMN_Entity *process_entity = 0;
+  if(thread_entity != 0)
+  {
+    MAC_DMN_Process *process = thread_entity->thread.process;
+    for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+    {
+      if(entity->kind == MAC_DMN_EntityKind_Process && &entity->process == process)
+      {
+        process_entity = entity;
+        break;
+      }
+    }
+  }
+
+  if(thread_entity == 0)
+  {
+    result.error = str8_lit("thread not found");
+  }
+  else if(process_entity == 0)
+  {
+    result.error = str8_lit("process not found");
+  }
+  else if(thread_entity->thread.arch != Arch_arm64 && thread_entity->thread.arch != Arch_x64)
+  {
+    result.error = push_str8f(arena, "unsupported platform TLS architecture: %S", string_from_arch(thread_entity->thread.arch));
+  }
+  else if(platform_tls_vaddr == 0)
+  {
+    result.error = str8_lit("platform TLS address is zero");
+  }
+  else
+  {
+    DMN_Handle process_handle = mac_dmn_handle_from_entity(process_entity);
+    U64 thunk_vaddr = 0;
+    U64 thunk_read_size = dmn_process_read(process_handle, r1u64(platform_tls_vaddr, platform_tls_vaddr+sizeof(thunk_vaddr)), &thunk_vaddr);
+    if(thunk_read_size != sizeof(thunk_vaddr) || thunk_vaddr == 0)
+    {
+      result.error = push_str8f(arena, "could not read TLV thunk pointer at 0x%I64x", platform_tls_vaddr);
+    }
+    else
+    {
+      DMN_ThreadCallParams call_params = {0};
+      call_params.function_vaddr = thunk_vaddr;
+      call_params.arg_count = 1;
+      call_params.args[0].kind = DMN_ThreadCallValueKind_U64;
+      call_params.args[0].u64 = platform_tls_vaddr;
+      call_params.return_value_kind = DMN_ThreadCallValueKind_U64;
+
+      DMN_ThreadCallResult call = dmn_thread_call(arena, ctx, thread_handle, &call_params);
+      if(call.success)
+      {
+        result.success = 1;
+        result.vaddr = call.return_value.u64;
+      }
+      else
+      {
+        result.error = call.error.size != 0 ? call.error : str8_lit("platform TLS resolver call failed");
       }
     }
   }
