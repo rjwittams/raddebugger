@@ -8,6 +8,7 @@
 #define MACHO_MAGIC_64 0xfeedfacf
 #define MACHO_LC_SEGMENT_64 0x19
 #define MACHO_LC_UUID 0x1b
+#define MACHO_LC_FUNCTION_STARTS 0x26
 #define MACHO_LC_MAIN 0x80000028
 #define MACHO_CPU_TYPE_X86_64 0x01000007
 #define MACHO_CPU_TYPE_ARM64  0x0100000c
@@ -129,6 +130,15 @@ struct MachO_EntryPointCommand
   U64 stacksize;
 };
 
+typedef struct MachO_LinkeditDataCommand MachO_LinkeditDataCommand;
+struct MachO_LinkeditDataCommand
+{
+  U32 cmd;
+  U32 cmd_size;
+  U32 dataoff;
+  U32 datasize;
+};
+
 typedef struct MachO_SegmentCommand64 MachO_SegmentCommand64;
 struct MachO_SegmentCommand64
 {
@@ -235,6 +245,7 @@ internal String8 macho_string_from_uuid(Arena *arena, MachO_UUID uuid);
 internal String8 macho_dsym_path_from_executable_path(Arena *arena, String8 executable_path);
 internal U64 macho_base_vaddr_from_bin(String8 data, MachO_Bin *bin);
 internal U64 macho_image_size_from_bin(String8 data, MachO_Bin *bin);
+internal U64Array macho_function_start_voffs_from_data(Arena *arena, String8 data, MachO_Bin *bin);
 internal B32 macho_unwind_info_lookup(String8 data, U64 voff, MachO_UnwindInfoLookupResult *result_out);
 internal B32 macho_unwind_x64_saved_regs_from_permutation(U32 reg_count, U32 permutation, U32 *regs_out);
 
