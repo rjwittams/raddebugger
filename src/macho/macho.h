@@ -245,6 +245,8 @@ internal String8 macho_string_from_uuid(Arena *arena, MachO_UUID uuid);
 internal String8 macho_dsym_path_from_executable_path(Arena *arena, String8 executable_path);
 internal U64 macho_base_vaddr_from_bin(String8 data, MachO_Bin *bin);
 internal U64 macho_image_size_from_bin(String8 data, MachO_Bin *bin);
+internal B32 macho_linkedit_data_vrange_from_bin(String8 data, MachO_Bin *bin, U32 cmd, U64 slide, Rng1U64 *vrange_out);
+internal U64Array macho_function_start_voffs_from_base_vaddr_data(Arena *arena, U64 image_base_vaddr, U64 text_vaddr, String8 function_starts_data);
 internal U64Array macho_function_start_voffs_from_data(Arena *arena, String8 data, MachO_Bin *bin);
 internal B32 macho_unwind_info_lookup(String8 data, U64 voff, MachO_UnwindInfoLookupResult *result_out);
 internal B32 macho_unwind_x64_saved_regs_from_permutation(U32 reg_count, U32 permutation, U32 *regs_out);
