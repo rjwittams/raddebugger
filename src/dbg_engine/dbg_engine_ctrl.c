@@ -3354,6 +3354,8 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
           U64 text_vaddr = 0;
           Rng1U64 eh_frame_vrange = {0};
           Rng1U64 unwind_info_vrange = {0};
+          Rng1U64 function_starts_vrange = {0};
+          macho_linkedit_data_vrange_from_bin(data, &bin, MACHO_LC_FUNCTION_STARTS, slide, &function_starts_vrange);
           module_info->arch = arch;
           String8 dsym_path = macho_dsym_path_from_executable_path(scratch.arena, path);
           FileProperties dsym_props = properties_from_file_path(dsym_path);
@@ -3423,6 +3425,14 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
           {
             macho_unwind_info_data = d_data_from_process_vaddr_range(arena, process, unwind_info_vrange, 0);
           }
+          if(function_starts_vrange.max > function_starts_vrange.min)
+          {
+            String8 function_starts_data = d_data_from_process_vaddr_range(arena, process, function_starts_vrange, 0);
+            if(function_starts_data.size == dim_1u64(function_starts_vrange))
+            {
+              macho_function_start_voffs = macho_function_start_voffs_from_base_vaddr_data(arena, file_base_vaddr, text_vaddr - slide, function_starts_data);
+            }
+          }
           if(eh_frame_vrange.max > eh_frame_vrange.min)
           {
             String8 eh_frame_data = d_data_from_process_vaddr_range(arena, process, eh_frame_vrange, 0);
@@ -3447,7 +3457,10 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
           if(file_data.size != 0)
           {
             MachO_Bin file_bin = macho_bin_from_data(scratch.arena, file_data);
-            macho_function_start_voffs = macho_function_start_voffs_from_data(arena, file_data, &file_bin);
+            if(macho_function_start_voffs.count == 0)
+            {
+              macho_function_start_voffs = macho_function_start_voffs_from_data(arena, file_data, &file_bin);
+            }
           }
         }
       }
