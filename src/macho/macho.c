@@ -243,6 +243,66 @@ macho_image_size_from_bin(String8 data, MachO_Bin *bin)
   return result;
 }
 
+internal U64Array
+macho_function_start_voffs_from_data(Arena *arena, String8 data, MachO_Bin *bin)
+{
+  U64Array result = {0};
+  U64 image_base_vaddr = 0;
+  U64 text_vaddr = 0;
+  B32 found_text = 0;
+  MachO_LinkeditDataCommand function_starts_command = {0};
+  B32 found_function_starts = 0;
+  for EachIndex(idx, bin->load_commands.count)
+  {
+    MachO_LoadCommandInfo *info = &bin->load_commands.v[idx];
+    if(info->cmd == MACHO_LC_SEGMENT_64 && info->offset + sizeof(MachO_SegmentCommand64) <= data.size)
+    {
+      MachO_SegmentCommand64 segment = {0};
+      str8_deserial_read_struct(data, info->offset, &segment);
+      String8 segment_name = macho_string_from_fixed_name(segment.segment_name, sizeof(segment.segment_name));
+      if(str8_match(segment_name, str8_lit("__TEXT"), 0))
+      {
+        image_base_vaddr = segment.vmaddr;
+        text_vaddr = segment.vmaddr;
+        found_text = 1;
+      }
+    }
+    else if(info->cmd == MACHO_LC_FUNCTION_STARTS && info->offset + sizeof(MachO_LinkeditDataCommand) <= data.size)
+    {
+      str8_deserial_read_struct(data, info->offset, &function_starts_command);
+      found_function_starts = 1;
+    }
+  }
+
+  if(found_text && found_function_starts &&
+     (U64)function_starts_command.dataoff <= data.size)
+  {
+    U64 data_opl = Min(data.size, (U64)function_starts_command.dataoff + (U64)function_starts_command.datasize);
+    String8 function_starts_data = str8_substr(data, r1u64(function_starts_command.dataoff, data_opl));
+    U64 max_start_count = function_starts_data.size;
+    result.v = push_array(arena, U64, max_start_count);
+    U64 cursor = 0;
+    U64 function_vaddr = text_vaddr;
+    for(; cursor < function_starts_data.size;)
+    {
+      U64 delta = 0;
+      U64 bytes_read = str8_deserial_read_uleb128(function_starts_data, cursor, &delta);
+      if(bytes_read == 0 || delta == 0)
+      {
+        break;
+      }
+      cursor += bytes_read;
+      function_vaddr += delta;
+      if(function_vaddr >= image_base_vaddr)
+      {
+        result.v[result.count] = function_vaddr - image_base_vaddr;
+        result.count += 1;
+      }
+    }
+  }
+  return result;
+}
+
 internal B32
 macho_unwind_info_lookup(String8 data, U64 voff, MachO_UnwindInfoLookupResult *result_out)
 {

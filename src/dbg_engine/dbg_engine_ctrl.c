@@ -1909,6 +1909,45 @@ d_macho_unwind_info_data_from_module(Arena *arena, D_Handle module_handle)
   return result;
 }
 
+internal Rng1U64
+d_macho_function_start_voff_range_from_module_voff(D_Handle module_handle, U64 voff)
+{
+  Rng1U64 result = {0};
+  U64 hash = d_hash_from_handle(module_handle);
+  U64 slot_idx = hash%d_ctrl_state->module_image_info_cache.slots_count;
+  U64 stripe_idx = slot_idx%d_ctrl_state->module_image_info_cache.stripes_count;
+  D_ModuleImageInfoCacheSlot *slot = &d_ctrl_state->module_image_info_cache.slots[slot_idx];
+  D_ModuleImageInfoCacheStripe *stripe = &d_ctrl_state->module_image_info_cache.stripes[stripe_idx];
+  MutexScopeR(stripe->rw_mutex) for(D_ModuleImageInfoCacheNode *n = slot->first; n != 0; n = n->next)
+  {
+    if(d_handle_match(n->module, module_handle))
+    {
+      U64Array starts = n->macho_function_start_voffs;
+      if(starts.count != 0 && starts.v[0] <= voff)
+      {
+        U64 min_idx = 0;
+        U64 opl_idx = starts.count;
+        for(; min_idx + 1 < opl_idx;)
+        {
+          U64 mid_idx = (min_idx + opl_idx)/2;
+          if(starts.v[mid_idx] <= voff)
+          {
+            min_idx = mid_idx;
+          }
+          else
+          {
+            opl_idx = mid_idx;
+          }
+        }
+        result.min = starts.v[min_idx];
+        result.max = (min_idx + 1 < starts.count) ? starts.v[min_idx + 1] : max_U64;
+      }
+      break;
+    }
+  }
+  return result;
+}
+
 internal U64
 d_eh_frame_vaddr_from_module(D_Handle module_handle)
 {
@@ -3747,15 +3786,18 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
             ARM64_RegBlock *regs_arm64 = regs_block;
             String8 unwind_info_data = d_macho_unwind_info_data_from_module(scratch.arena, module_entity->handle);
             MachO_UnwindInfoLookupResult lookup = {0};
+            U64 rip_voff = rip - module_entity->vaddr_range.min;
             U64 compact_cfa = 0;
-            B32 compact_lookup_good = macho_unwind_info_lookup(unwind_info_data, rip - module_entity->vaddr_range.min, &lookup);
+            B32 compact_lookup_good = macho_unwind_info_lookup(unwind_info_data, rip_voff, &lookup);
+            Rng1U64 function_voff_range = d_macho_function_start_voff_range_from_module_voff(module_entity->handle, rip_voff);
+            B32 function_start_good = (function_voff_range.max > function_voff_range.min);
+            B32 near_function_start = function_start_good ? (rip_voff - function_voff_range.min < 16) : (!compact_lookup_good || rip_voff - lookup.voff_range.min < 16);
             U64 lr_vaddr = regs_arm64->lr >= 4 ? regs_arm64->lr - 4 : regs_arm64->lr;
             B32 lr_module_good = (d_module_from_process_vaddr(process_entity, lr_vaddr) != &d_entity_nil);
             B32 prefer_entry_lr = (frame_node_count == 0 &&
                                    regs_arm64->lr != 0 &&
                                    lr_module_good &&
-                                   (!compact_lookup_good ||
-                                    rip - module_entity->vaddr_range.min - lookup.voff_range.min < 16));
+                                   near_function_start);
             B32 compact_dwarf = (compact_lookup_good &&
                                  (lookup.encoding & MACHO_UNWIND_ARM64_MODE_MASK) == MACHO_UNWIND_ARM64_MODE_DWARF);
             B32 compact_supported = compact_lookup_good && d_macho_compact_unwind_arm64_mode_is_supported(lookup.encoding);
@@ -3848,14 +3890,17 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
               ARM64_RegBlock *regs_arm64 = regs_block;
               String8 unwind_info_data = d_macho_unwind_info_data_from_module(scratch.arena, module_entity->handle);
               MachO_UnwindInfoLookupResult lookup = {0};
-              B32 compact_lookup_good = macho_unwind_info_lookup(unwind_info_data, rip - module_entity->vaddr_range.min, &lookup);
+              U64 rip_voff = rip - module_entity->vaddr_range.min;
+              B32 compact_lookup_good = macho_unwind_info_lookup(unwind_info_data, rip_voff, &lookup);
+              Rng1U64 function_voff_range = d_macho_function_start_voff_range_from_module_voff(module_entity->handle, rip_voff);
+              B32 function_start_good = (function_voff_range.max > function_voff_range.min);
+              B32 near_function_start = function_start_good ? (rip_voff - function_voff_range.min < 16) : (!compact_lookup_good || rip_voff - lookup.voff_range.min < 16);
               U64 lr_vaddr = regs_arm64->lr >= 4 ? regs_arm64->lr - 4 : regs_arm64->lr;
               B32 lr_module_good = (d_module_from_process_vaddr(process_entity, lr_vaddr) != &d_entity_nil);
               B32 prefer_entry_lr = (frame_node_count == 1 &&
                                      regs_arm64->lr != 0 &&
                                      lr_module_good &&
-                                     (!compact_lookup_good ||
-                                      rip - module_entity->vaddr_range.min - lookup.voff_range.min < 16));
+                                     near_function_start);
               step_result = d_unwind_step__macho_arm64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, regs_block, prefer_entry_lr, endt_us);
             }break;
           }
@@ -4603,6 +4648,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
   B32 is_unwind_eh = 0;
   String8 dwarf_unwind_data = {0};
   String8 macho_unwind_info_data = {0};
+  U64Array macho_function_start_voffs = {0};
   EH_FrameHdr eh_frame_hdr = {0};
   EH_PtrCtx eh_ptr_ctx   = { .pc_vaddr = max_U64, .text_vaddr = max_U64, .data_vaddr = max_U64, .func_vaddr = max_U64, .ptr_align = 0 };
   
@@ -5030,6 +5076,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
           if(file_data.size != 0)
           {
             MachO_Bin file_bin = macho_bin_from_data(scratch.arena, file_data);
+            macho_function_start_voffs = macho_function_start_voffs_from_data(arena, file_data, &file_bin);
             if(dw_is_dwarf_present_from_macho_bin(file_data, &file_bin))
             {
               str8_list_push(scratch.arena, &image_dbg_path_candidates, path);
@@ -5134,6 +5181,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
         node->is_unwind_eh                = is_unwind_eh;
         node->dwarf_unwind_data           = str8_copy(arena, dwarf_unwind_data);
         node->macho_unwind_info_data      = str8_copy(arena, macho_unwind_info_data);
+        node->macho_function_start_voffs  = macho_function_start_voffs;
         node->eh_frame_hdr                = eh_frame_hdr;
         node->eh_ptr_ctx                  = eh_ptr_ctx;
         node->entry_point_voff            = entry_point_voff;

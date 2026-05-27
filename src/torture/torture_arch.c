@@ -88,6 +88,28 @@ TEST(step_over_line_call_trap_storage)
   T_Ok(arm64_same_line_trap.flags == D_TrapFlag_SingleStepAfterHit);
 }
 
+TEST(step_out_return_exit_points_do_not_have_static_traps)
+{
+  DASM_CtrlFlowPoint ret_point = {0};
+  ret_point.vaddr = 0x1000;
+  ret_point.vaddr_opl = 0x1004;
+  ret_point.jump_dest_vaddr = 0;
+  ret_point.inst_flags = DASM_InstFlag_Return;
+
+  U64 trap_vaddr = 0xdeadbeef;
+  T_Ok(!d_step_out_static_trap_vaddr_from_exit_point(&ret_point, &trap_vaddr));
+  T_Ok(trap_vaddr == 0xdeadbeef);
+
+  DASM_CtrlFlowPoint branch_point = {0};
+  branch_point.vaddr = 0x2000;
+  branch_point.vaddr_opl = 0x2004;
+  branch_point.jump_dest_vaddr = 0x3000;
+  branch_point.inst_flags = DASM_InstFlag_UnconditionalJump;
+
+  T_Ok(d_step_out_static_trap_vaddr_from_exit_point(&branch_point, &trap_vaddr));
+  T_Ok(trap_vaddr == 0x3000);
+}
+
 TEST(arm64_rdi_dwarf_mappings)
 {
   T_Ok(rdi_arch_from_arch(Arch_arm64) == RDI_Arch_ARM64);
@@ -166,6 +188,54 @@ TEST(arm64_macho_compact_frame_saved_reg_slots)
   T_Ok(regs.x19 == 0x1919191919191919ull);
   T_Ok(regs.q8.u64[0] == 0x8888888888888888ull);
   T_Ok(regs.q8.u64[1] == 0x1122334455667788ull);
+}
+
+TEST(macho_function_starts_from_lc_function_starts)
+{
+  U64 data_size = 0x300;
+  U8 *data = push_array(arena, U8, data_size);
+  String8 string = str8(data, data_size);
+
+  U64 header_off = 0;
+  U64 segment_off = sizeof(MachO_Header64);
+  U64 function_starts_command_off = segment_off + sizeof(MachO_SegmentCommand64);
+  U64 function_starts_data_off = 0x200;
+
+  MachO_Header64 header = {0};
+  header.magic = MACHO_MAGIC_64;
+  header.cpu_type = MACHO_CPU_TYPE_ARM64;
+  header.load_command_count = 2;
+  header.load_commands_size = sizeof(MachO_SegmentCommand64) + sizeof(MachO_LinkeditDataCommand);
+  MemoryCopy(data + header_off, &header, sizeof(header));
+
+  MachO_SegmentCommand64 segment = {0};
+  segment.cmd = MACHO_LC_SEGMENT_64;
+  segment.cmd_size = sizeof(segment);
+  MemoryCopy(segment.segment_name, "__TEXT", sizeof("__TEXT")-1);
+  segment.vmaddr = 0x100000000ull;
+  segment.vmsize = 0x1000;
+  segment.fileoff = 0;
+  segment.filesize = 0x1000;
+  MemoryCopy(data + segment_off, &segment, sizeof(segment));
+
+  MachO_LinkeditDataCommand function_starts_command = {0};
+  function_starts_command.cmd = MACHO_LC_FUNCTION_STARTS;
+  function_starts_command.cmd_size = sizeof(function_starts_command);
+  function_starts_command.dataoff = (U32)function_starts_data_off;
+  function_starts_command.datasize = 4;
+  MemoryCopy(data + function_starts_command_off, &function_starts_command, sizeof(function_starts_command));
+
+  data[function_starts_data_off + 0] = 0x20;
+  data[function_starts_data_off + 1] = 0x18;
+  data[function_starts_data_off + 2] = 0x80;
+  data[function_starts_data_off + 3] = 0x01;
+
+  MachO_Bin bin = macho_bin_from_data(arena, string);
+  U64Array starts = macho_function_start_voffs_from_data(arena, string, &bin);
+  T_Ok(starts.count == 3);
+  T_Ok(starts.v[0] == 0x20);
+  T_Ok(starts.v[1] == 0x38);
+  T_Ok(starts.v[2] == 0xb8);
 }
 
 #if OS_MAC && ARCH_ARM64
