@@ -18,12 +18,14 @@
 #import <AppKit/NSAlert.h>
 #import <AppKit/NSApplication.h>
 #import <AppKit/NSCursor.h>
+#import <AppKit/NSDragging.h>
 #import <AppKit/NSEvent.h>
 #import <AppKit/NSMenu.h>
 #import <AppKit/NSMenuItem.h>
 #import <AppKit/NSOpenPanel.h>
 #import <AppKit/NSPasteboard.h>
 #import <AppKit/NSScreen.h>
+#import <AppKit/NSView.h>
 #import <AppKit/NSWindow.h>
 #import <AppKit/NSWorkspace.h>
 #import <QuartzCore/CADisplayLink.h>
@@ -60,6 +62,15 @@ struct MAC_WM_MenuCommandNode
   Vec2F32 pos;
 };
 
+typedef struct MAC_WM_FileDropNode MAC_WM_FileDropNode;
+struct MAC_WM_FileDropNode
+{
+  MAC_WM_FileDropNode *next;
+  WM_Window window;
+  Vec2F32 pos;
+  String8List paths;
+};
+
 @interface MAC_WM_WindowDelegate : NSObject<NSWindowDelegate>
 {
 @public
@@ -68,6 +79,13 @@ struct MAC_WM_MenuCommandNode
   B32 live_resize_update_in_progress;
 }
 - (void)macLiveResizeStopDisplayLink;
+@end
+
+@interface MAC_WM_ContentView : NSView<NSDraggingDestination>
+{
+@public
+  MAC_WM_Window *window;
+}
 @end
 
 @interface MAC_WM_MenuTarget : NSObject
@@ -107,6 +125,10 @@ struct MAC_WM_State
   MAC_WM_MenuCommandNode *first_pending_menu_command;
   MAC_WM_MenuCommandNode *last_pending_menu_command;
   MAC_WM_MenuCommandNode *free_menu_command_node;
+  Arena *file_drop_arena;
+  MAC_WM_FileDropNode *first_pending_file_drop;
+  MAC_WM_FileDropNode *last_pending_file_drop;
+  MAC_WM_FileDropNode *free_file_drop_node;
   B32 key_is_down[WM_Key_COUNT];
 };
 
@@ -124,6 +146,8 @@ internal MAC_WM_Window *mac_wm_window_to_focus_after_close(MAC_WM_Window *window
 internal Vec2F32 mac_wm_close_menu_pos_from_window(MAC_WM_Window *window);
 internal void mac_wm_push_menu_command_for_window_at_pos(MAC_WM_Window *window, String8 command_name, Vec2F32 pos);
 internal void mac_wm_push_menu_command_for_window(MAC_WM_Window *window, String8 command_name);
+internal B32 mac_wm_pasteboard_has_file_paths(NSPasteboard *pasteboard);
+internal void mac_wm_push_file_drop(MAC_WM_Window *window, Vec2F32 pos, NSPasteboard *pasteboard);
 internal MAC_WM_ChromeMode mac_wm_chrome_mode_from_window_decorations(B32 enabled);
 internal MAC_WM_MenuMode mac_wm_menu_mode_from_native_menu_bar(B32 enabled);
 internal B32 mac_wm_chrome_mode_has_native_controls(MAC_WM_ChromeMode mode);
