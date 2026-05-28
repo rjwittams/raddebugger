@@ -81,6 +81,38 @@
 }
 @end
 
+@implementation MAC_WM_ContentView
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender
+{
+  NSDragOperation result = NSDragOperationNone;
+  NSPasteboard *pasteboard = [sender draggingPasteboard];
+  if(window != 0 && mac_wm_pasteboard_has_file_paths(pasteboard))
+  {
+    result = NSDragOperationCopy;
+  }
+  return result;
+}
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender
+{
+  return [self draggingEntered:sender];
+}
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender
+{
+  BOOL result = NO;
+  if(window != 0)
+  {
+    NSPasteboard *pasteboard = [sender draggingPasteboard];
+    if(mac_wm_pasteboard_has_file_paths(pasteboard))
+    {
+      Vec2F32 pos = mac_wm_client_pos_from_ns_point(window, [sender draggingLocation]);
+      mac_wm_push_file_drop(window, pos, pasteboard);
+      result = YES;
+    }
+  }
+  return result;
+}
+@end
+
 @implementation MAC_WM_MenuTarget
 - (void)menuItemSelected:(id)sender
 {
@@ -310,6 +342,80 @@ internal void
 mac_wm_push_menu_command(String8 command_name)
 {
   mac_wm_push_menu_command_for_window(mac_wm_menu_command_target_window(), command_name);
+}
+
+internal B32
+mac_wm_pasteboard_has_file_paths(NSPasteboard *pasteboard)
+{
+  B32 result = 0;
+  if(pasteboard != 0)
+  {
+    result = ([pasteboard canReadObjectForClasses:@[[NSURL class]]
+                                      options:@{NSPasteboardURLReadingFileURLsOnlyKey:@YES}] ||
+              [pasteboard availableTypeFromArray:@[NSPasteboardTypeFileURL, NSURLPboardType, NSFilenamesPboardType]] != 0);
+  }
+  return result;
+}
+
+internal void
+mac_wm_push_file_drop(MAC_WM_Window *window, Vec2F32 pos, NSPasteboard *pasteboard)
+{
+  if(mac_wm_state != 0 && window != 0 && pasteboard != 0)
+  {
+    MAC_WM_FileDropNode *node = mac_wm_state->free_file_drop_node;
+    if(node != 0)
+    {
+      SLLStackPop(mac_wm_state->free_file_drop_node);
+      MemoryZeroStruct(node);
+    }
+    else
+    {
+      node = push_array(mac_wm_state->arena, MAC_WM_FileDropNode, 1);
+    }
+
+    node->window = mac_wm_handle_from_window(window);
+    node->pos = pos;
+    NSArray *urls = [pasteboard readObjectsForClasses:@[[NSURL class]]
+                                              options:@{NSPasteboardURLReadingFileURLsOnlyKey:@YES}];
+    for(NSURL *url in urls)
+    {
+      if([url isFileURL])
+      {
+        NSString *path = [url path];
+        char const *utf8 = [path UTF8String];
+        if(utf8 != 0)
+        {
+          String8 path_string = str8_cstring((char *)utf8);
+          String8 path_string__normalized = path_normalized_from_string(mac_wm_state->file_drop_arena, path_string);
+          str8_list_push(mac_wm_state->file_drop_arena, &node->paths, path_string__normalized);
+        }
+      }
+    }
+    if(node->paths.node_count == 0)
+    {
+      NSArray *paths = [pasteboard propertyListForType:NSFilenamesPboardType];
+      for(NSString *path in paths)
+      {
+        char const *utf8 = [path UTF8String];
+        if(utf8 != 0)
+        {
+          String8 path_string = str8_cstring((char *)utf8);
+          String8 path_string__normalized = path_normalized_from_string(mac_wm_state->file_drop_arena, path_string);
+          str8_list_push(mac_wm_state->file_drop_arena, &node->paths, path_string__normalized);
+        }
+      }
+    }
+
+    if(node->paths.node_count != 0)
+    {
+      SLLQueuePush(mac_wm_state->first_pending_file_drop, mac_wm_state->last_pending_file_drop, node);
+      wm_send_wakeup_event();
+    }
+    else
+    {
+      SLLStackPush(mac_wm_state->free_file_drop_node, node);
+    }
+  }
 }
 
 internal B32
@@ -597,6 +703,8 @@ mac_wm_window_release(MAC_WM_Window *window)
   {
     focus_after_close = mac_wm_window_to_focus_after_close(window);
   }
+  MAC_WM_ContentView *content_view = (MAC_WM_ContentView *)[window->ns_window contentView];
+  content_view->window = 0;
   DLLRemove(mac_wm_state->first_window, mac_wm_state->last_window, window);
   if(mac_wm_state->focused_window == window)
   {
@@ -626,6 +734,7 @@ wm_init(void)
   mac_wm_state->chrome_mode = mac_wm_chrome_mode_from_window_decorations(1);
   mac_wm_state->menu_mode = mac_wm_menu_mode_from_native_menu_bar(0);
   mac_wm_state->menu_target = [MAC_WM_MenuTarget new];
+  mac_wm_state->file_drop_arena = arena_alloc();
 
   [NSApplication sharedApplication];
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
@@ -697,6 +806,11 @@ wm_window_open(Rng2F32 rect, WM_WindowFlags flags, String8 title)
   window->custom_border = custom_border;
   window->delegate = [MAC_WM_WindowDelegate new];
   window->delegate->window = window;
+  MAC_WM_ContentView *content_view = [[MAC_WM_ContentView alloc] initWithFrame:[[window->ns_window contentView] frame]];
+  content_view->window = window;
+  [window->ns_window setContentView:content_view];
+  [content_view registerForDraggedTypes:@[NSPasteboardTypeFileURL, NSURLPboardType, NSFilenamesPboardType]];
+  [content_view release];
   [window->ns_window setDelegate:window->delegate];
   [window->ns_window setReleasedWhenClosed:NO];
   [window->ns_window setAcceptsMouseMovedEvents:YES];
@@ -1224,6 +1338,20 @@ wm_get_events(Arena *arena, B32 wait)
   }
   mac_wm_state->first_pending_menu_command = 0;
   mac_wm_state->last_pending_menu_command = 0;
+  for(MAC_WM_FileDropNode *node = mac_wm_state->first_pending_file_drop, *next = 0;
+      node != 0;
+      node = next)
+  {
+    next = node->next;
+    WM_Event *event = wm_event_list_push_new(arena, &result, WM_EventKind_FileDrop);
+    event->window = node->window;
+    event->pos = node->pos;
+    event->strings = str8_list_copy(arena, &node->paths);
+    SLLStackPush(mac_wm_state->free_file_drop_node, node);
+  }
+  mac_wm_state->first_pending_file_drop = 0;
+  mac_wm_state->last_pending_file_drop = 0;
+  arena_clear(mac_wm_state->file_drop_arena);
   return result;
 }
 
