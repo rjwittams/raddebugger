@@ -598,6 +598,7 @@ internal B32 d_macho_compact_unwind_arm64_mode_is_supported(U32 encoding);
 internal U64 d_macho_compact_unwind_arm64_frame_saved_reg_slots_from_encoding(U32 encoding, D_MachOCompactArm64FrameRegSlot *slots, U64 slots_cap);
 internal B32 d_macho_compact_unwind_arm64_write_reg_slot(ARM64_RegBlock *regs, D_MachOCompactArm64FrameRegSlot *slot, U64 value);
 internal B32 d_macho_compact_unwind_arm64_cfa_from_encoding(MachO_UnwindInfoLookupResult *lookup, ARM64_RegBlock *regs, U64 *cfa_out);
+internal B32 d_unwind_arm64_should_prefer_entry_lr(U64 rip_voff, Rng1U64 function_voff_range, B32 compact_lookup_good, MachO_UnwindInfoLookupResult *lookup);
 internal B32 d_unwind_arm64_cfa_from_frame_pointer(ARM64_RegBlock *regs, U64 *cfa_out);
 internal B32 d_unwind_arm64_cfa_from_link_register(ARM64_RegBlock *regs, U64 *cfa_out);
 internal D_UnwindStepResult d_unwind_step__link_register_arm64(ARM64_RegBlock *regs);

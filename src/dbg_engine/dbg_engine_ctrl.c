@@ -3522,6 +3522,20 @@ d_unwind_arm64_cfa_from_link_register(ARM64_RegBlock *regs, U64 *cfa_out)
   return result;
 }
 
+internal B32
+d_unwind_arm64_should_prefer_entry_lr(U64 rip_voff, Rng1U64 function_voff_range, B32 compact_lookup_good, MachO_UnwindInfoLookupResult *lookup)
+{
+  B32 function_start_good = (function_voff_range.max > function_voff_range.min);
+  U64 function_start_voff = function_start_good ? function_voff_range.min : (compact_lookup_good ? lookup->voff_range.min : rip_voff);
+  U64 entry_lr_window_size = 16;
+  if(compact_lookup_good && (lookup->encoding & MACHO_UNWIND_ARM64_MODE_MASK) == MACHO_UNWIND_ARM64_MODE_FRAME)
+  {
+    entry_lr_window_size = 8;
+  }
+  B32 result = (rip_voff >= function_start_voff && rip_voff - function_start_voff < entry_lr_window_size);
+  return result;
+}
+
 internal D_UnwindStepResult
 d_unwind_step__link_register_arm64(ARM64_RegBlock *regs)
 {
@@ -3790,14 +3804,12 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
             U64 compact_cfa = 0;
             B32 compact_lookup_good = macho_unwind_info_lookup(unwind_info_data, rip_voff, &lookup);
             Rng1U64 function_voff_range = d_macho_function_start_voff_range_from_module_voff(module_entity->handle, rip_voff);
-            B32 function_start_good = (function_voff_range.max > function_voff_range.min);
-            B32 near_function_start = function_start_good ? (rip_voff - function_voff_range.min < 16) : (!compact_lookup_good || rip_voff - lookup.voff_range.min < 16);
             U64 lr_vaddr = regs_arm64->lr >= 4 ? regs_arm64->lr - 4 : regs_arm64->lr;
             B32 lr_module_good = (d_module_from_process_vaddr(process_entity, lr_vaddr) != &d_entity_nil);
             B32 prefer_entry_lr = (frame_node_count == 0 &&
                                    regs_arm64->lr != 0 &&
                                    lr_module_good &&
-                                   near_function_start);
+                                   d_unwind_arm64_should_prefer_entry_lr(rip_voff, function_voff_range, compact_lookup_good, &lookup));
             B32 compact_dwarf = (compact_lookup_good &&
                                  (lookup.encoding & MACHO_UNWIND_ARM64_MODE_MASK) == MACHO_UNWIND_ARM64_MODE_DWARF);
             B32 compact_supported = compact_lookup_good && d_macho_compact_unwind_arm64_mode_is_supported(lookup.encoding);
@@ -3893,14 +3905,12 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
               U64 rip_voff = rip - module_entity->vaddr_range.min;
               B32 compact_lookup_good = macho_unwind_info_lookup(unwind_info_data, rip_voff, &lookup);
               Rng1U64 function_voff_range = d_macho_function_start_voff_range_from_module_voff(module_entity->handle, rip_voff);
-              B32 function_start_good = (function_voff_range.max > function_voff_range.min);
-              B32 near_function_start = function_start_good ? (rip_voff - function_voff_range.min < 16) : (!compact_lookup_good || rip_voff - lookup.voff_range.min < 16);
               U64 lr_vaddr = regs_arm64->lr >= 4 ? regs_arm64->lr - 4 : regs_arm64->lr;
               B32 lr_module_good = (d_module_from_process_vaddr(process_entity, lr_vaddr) != &d_entity_nil);
               B32 prefer_entry_lr = (frame_node_count == 1 &&
                                      regs_arm64->lr != 0 &&
                                      lr_module_good &&
-                                     near_function_start);
+                                     d_unwind_arm64_should_prefer_entry_lr(rip_voff, function_voff_range, compact_lookup_good, &lookup));
               step_result = d_unwind_step__macho_arm64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, regs_block, prefer_entry_lr, endt_us);
             }break;
           }
