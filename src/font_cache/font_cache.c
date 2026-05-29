@@ -517,17 +517,21 @@ fnt_piece_array_copy(Arena *arena, FNT_PieceArray *src)
 //~ rjf: Cache Usage
 
 internal FNT_Hash2StyleRasterCacheNode *
-fnt_hash2style_from_tag_size_flags(FNT_Tag tag, F32 size, FNT_RasterFlags flags)
+fnt_hash2style_from_tag_size_raster_scale_flags(FNT_Tag tag, F32 size, F32 raster_scale, FNT_RasterFlags flags)
 {
+  raster_scale = ClampBot(1.f, raster_scale);
+
   //- rjf: tag * size -> style hash
   U64 style_hash = {0};
   {
     F64 size_f64 = size;
+    F64 raster_scale_f64 = raster_scale;
     U64 buffer[] =
     {
       tag.u64[0],
       tag.u64[1],
       *(U64 *)(&size_f64),
+      *(U64 *)(&raster_scale_f64),
       (U64)flags,
     };
     style_hash = fnt_little_hash_from_string(5381, str8((U8 *)buffer, sizeof(buffer)));
@@ -566,10 +570,13 @@ fnt_hash2style_from_tag_size_flags(FNT_Tag tag, F32 size, FNT_RasterFlags flags)
 }
 
 internal FNT_Run
-fnt_run_from_string(FNT_Tag tag, F32 size, F32 base_align_px, F32 tab_size_px, FNT_RasterFlags flags, String8 string)
+fnt_run_from_string_scaled(FNT_Tag tag, F32 size, F32 raster_scale, F32 base_align_px, F32 tab_size_px, FNT_RasterFlags flags, String8 string)
 {
+  raster_scale = ClampBot(1.f, raster_scale);
+  F32 inv_raster_scale = 1.f/raster_scale;
+
   //- rjf: map tag/size to style node
-  FNT_Hash2StyleRasterCacheNode *hash2style_node = fnt_hash2style_from_tag_size_flags(tag, size, flags);
+  FNT_Hash2StyleRasterCacheNode *hash2style_node = fnt_hash2style_from_tag_size_raster_scale_flags(tag, size, raster_scale, flags);
   
   //- rjf: set up this style's run cache if needed
   if(hash2style_node->run_slots_frame_index != fnt_state->frame_index)
@@ -725,7 +732,7 @@ fnt_run_from_string(FNT_Tag tag, F32 size, F32 base_align_px, F32 tab_size_px, F
           FP_RasterFlags fp_flags = 0;
           if(flags & FNT_RasterFlag_Smooth) { fp_flags |= FP_RasterFlag_Smooth; }
           if(flags & FNT_RasterFlag_Hinted) { fp_flags |= FP_RasterFlag_Hinted; }
-          raster = fp_raster(scratch.arena, font_handle, floor_f32(size), flags, piece_substring);
+          raster = fp_raster(scratch.arena, font_handle, floor_f32(size*raster_scale), fp_flags, piece_substring);
         }
         
         // rjf: allocate portion of an atlas to upload the rasterization
@@ -804,7 +811,8 @@ fnt_run_from_string(FNT_Tag tag, F32 size, F32 base_align_px, F32 tab_size_px, F
             info->subrect    = chosen_atlas_region;
             info->atlas_num  = chosen_atlas_num;
             info->raster_dim = raster.atlas_dim;
-            info->advance    = raster.advance;
+            info->draw_dim   = v2f32((F32)raster.atlas_dim.x*inv_raster_scale, (F32)raster.atlas_dim.y*inv_raster_scale);
+            info->advance    = raster.advance*inv_raster_scale;
           }
         }
         
@@ -848,12 +856,13 @@ fnt_run_from_string(FNT_Tag tag, F32 size, F32 base_align_px, F32 tab_size_px, F
                                     info->subrect.x0 + info->raster_dim.x,
                                     info->subrect.y0 + info->raster_dim.y);
             piece->advance = advance;
+            piece->draw_dim = info->draw_dim;
             piece->decode_size = piece_substring.size;
-            piece->offset = v2s16(0, -(hash2style_node->ascent + hash2style_node->descent));
+            piece->offset = v2f32(0, -(hash2style_node->ascent + hash2style_node->descent));
           }
           base_align_px += advance;
           dim.x += piece->advance;
-          dim.y = Max(dim.y, info->raster_dim.y);
+          dim.y = Max(dim.y, info->draw_dim.y);
         }
       }
     }
@@ -885,6 +894,13 @@ fnt_run_from_string(FNT_Tag tag, F32 size, F32 base_align_px, F32 tab_size_px, F
   }
   
   return run;
+}
+
+internal FNT_Run
+fnt_run_from_string(FNT_Tag tag, F32 size, F32 base_align_px, F32 tab_size_px, FNT_RasterFlags flags, String8 string)
+{
+  FNT_Run result = fnt_run_from_string_scaled(tag, size, 1.f, base_align_px, tab_size_px, flags, string);
+  return result;
 }
 
 internal String8List

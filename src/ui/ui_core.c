@@ -888,6 +888,7 @@ ui_begin_build(WM_Window window, UI_EventList *events, UI_IconInfo *icon_info, U
     ui_state->events = events;
     ui_state->window = window;
     ui_state->mouse = (wm_window_is_focused(window) || ui_state->last_time_mousemoved_us+500000 >= now_time_us()) ? wm_mouse_from_window(window) : v2f32(-100, -100);
+    dr_set_raster_scale(wm_backing_scale_from_window(window));
     ui_state->animation_dt = animation_dt;
     MemoryZeroStruct(&ui_state->icon_info);
     ui_state->icon_info.icon_font = icon_info->icon_font;

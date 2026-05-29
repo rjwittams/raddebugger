@@ -339,6 +339,20 @@ wm_dpi_from_window(WM_Window handle)
   return 96.f;
 }
 
+internal F32
+wm_layout_scale_from_window(WM_Window handle)
+{
+  F32 result = wm_dpi_from_window(handle)/96.f;
+  result = ClampBot(1.f/16.f, result);
+  return result;
+}
+
+internal F32
+wm_backing_scale_from_window(WM_Window handle)
+{
+  return 1.f;
+}
+
 ////////////////////////////////
 //~ rjf: @os_hooks External Windows (Implemented Per-OS)
 
