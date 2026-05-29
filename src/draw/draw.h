@@ -100,6 +100,7 @@ struct DR_ThreadCtx
   Arena *arena;
   U64 arena_frame_start_pos;
   FNT_Tag icon_font;
+  F32 raster_scale;
   DR_BucketSelectionNode *top_bucket;
   DR_BucketSelectionNode *free_bucket_selection;
 };
@@ -125,6 +126,9 @@ internal void dr_fstrs_concat_in_place(DR_FStrList *dst, DR_FStrList *to_push);
 internal DR_FStrList dr_fstrs_copy(Arena *arena, DR_FStrList *src);
 internal String8 dr_string_from_fstrs(Arena *arena, DR_FStrList *list);
 internal FuzzyMatchRangeList dr_fuzzy_match_find_from_fstrs(Arena *arena, DR_FStrList *fstrs, String8 needle);
+internal F32 dr_raster_scale(void);
+internal void dr_set_raster_scale(F32 raster_scale);
+internal FNT_Run dr_fnt_run_from_string(FNT_Tag font, F32 size, F32 base_align_px, F32 tab_size_px, FNT_RasterFlags flags, String8 string);
 internal DR_FRunList dr_fruns_from_fstrs(Arena *arena, F32 tab_size_px, DR_FStrList *strs);
 internal Vec2F32 dr_dim_from_fstrs(F32 tab_size_px, DR_FStrList *fstrs);
 
