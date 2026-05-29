@@ -286,7 +286,8 @@ struct RD_WindowState
   WM_Window os;
   R_Handle r;
   UI_State *ui;
-  F32 last_dpi;
+  F32 last_layout_scale;
+  F32 last_backing_scale;
   B32 window_temporarily_focused_ipc;
   B32 window_layout_reset;
   Rng2F32 last_window_rect;
