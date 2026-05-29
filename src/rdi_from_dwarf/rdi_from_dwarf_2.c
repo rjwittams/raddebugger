@@ -1121,7 +1121,7 @@ d2r2_convert(Arena *arena, D2R2_ConvertParams *params)
         }
         
         //- rjf: emit lines
-        if(emit_line && vm_regs.address != 0 && vm_regs.line != 0)
+        if(emit_line && vm_regs.address != 0)
         {
           emit_line = 0;
           
