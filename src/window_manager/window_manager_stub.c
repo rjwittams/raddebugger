@@ -161,6 +161,18 @@ wm_dpi_from_window(WM_Window window)
   return 96.f;
 }
 
+internal F32
+wm_layout_scale_from_window(WM_Window window)
+{
+  return 1.f;
+}
+
+internal F32
+wm_backing_scale_from_window(WM_Window window)
+{
+  return 1.f;
+}
+
 ////////////////////////////////
 //~ rjf: @os_hooks External Windows (Implemented Per-OS)
 

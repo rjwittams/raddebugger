@@ -5028,7 +5028,8 @@ rd_window_state_from_cfg(CFG_Node *cfg)
     ws->query_arena = arena_alloc();
     ws->hover_eval_arena = arena_alloc();
     ws->autocomp_arena = arena_alloc();
-    ws->last_dpi = wm_dpi_from_window(ws->os);
+    ws->last_layout_scale = wm_layout_scale_from_window(ws->os);
+    ws->last_backing_scale = wm_backing_scale_from_window(ws->os);
     WM_Monitor zero_monitor = {0};
     if(!wm_monitor_match(zero_monitor, preferred_monitor))
     {
@@ -5261,6 +5262,7 @@ rd_window_frame(void)
   if(rd_state->first_window_state == ws && rd_state->last_window_state == ws && ws->frames_alive == 0)
   {
     F32 font_size = rd_font_size();
+    F32 raster_scale = wm_backing_scale_from_window(ws->os);
     RD_FontSlot english_font_slots[] = {RD_FontSlot_Main, RD_FontSlot_Code};
     RD_FontSlot icon_font_slot = RD_FontSlot_Icons;
     for(U64 idx = 0; idx < ArrayCount(english_font_slots); idx += 1)
@@ -5268,31 +5270,36 @@ rd_window_frame(void)
       Temp scratch = scratch_begin(0, 0);
       RD_FontSlot slot = english_font_slots[idx];
       String8 sample_text = str8_lit("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890~!@#$%^&*()-_+=[{]}\\|;:'\",<.>/?");
-      fnt_run_from_string(rd_font_from_slot(slot),
-                          font_size,
-                          0, 0, 0,
-                          sample_text);
-      fnt_run_from_string(rd_font_from_slot(slot),
-                          font_size,
-                          0, 0, 0,
-                          sample_text);
+      fnt_run_from_string_scaled(rd_font_from_slot(slot),
+                                 font_size,
+                                 raster_scale,
+                                 0, 0, 0,
+                                 sample_text);
+      fnt_run_from_string_scaled(rd_font_from_slot(slot),
+                                 font_size,
+                                 raster_scale,
+                                 0, 0, 0,
+                                 sample_text);
       scratch_end(scratch);
     }
     for(RD_IconKind icon_kind = RD_IconKind_Null; icon_kind < RD_IconKind_COUNT; icon_kind = (RD_IconKind)(icon_kind+1))
     {
       Temp scratch = scratch_begin(0, 0);
-      fnt_run_from_string(rd_font_from_slot(icon_font_slot),
-                          font_size,
-                          0, 0, FNT_RasterFlag_Smooth,
-                          rd_icon_kind_text_table[icon_kind]);
-      fnt_run_from_string(rd_font_from_slot(icon_font_slot),
-                          font_size,
-                          0, 0, FNT_RasterFlag_Smooth,
-                          rd_icon_kind_text_table[icon_kind]);
-      fnt_run_from_string(rd_font_from_slot(icon_font_slot),
-                          font_size,
-                          0, 0, FNT_RasterFlag_Smooth,
-                          rd_icon_kind_text_table[icon_kind]);
+      fnt_run_from_string_scaled(rd_font_from_slot(icon_font_slot),
+                                 font_size,
+                                 raster_scale,
+                                 0, 0, FNT_RasterFlag_Smooth,
+                                 rd_icon_kind_text_table[icon_kind]);
+      fnt_run_from_string_scaled(rd_font_from_slot(icon_font_slot),
+                                 font_size,
+                                 raster_scale,
+                                 0, 0, FNT_RasterFlag_Smooth,
+                                 rd_icon_kind_text_table[icon_kind]);
+      fnt_run_from_string_scaled(rd_font_from_slot(icon_font_slot),
+                                 font_size,
+                                 raster_scale,
+                                 0, 0, FNT_RasterFlag_Smooth,
+                                 rd_icon_kind_text_table[icon_kind]);
       scratch_end(scratch);
     }
   }
@@ -5322,21 +5329,26 @@ rd_window_frame(void)
       cfg_node_release(rd_state->cfg, cfg_node_child_from_string(window, str8_lit("maximized")));
     }
     
-    //- rjf: DPI changes -> xform font size / window size
-    F32 dpi = wm_dpi_from_window(ws->os);
-    if(dpi != ws->last_dpi)
+    //- rjf: scale changes -> xform layout font size and refresh raster caches
+    F32 layout_scale = wm_layout_scale_from_window(ws->os);
+    F32 backing_scale = wm_backing_scale_from_window(ws->os);
+    if(layout_scale != ws->last_layout_scale)
     {
       fnt_reset();
-#if OS_MAC
-      ws->last_dpi = dpi;
-#else
-      F32 current_font_size = rd_font_size();
-      F32 new_font_size = current_font_size * (dpi / ws->last_dpi);
-      new_font_size = Clamp(6.f, new_font_size, 72.f);
-      CFG_Node *font_size_cfg = cfg_node_child_from_string_or_alloc(rd_state->cfg, window, str8_lit("font_size"));
-      cfg_node_new_replacef(rd_state->cfg, font_size_cfg, "%I64u", (U64)new_font_size);
-      ws->last_dpi = dpi;
-#endif
+      if(ws->last_layout_scale != 0)
+      {
+        F32 current_font_size = rd_font_size();
+        F32 new_font_size = current_font_size * (layout_scale / ws->last_layout_scale);
+        new_font_size = Clamp(6.f, new_font_size, 72.f);
+        CFG_Node *font_size_cfg = cfg_node_child_from_string_or_alloc(rd_state->cfg, window, str8_lit("font_size"));
+        cfg_node_new_replacef(rd_state->cfg, font_size_cfg, "%I64u", (U64)new_font_size);
+      }
+      ws->last_layout_scale = layout_scale;
+    }
+    if(backing_scale != ws->last_backing_scale)
+    {
+      fnt_reset();
+      ws->last_backing_scale = backing_scale;
     }
     
     //- rjf: commit position
@@ -5476,7 +5488,7 @@ rd_window_frame(void)
     Rng2F32 top_bar_rect = r2f32p(window_rect.x0, window_rect.y0, window_rect.x0+window_rect_dim.x+1, window_rect.y0+top_bar_dim_px);
     Rng2F32 bottom_bar_rect = r2f32p(window_rect.x0, window_rect_dim.y - top_bar_dim_px, window_rect.x0+window_rect_dim.x, window_rect.y0+window_rect_dim.y);
     Rng2F32 content_rect = r2f32p(window_rect.x0, top_bar_rect.y1, window_rect.x0+window_rect_dim.x, bottom_bar_rect.y0);
-    F32 window_edge_px = wm_dpi_from_window(ws->os)*0.035f;
+    F32 window_edge_px = 96.f*wm_layout_scale_from_window(ws->os)*0.035f;
     content_rect = pad_2f32(content_rect, -window_edge_px);
     
     ////////////////////////////
@@ -8932,7 +8944,7 @@ rd_window_frame(void)
             ellipses_raster_flags = box->display_fstrs.last->v.params.raster_flags;
           }
           max_x = (box->rect.x1-text_position.x);
-          ellipses_run = fnt_run_from_string(ellipses_font, ellipses_size, 0, box->tab_size, ellipses_raster_flags, str8_lit("..."));
+          ellipses_run = dr_fnt_run_from_string(ellipses_font, ellipses_size, 0, box->tab_size, ellipses_raster_flags, str8_lit("..."));
         }
         if(box->flags & UI_BoxFlag_HasFuzzyMatchRanges) UI_TagF("match")
         {
