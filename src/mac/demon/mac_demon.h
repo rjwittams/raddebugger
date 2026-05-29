@@ -260,6 +260,7 @@ internal B32 mac_dmn_dyld_all_image_infos_is_ready(U64 all_image_infos_vaddr, st
 internal B32 mac_dmn_read_dyld_all_image_infos(MAC_DMN_Process *process, struct dyld_all_image_infos *all_images_out);
 internal B32 mac_dmn_read_dyld_all_image_infos_with_addr(MAC_DMN_Process *process, struct dyld_all_image_infos *all_images_out, U64 *all_image_infos_vaddr_out);
 internal B32 mac_dmn_read_dyld_image_infos(Arena *arena, MAC_DMN_Process *process, struct dyld_image_info **images_out, U32 *count_out);
+internal U64 mac_dmn_fix_code_vaddr(Arch arch, U64 vaddr);
 internal U64 mac_dmn_dyld_notification_vaddr_from_process(MAC_DMN_Process *process);
 internal B32 mac_dmn_process_vaddr_is_executable(MAC_DMN_Process *process, U64 vaddr);
 internal void mac_dmn_refresh_module_events(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity);
