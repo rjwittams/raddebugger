@@ -346,6 +346,7 @@ TEST(d2r_line_table)
     { comp_file, 8, 5 },
     { foo_file, 1, 3 },
     { foo_file, 100, 1 },
+    { comp_file, 0, 4 },
     { comp_file, max_U32 - 0x100, 10 },
   };
   
@@ -388,6 +389,14 @@ TEST(d2r_line_table)
   
   for EachElement(i, test_table) {
     for EachIndex(k, test_table[i].line_size) {
+      RDI_Line parsed_line = rdi_line_from_voff(rdi, test_table[i].voff + k);
+      T_Ok(parsed_line.line_num == test_table[i].ln);
+
+      if(test_table[i].ln == 0)
+      {
+        continue;
+      }
+
       String8 cmd_line = str8f(arena, "-voff2line -voff:0x%llx a.rdi", test_table[i].voff + k);
       String8 output = {0};
       t_invoke_(t_radbin_path(), cmd_line, max_U64, arena, &output);
