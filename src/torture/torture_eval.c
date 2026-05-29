@@ -101,5 +101,23 @@ TEST(eval_compiler_basics)
   T_Ok(str8_match(log, expected_log, 0));
 }
 
+TEST(eval_duplicate_rdi_prefers_primary_dbg_info)
+{
+  E_Cache *eval_cache = e_cache_alloc();
+  e_select_cache(eval_cache);
+
+  E_DbgInfo dbg_infos[2] = {0};
+  dbg_infos[0].rdi = &rdi_parsed_nil;
+  dbg_infos[1].rdi = &rdi_parsed_nil;
+
+  E_BaseCtx *base_ctx = push_array(arena, E_BaseCtx, 1);
+  base_ctx->dbg_infos = dbg_infos;
+  base_ctx->dbg_infos_count = ArrayCount(dbg_infos);
+  base_ctx->primary_dbg_info = &dbg_infos[1];
+  e_select_base_ctx(base_ctx);
+
+  T_Ok(e_dbg_info_num_from_rdi_prefer_primary(&rdi_parsed_nil) == 2);
+}
+
 #undef T_Group
 

@@ -1248,6 +1248,8 @@ internal void e_select_ir_ctx(E_IRCtx *ctx);
 
 internal E_DbgInfo *e_dbg_info_from_module(E_Module *module);
 internal E_DbgInfo *e_dbg_info_from_type_key(E_TypeKey type_key);
+internal U32 e_dbg_info_num_from_rdi_prefer_primary(RDI_Parsed *rdi);
+internal DI_Match e_match_from_rdi_name_maps(Arena *arena, RDI_Parsed *rdi, DI_Key key, String8 string, U64 index);
 
 ////////////////////////////////
 //~ rjf: Base Cache Accessing Functions
