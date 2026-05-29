@@ -172,6 +172,30 @@ dr_fuzzy_match_find_from_fstrs(Arena *arena, DR_FStrList *fstrs, String8 needle)
   return ranges;
 }
 
+internal F32
+dr_raster_scale(void)
+{
+  F32 result = dr_thread_ctx ? dr_thread_ctx->raster_scale : 1.f;
+  result = result == 0 ? 1.f : result;
+  return result;
+}
+
+internal void
+dr_set_raster_scale(F32 raster_scale)
+{
+  if(dr_thread_ctx != 0)
+  {
+    dr_thread_ctx->raster_scale = ClampBot(1.f, raster_scale);
+  }
+}
+
+internal FNT_Run
+dr_fnt_run_from_string(FNT_Tag font, F32 size, F32 base_align_px, F32 tab_size_px, FNT_RasterFlags flags, String8 string)
+{
+  FNT_Run result = fnt_run_from_string_scaled(font, size, dr_raster_scale(), base_align_px, tab_size_px, flags, string);
+  return result;
+}
+
 internal DR_FRunList
 dr_fruns_from_fstrs(Arena *arena, F32 tab_size_px, DR_FStrList *strs)
 {
@@ -180,7 +204,7 @@ dr_fruns_from_fstrs(Arena *arena, F32 tab_size_px, DR_FStrList *strs)
   for(DR_FStrNode *n = strs->first; n != 0; n = n->next)
   {
     DR_FRunNode *dst_n = push_array(arena, DR_FRunNode, 1);
-    dst_n->v.run = fnt_run_from_string(n->v.params.font, n->v.params.size, base_align_px, tab_size_px, n->v.params.raster_flags, n->v.string);
+    dst_n->v.run = fnt_run_from_string_scaled(n->v.params.font, n->v.params.size, dr_raster_scale(), base_align_px, tab_size_px, n->v.params.raster_flags, n->v.string);
     dst_n->v.color = n->v.params.color;
     dst_n->v.underline_thickness = n->v.params.underline_thickness;
     dst_n->v.strikethrough_thickness = n->v.params.strikethrough_thickness;
@@ -223,6 +247,7 @@ dr_begin_frame(FNT_Tag icon_font)
   dr_thread_ctx->free_bucket_selection = 0;
   dr_thread_ctx->top_bucket = 0;
   dr_thread_ctx->icon_font = icon_font;
+  dr_thread_ctx->raster_scale = 1.f;
 }
 
 internal void
@@ -581,7 +606,7 @@ dr_truncated_fancy_run_list(Vec2F32 p, DR_FRunList *list, F32 max_x, FNT_Run tra
       }
       R_Handle texture = piece->texture;
       Rng2F32 src = r2f32p((F32)piece->subrect.x0, (F32)piece->subrect.y0, (F32)piece->subrect.x1, (F32)piece->subrect.y1);
-      Vec2F32 size = dim_2f32(src);
+      Vec2F32 size = piece->draw_dim;
       Rng2F32 dst = r2f32p(p.x + piece->offset.x + advance,
                            p.y + piece->offset.y,
                            p.x + piece->offset.x + advance + size.x,
@@ -627,7 +652,7 @@ dr_truncated_fancy_run_list(Vec2F32 p, DR_FRunList *list, F32 max_x, FNT_Run tra
     {
       R_Handle texture = piece->texture;
       Rng2F32 src = r2f32p((F32)piece->subrect.x0, (F32)piece->subrect.y0, (F32)piece->subrect.x1, (F32)piece->subrect.y1);
-      Vec2F32 size = dim_2f32(src);
+      Vec2F32 size = piece->draw_dim;
       Rng2F32 dst = r2f32p(p.x + piece->offset.x + advance,
                            p.y + piece->offset.y,
                            p.x + piece->offset.x + advance + size.x,
@@ -706,7 +731,7 @@ dr_text_run(Vec2F32 p, Vec4F32 color, FNT_Run run)
   {
     R_Handle texture = piece->texture;
     Rng2F32 src = r2f32p((F32)piece->subrect.x0, (F32)piece->subrect.y0, (F32)piece->subrect.x1, (F32)piece->subrect.y1);
-    Vec2F32 size = dim_2f32(src);
+    Vec2F32 size = piece->draw_dim;
     Rng2F32 dst = r2f32p(p.x + piece->offset.x + advance,
                          p.y + piece->offset.y,
                          p.x + piece->offset.x + advance + size.x,
@@ -723,7 +748,7 @@ internal void
 dr_text(FNT_Tag font, F32 size, F32 base_align_px, F32 tab_size_px, FNT_RasterFlags flags, Vec2F32 p, Vec4F32 color, String8 string)
 {
   Temp scratch = scratch_begin(0, 0);
-  FNT_Run run = fnt_run_from_string(font, size, base_align_px, tab_size_px, flags, string);
+  FNT_Run run = dr_fnt_run_from_string(font, size, base_align_px, tab_size_px, flags, string);
   dr_text_run(p, color, run);
   scratch_end(scratch);
 }
