@@ -48,6 +48,8 @@ struct MAC_DMN_Process
   B32 is_attached;
   B32 is_running;
   B32 needs_attach_events;
+  B32 dyld_bootstrap_pending;
+  B32 dyld_bootstrap_stepping;
   MAC_DMN_Entity *first_thread_entity;
   MAC_DMN_Entity *last_thread_entity;
   MAC_DMN_Entity *first_module_entity;
@@ -63,7 +65,9 @@ struct MAC_DMN_Thread
   Arch arch;
   B32 is_suspended_for_run;
   B32 is_stepping_over_dyld_notification;
+  B32 is_stepping_over_dyld_bootstrap;
   U64 dyld_notification_step_vaddr;
+  U64 dyld_bootstrap_step_vaddr;
 };
 
 typedef struct MAC_DMN_Module MAC_DMN_Module;
@@ -117,6 +121,7 @@ typedef enum MAC_DMN_ActiveTrapKind
 {
   MAC_DMN_ActiveTrapKind_User,
   MAC_DMN_ActiveTrapKind_DyldNotification,
+  MAC_DMN_ActiveTrapKind_DyldBootstrap,
 }
 MAC_DMN_ActiveTrapKind;
 
@@ -159,20 +164,27 @@ internal void mac_dmn_refresh_threads(MAC_DMN_Process *process);
 internal void mac_dmn_refresh_thread_events(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity);
 internal String8 mac_dmn_executable_path_from_pid(Arena *arena, pid_t pid);
 internal U64 mac_dmn_main_module_base_vaddr_from_process(MAC_DMN_Process *process, MachO_UUID expected_uuid);
+internal U64 mac_dmn_main_module_entry_vaddr_from_process(MAC_DMN_Process *process);
 internal void mac_dmn_refresh_initial_module(MAC_DMN_Process *process);
 internal String8 mac_dmn_read_string(Arena *arena, MAC_DMN_Process *process, U64 vaddr, U64 max_size);
 internal B32 mac_dmn_macho_image_info_from_process(MAC_DMN_Process *process, U64 base_vaddr, U64 *size_out, Arch *arch_out);
+internal B32 mac_dmn_dyld_all_image_infos_is_ready(U64 all_image_infos_vaddr, struct dyld_all_image_infos *all_images);
 internal B32 mac_dmn_read_dyld_all_image_infos(MAC_DMN_Process *process, struct dyld_all_image_infos *all_images_out);
+internal B32 mac_dmn_read_dyld_all_image_infos_with_addr(MAC_DMN_Process *process, struct dyld_all_image_infos *all_images_out, U64 *all_image_infos_vaddr_out);
 internal B32 mac_dmn_read_dyld_image_infos(Arena *arena, MAC_DMN_Process *process, struct dyld_image_info **images_out, U32 *count_out);
 internal U64 mac_dmn_dyld_notification_vaddr_from_process(MAC_DMN_Process *process);
+internal B32 mac_dmn_process_vaddr_is_executable(MAC_DMN_Process *process, U64 vaddr);
 internal void mac_dmn_refresh_module_events(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity);
 internal B32 mac_dmn_thread_should_run(MAC_DMN_Entity *thread_entity, DMN_RunCtrls *ctrls);
 internal B32 mac_dmn_process_should_run(MAC_DMN_Entity *process_entity, DMN_RunCtrls *ctrls);
 internal void mac_dmn_process_suspend_frozen_threads(MAC_DMN_Process *process, DMN_RunCtrls *ctrls);
 internal void mac_dmn_process_resume_suspended_threads(MAC_DMN_Process *process);
 internal B32 mac_dmn_process_is_stepping_over_dyld_notification(MAC_DMN_Process *process, U64 vaddr);
+internal B32 mac_dmn_process_is_stepping_over_dyld_bootstrap(MAC_DMN_Process *process, U64 vaddr);
 internal MAC_DMN_Entity *mac_dmn_thread_entity_stepping_over_dyld_notification(MAC_DMN_Process *process);
+internal MAC_DMN_Entity *mac_dmn_thread_entity_stepping_over_dyld_bootstrap(MAC_DMN_Process *process);
 internal void mac_dmn_process_set_dyld_notification_single_step_flags(MAC_DMN_Process *process, B32 is_on);
+internal void mac_dmn_process_set_dyld_bootstrap_single_step_flags(MAC_DMN_Process *process, B32 is_on);
 internal MAC_DMN_ActiveTrap *mac_dmn_set_trap(Arena *arena, DMN_Trap *trap, MAC_DMN_ActiveTrapKind kind);
 internal void mac_dmn_unset_trap(MAC_DMN_ActiveTrap *active_trap);
 internal U64 mac_dmn_thread_read_ip(MAC_DMN_Thread *thread);
