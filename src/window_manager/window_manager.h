@@ -235,6 +235,8 @@ internal F32            wm_window_native_title_bar_left_padding(WM_Window window
 internal Rng2F32        wm_rect_from_window(WM_Window window);
 internal Rng2F32        wm_client_rect_from_window(WM_Window window);
 internal F32            wm_dpi_from_window(WM_Window window);
+internal F32            wm_layout_scale_from_window(WM_Window window);
+internal F32            wm_backing_scale_from_window(WM_Window window);
 
 ////////////////////////////////
 //~ rjf: @os_hooks External Windows (Implemented Per-OS)

@@ -1068,6 +1068,25 @@ wm_dpi_from_window(WM_Window handle)
   return result;
 }
 
+internal F32
+wm_layout_scale_from_window(WM_Window handle)
+{
+  return 1.f;
+}
+
+internal F32
+wm_backing_scale_from_window(WM_Window handle)
+{
+  MAC_WM_Window *window = mac_wm_window_from_handle(handle);
+  F32 result = 1.f;
+  if(window != 0)
+  {
+    result = (F32)[window->ns_window backingScaleFactor];
+  }
+  result = ClampBot(1.f, result);
+  return result;
+}
+
 ////////////////////////////////
 //~ @os_hooks External Windows (Implemented Per-OS)
 
