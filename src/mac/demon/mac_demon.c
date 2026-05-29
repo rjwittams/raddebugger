@@ -366,6 +366,14 @@ mac_dmn_thread_port_is_valid(MAC_DMN_Thread *thread)
         result = (thread_get_state(thread->thread, x86_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS);
       }break;
 #endif
+#if ARCH_ARM64
+      case Arch_arm64:
+      {
+        arm_thread_state64_t state = {0};
+        mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
+        result = (thread_get_state(thread->thread, ARM_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS);
+      }break;
+#endif
     }
   }
   return result;
