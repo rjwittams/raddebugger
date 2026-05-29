@@ -14162,7 +14162,7 @@ rd_frame(void)
               }
             }
           }break;
-          
+
           //- rjf: exiting
           case RD_CmdKind_Exit:
           {
@@ -14184,7 +14184,7 @@ rd_frame(void)
               regs->force_confirm = 1;
               rd_cmd_list_push_new(rd_state->popup_arena, &rd_state->popup_cmds, rd_cmd_kind_info_table[RD_CmdKind_Exit].string, regs);
             }
-            
+
             // rjf: otherwise, actually exit
             else
             {
@@ -14193,7 +14193,7 @@ rd_frame(void)
               rd_state->quit = 1;
             }
           }break;
-          
+
           //- rjf: windows
           case RD_CmdKind_OpenWindow:
           {
