@@ -53,6 +53,75 @@ TEST(software_breakpoint_pc_offsets)
   T_Ok(arch_software_breakpoint_pc_offset(OperatingSystem_Windows, Arch_arm64) == arch_info_from_arch(Arch_arm64)->trap_instruction.size);
 }
 
+TEST(trap_instruction_size_from_code)
+{
+  U8 x64_int3[] = {0xcc};
+  U8 x64_nop[] = {0x90};
+  T_Ok(arch_trap_instruction_size_from_code(Arch_x64, str8_array_fixed(x64_int3)) == 1);
+  T_Ok(arch_trap_instruction_size_from_code(Arch_x64, str8_array_fixed(x64_nop)) == 0);
+  T_Ok(arch_trap_instruction_size_from_code(Arch_x64, str8(0, 0)) == 0);
+
+  U8 arm64_brk_0[] = {0x00, 0x00, 0x20, 0xd4};
+  U8 arm64_brk_f000[] = {0x00, 0x00, 0x3e, 0xd4};
+  U8 arm64_nop[] = {0x1f, 0x20, 0x03, 0xd5};
+  U8 arm64_short_brk[] = {0x00, 0x00, 0x20};
+  T_Ok(arch_trap_instruction_size_from_code(Arch_arm64, str8_array_fixed(arm64_brk_0)) == 4);
+  T_Ok(arch_trap_instruction_size_from_code(Arch_arm64, str8_array_fixed(arm64_brk_f000)) == 4);
+  T_Ok(arch_trap_instruction_size_from_code(Arch_arm64, str8_array_fixed(arm64_nop)) == 0);
+  T_Ok(arch_trap_instruction_size_from_code(Arch_arm64, str8_array_fixed(arm64_short_brk)) == 0);
+}
+
+#if OS_MAC
+TEST(mac_dyld_all_image_infos_ready)
+{
+  struct dyld_all_image_infos infos = {0};
+  U64 task_addr = 0x12340000;
+  infos.infoArrayCount = 4;
+  infos.infoArray = (struct dyld_image_info *)0x20000000;
+  infos.notification = (void *)0x30000000;
+  infos.dyldAllImageInfosAddress = (struct dyld_all_image_infos *)task_addr;
+  T_Ok(mac_dmn_dyld_all_image_infos_is_ready(task_addr, &infos));
+
+  infos.dyldAllImageInfosAddress = (struct dyld_all_image_infos *)0x40000000;
+  T_Ok(!mac_dmn_dyld_all_image_infos_is_ready(task_addr, &infos));
+
+  infos.dyldAllImageInfosAddress = (struct dyld_all_image_infos *)task_addr;
+  infos.notification = 0;
+  T_Ok(!mac_dmn_dyld_all_image_infos_is_ready(task_addr, &infos));
+}
+
+TEST(mac_arm64_fix_code_vaddr)
+{
+  T_Ok(mac_dmn_fix_code_vaddr(Arch_arm64, 0xab00000123456789ull) == 0x0000000123456789ull);
+  T_Ok(mac_dmn_fix_code_vaddr(Arch_arm64, 0x00c0000123456789ull) == 0xffc0000123456789ull);
+  T_Ok(mac_dmn_fix_code_vaddr(Arch_x64,   0xab00000123456789ull) == 0xab00000123456789ull);
+}
+
+TEST(mac_exception_is_software_breakpoint)
+{
+  MAC_DMN_ExceptionMessage exception = {0};
+  exception.is_valid = 1;
+  exception.exception = EXC_BREAKPOINT;
+  exception.code_count = 1;
+
+  exception.code[0] = EXC_ARM_BREAKPOINT;
+  T_Ok(mac_dmn_exception_is_software_breakpoint(Arch_arm64, &exception));
+
+  exception.code[0] = EXC_ARM_DA_DEBUG;
+  T_Ok(!mac_dmn_exception_is_software_breakpoint(Arch_arm64, &exception));
+
+  exception.code[0] = EXC_I386_BPT;
+  T_Ok(mac_dmn_exception_is_software_breakpoint(Arch_x64, &exception));
+
+  exception.code[0] = EXC_I386_SGL;
+  T_Ok(!mac_dmn_exception_is_software_breakpoint(Arch_x64, &exception));
+
+  exception.is_valid = 0;
+  exception.code[0] = EXC_ARM_BREAKPOINT;
+  T_Ok(!mac_dmn_exception_is_software_breakpoint(Arch_arm64, &exception));
+}
+#endif
+
 TEST(arm64_ctrl_flow_point_extents)
 {
   U8 bl_code[] = {0x02, 0x00, 0x00, 0x94};
@@ -199,6 +268,24 @@ TEST(arm64_macho_compact_frame_saved_reg_slots)
   T_Ok(regs.x19 == 0x1919191919191919ull);
   T_Ok(regs.q8.u64[0] == 0x8888888888888888ull);
   T_Ok(regs.q8.u64[1] == 0x1122334455667788ull);
+}
+
+TEST(arm64_macho_entry_lr_preference)
+{
+  MachO_UnwindInfoLookupResult frame_lookup = {0};
+  frame_lookup.voff_range = r1u64(0x840, 0x870);
+  frame_lookup.encoding = MACHO_UNWIND_ARM64_MODE_FRAME;
+  Rng1U64 function_range = r1u64(0x85c, 0x870);
+
+  T_Ok(d_unwind_arm64_should_prefer_entry_lr(0x85c, function_range, 1, &frame_lookup));
+  T_Ok(d_unwind_arm64_should_prefer_entry_lr(0x860, function_range, 1, &frame_lookup));
+  T_Ok(!d_unwind_arm64_should_prefer_entry_lr(0x864, function_range, 1, &frame_lookup));
+  T_Ok(!d_unwind_arm64_should_prefer_entry_lr(0x868, function_range, 1, &frame_lookup));
+
+  MachO_UnwindInfoLookupResult frameless_lookup = {0};
+  frameless_lookup.voff_range = r1u64(0x1000, 0x1030);
+  frameless_lookup.encoding = MACHO_UNWIND_ARM64_MODE_FRAMELESS;
+  T_Ok(d_unwind_arm64_should_prefer_entry_lr(0x100c, r1u64(0, 0), 1, &frameless_lookup));
 }
 
 TEST(macho_function_starts_from_lc_function_starts)
