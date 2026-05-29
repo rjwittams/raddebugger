@@ -1460,6 +1460,32 @@ mac_dmn_read_dyld_image_infos(Arena *arena, MAC_DMN_Process *process, struct dyl
 }
 
 internal U64
+mac_dmn_fix_code_vaddr(Arch arch, U64 vaddr)
+{
+  U64 result = vaddr;
+  switch(arch)
+  {
+    case Arch_arm64:
+    {
+      // Match LLDB's default macOS arm64 code-address fixup: strip TBI/PAC bits
+      // for low memory, and preserve sign-extension for high memory.
+      U64 tbi_mask = 0xff80000000000000ull;
+      U64 pac_sign_extension = 0x0080000000000000ull;
+      if((result & pac_sign_extension) != 0)
+      {
+        result |= tbi_mask;
+      }
+      else
+      {
+        result &= ~tbi_mask;
+      }
+    }break;
+    default:{}break;
+  }
+  return result;
+}
+
+internal U64
 mac_dmn_dyld_notification_vaddr_from_process(MAC_DMN_Process *process)
 {
   U64 result = 0;
@@ -1468,7 +1494,7 @@ mac_dmn_dyld_notification_vaddr_from_process(MAC_DMN_Process *process)
   if(mac_dmn_read_dyld_all_image_infos_with_addr(process, &all_images, &all_image_infos_vaddr) &&
      mac_dmn_dyld_all_image_infos_is_ready(all_image_infos_vaddr, &all_images))
   {
-    result = (U64)all_images.notification;
+    result = mac_dmn_fix_code_vaddr(process->arch, (U64)all_images.notification);
   }
   return result;
 }
