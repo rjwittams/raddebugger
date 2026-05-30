@@ -20,6 +20,104 @@
 #include "metagen.c"
 
 ////////////////////////////////
+//~ rjw: Generated File Writing
+
+typedef enum MG_NewlineKind
+{
+  MG_NewlineKind_LF,
+  MG_NewlineKind_CRLF,
+}
+MG_NewlineKind;
+
+read_only global MG_NewlineKind mg_default_generated_newline_kind = MG_NewlineKind_CRLF;
+
+internal String8
+mg_newline_string_from_kind(MG_NewlineKind kind)
+{
+  String8 result = str8_lit("\n");
+  switch(kind)
+  {
+    default:{}break;
+    case MG_NewlineKind_LF:   {result = str8_lit("\n");}break;
+    case MG_NewlineKind_CRLF: {result = str8_lit("\r\n");}break;
+  }
+  return result;
+}
+
+internal MG_NewlineKind
+mg_newline_kind_from_existing_file_path(String8 path, MG_NewlineKind default_kind)
+{
+  MG_NewlineKind result = default_kind;
+  String8 data = data_from_file_path(mg_arena, path);
+  if(data.size != 0)
+  {
+    U64 crlf_count = 0;
+    U64 lf_count = 0;
+    for(U64 idx = 0; idx < data.size; idx += 1)
+    {
+      if(data.str[idx] == '\r' && idx+1 < data.size && data.str[idx+1] == '\n')
+      {
+        crlf_count += 1;
+        idx += 1;
+      }
+      else if(data.str[idx] == '\n')
+      {
+        lf_count += 1;
+      }
+    }
+    if(crlf_count != 0 || lf_count != 0)
+    {
+      result = (crlf_count > lf_count ? MG_NewlineKind_CRLF : MG_NewlineKind_LF);
+    }
+  }
+  return result;
+}
+
+internal void
+mg_write_generated_file(String8 path, String8List *strings)
+{
+  MG_NewlineKind newline_kind = mg_newline_kind_from_existing_file_path(path, mg_default_generated_newline_kind);
+  String8 newline = mg_newline_string_from_kind(newline_kind);
+  FILE *file = fopen((char *)path.str, "wb");
+  if(file != 0)
+  {
+    for(String8Node *n = strings->first; n != 0; n = n->next)
+    {
+      U8 *ptr = n->string.str;
+      U8 *opl = n->string.str + n->string.size;
+      U8 *chunk_start = ptr;
+      for(; ptr < opl; ptr += 1)
+      {
+        if(*ptr == '\r' && ptr+1 < opl && ptr[1] == '\n')
+        {
+          if(chunk_start < ptr)
+          {
+            fwrite(chunk_start, 1, (U64)(ptr - chunk_start), file);
+          }
+          fwrite(newline.str, 1, newline.size, file);
+          ptr += 1;
+          chunk_start = ptr + 1;
+        }
+        else if(*ptr == '\n')
+        {
+          if(chunk_start < ptr)
+          {
+            fwrite(chunk_start, 1, (U64)(ptr - chunk_start), file);
+          }
+          fwrite(newline.str, 1, newline.size, file);
+          chunk_start = ptr + 1;
+        }
+      }
+      if(chunk_start < opl)
+      {
+        fwrite(chunk_start, 1, (U64)(opl - chunk_start), file);
+      }
+    }
+    fclose(file);
+  }
+}
+
+////////////////////////////////
 //~ rjf: Entry Point
 
 internal void
@@ -533,104 +631,104 @@ entry_point(CmdLine *cmdline)
             c_path = push_str8f(mg_arena, "%S/%S", layer_generated_folder, str8_skip_last_slash(layer->c_name_override));
           }
           {
-            FILE *h = fopen((char *)h_path.str, "w");
-            fprintf(h, "// Copyright (c) Epic Games Tools\n");
-            fprintf(h, "// Licensed under the MIT license (https://opensource.org/license/mit/)\n\n");
+            String8List h_strings = {0};
+            str8_list_pushf(mg_arena, &h_strings, "// Copyright (c) Epic Games Tools\n");
+            str8_list_pushf(mg_arena, &h_strings, "// Licensed under the MIT license (https://opensource.org/license/mit/)\n\n");
             if(layer->h_header.first == 0)
             {
-              fprintf(h, "//- GENERATED CODE\n\n");
-              fprintf(h, "#ifndef %.*s_META_H\n", str8_varg(layer_key_filename_upper));
-              fprintf(h, "#define %.*s_META_H\n\n", str8_varg(layer_key_filename_upper));
+              str8_list_pushf(mg_arena, &h_strings, "//- GENERATED CODE\n\n");
+              str8_list_pushf(mg_arena, &h_strings, "#ifndef %.*s_META_H\n", str8_varg(layer_key_filename_upper));
+              str8_list_pushf(mg_arena, &h_strings, "#define %.*s_META_H\n\n", str8_varg(layer_key_filename_upper));
             }
             else for(String8Node *n = layer->h_header.first; n != 0; n = n->next)
             {
-              fwrite(n->string.str, n->string.size, 1, h);
+              str8_list_push(mg_arena, &h_strings, n->string);
             }
             for(String8Node *n = layer->enums.first; n != 0; n = n->next)
             {
-              fwrite(n->string.str, n->string.size, 1, h);
+              str8_list_push(mg_arena, &h_strings, n->string);
             }
             for(String8Node *n = layer->structs.first; n != 0; n = n->next)
             {
-              fwrite(n->string.str, n->string.size, 1, h);
+              str8_list_push(mg_arena, &h_strings, n->string);
             }
             for(String8Node *n = layer->h_catchall.first; n != 0; n = n->next)
             {
-              fwrite(n->string.str, n->string.size, 1, h);
+              str8_list_push(mg_arena, &h_strings, n->string);
             }
             for(String8Node *n = layer->h_functions.first; n != 0; n = n->next)
             {
-              fwrite(n->string.str, n->string.size, 1, h);
+              str8_list_push(mg_arena, &h_strings, n->string);
             }
             if(layer->h_tables.first != 0)
             {
               if(!layer->is_library)
               {
-                fprintf(h, "C_LINKAGE_BEGIN\n");
+                str8_list_pushf(mg_arena, &h_strings, "C_LINKAGE_BEGIN\n");
               }
               for(String8Node *n = layer->h_tables.first; n != 0; n = n->next)
               {
-                fwrite(n->string.str, n->string.size, 1, h);
+                str8_list_push(mg_arena, &h_strings, n->string);
               }
-              fprintf(h, "\n");
+              str8_list_pushf(mg_arena, &h_strings, "\n");
               if(!layer->is_library)
               {
-                fprintf(h, "C_LINKAGE_END\n\n");
+                str8_list_pushf(mg_arena, &h_strings, "C_LINKAGE_END\n\n");
               }
             }
             if(layer->h_footer.first == 0)
             {
-              fprintf(h, "#endif // %.*s_META_H\n", str8_varg(layer_key_filename_upper));
+              str8_list_pushf(mg_arena, &h_strings, "#endif // %.*s_META_H\n", str8_varg(layer_key_filename_upper));
             }
             else for(String8Node *n = layer->h_footer.first; n != 0; n = n->next)
             {
-              fwrite(n->string.str, n->string.size, 1, h);
+              str8_list_push(mg_arena, &h_strings, n->string);
             }
-            fclose(h);
+            mg_write_generated_file(h_path, &h_strings);
           }
           {
-            FILE *c = fopen((char *)c_path.str, "w");
-            fprintf(c, "// Copyright (c) Epic Games Tools\n");
-            fprintf(c, "// Licensed under the MIT license (https://opensource.org/license/mit/)\n\n");
+            String8List c_strings = {0};
+            str8_list_pushf(mg_arena, &c_strings, "// Copyright (c) Epic Games Tools\n");
+            str8_list_pushf(mg_arena, &c_strings, "// Licensed under the MIT license (https://opensource.org/license/mit/)\n\n");
             if(layer->c_header.first == 0)
             {
-              fprintf(c, "//- GENERATED CODE\n\n");
+              str8_list_pushf(mg_arena, &c_strings, "//- GENERATED CODE\n\n");
             }
             else for(String8Node *n = layer->c_header.first; n != 0; n = n->next)
             {
-              fwrite(n->string.str, n->string.size, 1, c);
+              str8_list_push(mg_arena, &c_strings, n->string);
             }
             for(String8Node *n = layer->c_catchall.first; n != 0; n = n->next)
             {
-              fwrite(n->string.str, n->string.size, 1, c);
+              str8_list_push(mg_arena, &c_strings, n->string);
             }
             if(layer->c_tables.first != 0)
             {
               if(!layer->is_library)
               {
-                fprintf(c, "C_LINKAGE_BEGIN\n");
+                str8_list_pushf(mg_arena, &c_strings, "C_LINKAGE_BEGIN\n");
               }
               for(String8Node *n = layer->c_tables.first; n != 0; n = n->next)
               {
-                fwrite(n->string.str, n->string.size, 1, c);
+                str8_list_push(mg_arena, &c_strings, n->string);
               }
               if(!layer->is_library)
               {
-                fprintf(c, "C_LINKAGE_END\n\n");
+                str8_list_pushf(mg_arena, &c_strings, "C_LINKAGE_END\n\n");
               }
             }
             for(String8Node *n = layer->c_functions.first; n != 0; n = n->next)
             {
-              fwrite(n->string.str, n->string.size, 1, c);
+              str8_list_push(mg_arena, &c_strings, n->string);
             }
             if(layer->c_footer.first != 0)
             {
               for(String8Node *n = layer->c_footer.first; n != 0; n = n->next)
               {
-                fwrite(n->string.str, n->string.size, 1, c);
+                str8_list_push(mg_arena, &c_strings, n->string);
               }
             }
-            fclose(c);
+            mg_write_generated_file(c_path, &c_strings);
           }
         }
       }
