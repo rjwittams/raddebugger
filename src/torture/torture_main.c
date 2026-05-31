@@ -21,6 +21,7 @@
 
 #include "base/base_inc.h"
 #include "x64/x64.h"
+#include "arm64/arm64.h"
 #include "linker/hash_table.h"
 #include "linker/lf_hash_table.h"
 #include "linker/base_ext/base_bit_array.h"
@@ -97,6 +98,7 @@
 
 #include "base/base_inc.c"
 #include "x64/x64.c"
+#include "arm64/arm64.c"
 #include "linker/hash_table.c"
 #include "linker/lf_hash_table.c"
 #include "linker/base_ext/base_bit_array.c"
@@ -167,6 +169,7 @@
 
 #include "torture.c"
 #include "torture_base.c"
+#include "torture_arch.c"
 #include "torture_radlink.c"
 #include "torture_dwarf.c"
 #include "torture_d2r.c"

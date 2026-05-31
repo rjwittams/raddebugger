@@ -1728,6 +1728,41 @@ X(GsBase,  59, gsbase, 0, 8)
 // X(Tr,      62, nil,    0, 0)  \
 // X(Ldtr,    63, nil,    0, 0)
 
+#define DW_Regs_ARM64_XList \
+X(X0,      0,  x0,     0, 8) \
+X(X1,      1,  x1,     0, 8) \
+X(X2,      2,  x2,     0, 8) \
+X(X3,      3,  x3,     0, 8) \
+X(X4,      4,  x4,     0, 8) \
+X(X5,      5,  x5,     0, 8) \
+X(X6,      6,  x6,     0, 8) \
+X(X7,      7,  x7,     0, 8) \
+X(X8,      8,  x8,     0, 8) \
+X(X9,      9,  x9,     0, 8) \
+X(X10,     10, x10,    0, 8) \
+X(X11,     11, x11,    0, 8) \
+X(X12,     12, x12,    0, 8) \
+X(X13,     13, x13,    0, 8) \
+X(X14,     14, x14,    0, 8) \
+X(X15,     15, x15,    0, 8) \
+X(X16,     16, x16,    0, 8) \
+X(X17,     17, x17,    0, 8) \
+X(X18,     18, x18,    0, 8) \
+X(X19,     19, x19,    0, 8) \
+X(X20,     20, x20,    0, 8) \
+X(X21,     21, x21,    0, 8) \
+X(X22,     22, x22,    0, 8) \
+X(X23,     23, x23,    0, 8) \
+X(X24,     24, x24,    0, 8) \
+X(X25,     25, x25,    0, 8) \
+X(X26,     26, x26,    0, 8) \
+X(X27,     27, x27,    0, 8) \
+X(X28,     28, x28,    0, 8) \
+X(Fp,      29, fp,     0, 8) \
+X(Lr,      30, lr,     0, 8) \
+X(Sp,      31, sp,     0, 8) \
+X(Pc,      32, pc,     0, 8)
+
 typedef U32 DW_Reg;
 
 typedef DW_Reg DW_RegX64;
@@ -1738,6 +1773,15 @@ typedef enum DW_RegX64Enum
 #undef X
   DW_RegX64_Last
 } DW_RegX64Enum;
+
+typedef DW_Reg DW_RegARM64;
+typedef enum DW_RegARM64Enum
+{
+#define X(_N,_ID,...) DW_RegARM64_##_N = _ID,
+  DW_Regs_ARM64_XList
+#undef X
+  DW_RegARM64_Last
+} DW_RegARM64Enum;
 
 ////////////////////////////////
 //~ rjf: Generated Code
@@ -1774,6 +1818,8 @@ internal B32 dw_is_form_kind_ref(DW_Version ver, DW_Ext ext, DW_FormKind form_ki
 // regs
 internal U64 dw_reg_size_from_code_x64(DW_Reg reg_code);
 internal U64 dw_reg_pos_from_code_x64(DW_Reg reg_code);
+internal U64 dw_reg_size_from_code_arm64(DW_Reg reg_code);
+internal U64 dw_reg_pos_from_code_arm64(DW_Reg reg_code);
 internal U64 dw_reg_size_from_code(Arch arch, DW_Reg reg_code);
 internal U64 dw_reg_pos_from_code(Arch arch, DW_Reg reg_code);
 internal U64 dw_reg_count_from_arch(Arch arch);
