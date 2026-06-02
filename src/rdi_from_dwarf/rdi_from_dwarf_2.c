@@ -11,6 +11,18 @@ d2r2_unique_tag_node_is_less_than(D2R2_UniqueTagNode **l, D2R2_UniqueTagNode **r
   return is_less_than;
 }
 
+internal RDIM_Rng1U64
+d2r2_voff_range_from_vaddr_range(U64 base_vaddr, Rng1U64 range)
+{
+  RDIM_Rng1U64 result = {range.min, range.max};
+  if(range.min >= base_vaddr && range.max >= base_vaddr)
+  {
+    result.min -= base_vaddr;
+    result.max -= base_vaddr;
+  }
+  return result;
+}
+
 ////////////////////////////////
 //~ rjf: Main Conversion Entry Point (New)
 
@@ -1041,7 +1053,7 @@ d2r2_convert(Arena *arena, D2R2_ConvertParams *params)
         }
         
         //- rjf: sequence ended explicitly, or file change, or end of stream? -> push to line table
-        if(line_seq_src_file != 0 && (vm_regs.end_sequence || (src_file != line_seq_src_file && first_line_seq_chunk != 0) || off >= unit_line_table_data.size))
+        if(line_seq_src_file != 0 && (vm_regs.end_sequence || (emit_line && src_file != line_seq_src_file && first_line_seq_chunk != 0) || off >= unit_line_table_data.size))
         {
           // rjf: combine voffs/lines/cols
           U64 seq_line_count = total_line_seq_count;
@@ -1109,7 +1121,7 @@ d2r2_convert(Arena *arena, D2R2_ConvertParams *params)
         }
         
         //- rjf: emit lines
-        if(emit_line && vm_regs.address != 0 && vm_regs.line != 0)
+        if(emit_line && vm_regs.address != 0)
         {
           emit_line = 0;
           
@@ -3174,7 +3186,7 @@ d2r2_convert(Arena *arena, D2R2_ConvertParams *params)
           Rng1U64List ranges = dw2_rnglist_from_form_val(scratch.arena, unit_parse_ctx, raw, ranges_attrib->val);
           for EachNode(n, Rng1U64Node, ranges.first)
           {
-            rdim_rng1u64_chunk_list_push(arena, &unit_voff_ranges, 256, (RDIM_Rng1U64){n->v.min - base_vaddr, n->v.max - base_vaddr});
+            rdim_rng1u64_chunk_list_push(arena, &unit_voff_ranges, 256, d2r2_voff_range_from_vaddr_range(base_vaddr, n->v));
           }
         }
         
@@ -3183,13 +3195,13 @@ d2r2_convert(Arena *arena, D2R2_ConvertParams *params)
         {
           U64 voff_base = lopc_attrib->val.addr - base_vaddr;
           U64 voff_opl = 0;
-          if(dw_attrib_class_from_form_kind(unit_parse_ctx->version, hipc_attrib->val.kind) & (1<<DW_AttribClass_Address))
+          if(dw_attrib_class_from_form_kind(unit_parse_ctx->version, hipc_attrib->val.kind) & DW_AttribClass_Address)
           {
-            voff_opl = voff_base + hipc_attrib->val.u128.u64[0];
+            voff_opl = hipc_attrib->val.addr - base_vaddr;
           }
           else
           {
-            voff_opl = hipc_attrib->val.addr;
+            voff_opl = voff_base + hipc_attrib->val.u128.u64[0];
           }
           rdim_rng1u64_chunk_list_push(arena, &unit_voff_ranges, 256, (RDIM_Rng1U64){voff_base, voff_opl});
         }
@@ -3357,7 +3369,7 @@ d2r2_convert(Arena *arena, D2R2_ConvertParams *params)
               Rng1U64List tag_ranges = dw2_rnglist_from_form_val(temp.arena, unit_parse_ctx, raw, ranges_attrib->val);
               for EachNode(n, Rng1U64Node, tag_ranges.first)
               {
-                rdim_rng1u64_list_push(arena, &ranges, (RDIM_Rng1U64){.min = n->v.min, .max = n->v.max});
+                rdim_rng1u64_list_push(arena, &ranges, d2r2_voff_range_from_vaddr_range(base_vaddr, n->v));
               }
               temp_end(temp);
             }
@@ -3365,13 +3377,13 @@ d2r2_convert(Arena *arena, D2R2_ConvertParams *params)
             {
               U64 voff_base = lopc_attrib->val.addr - base_vaddr;
               U64 voff_opl = 0;
-              if(dw_attrib_class_from_form_kind(unit_parse_ctx->version, hipc_attrib->val.kind) & (1<<DW_AttribClass_Address))
+              if(dw_attrib_class_from_form_kind(unit_parse_ctx->version, hipc_attrib->val.kind) & DW_AttribClass_Address)
               {
-                voff_opl = voff_base + hipc_attrib->val.u128.u64[0];
+                voff_opl = hipc_attrib->val.addr - base_vaddr;
               }
               else
               {
-                voff_opl = hipc_attrib->val.addr;
+                voff_opl = voff_base + hipc_attrib->val.u128.u64[0];
               }
               rdim_rng1u64_list_push(arena, &ranges, (RDIM_Rng1U64){voff_base, voff_opl});
             }
@@ -3502,10 +3514,15 @@ d2r2_convert(Arena *arena, D2R2_ConvertParams *params)
                 Rng1U64 range = n->v.range;
                 String8 expr = n->v.expr;
                 
-                //- rjf: iterate each frame base location case, or once if there are none,
+                //- iterate each frame base location case, or once if there are none,
                 // and convert the location in that context
                 RDIM_LocationCase nil_framebase_loc_case = {0, {0}, {0, max_U64}};
-                for(RDIM_LocationCase *framebase_loc_n = top_parent ? top_parent->framebase_location_cases.first : &nil_framebase_loc_case;
+                RDIM_LocationCase *first_framebase_loc_case = &nil_framebase_loc_case;
+                if(top_parent != 0 && top_parent->framebase_location_cases.first != 0)
+                {
+                  first_framebase_loc_case = top_parent->framebase_location_cases.first;
+                }
+                for(RDIM_LocationCase *framebase_loc_n = first_framebase_loc_case;
                     framebase_loc_n != 0;
                     framebase_loc_n = framebase_loc_n->next)
                 {
@@ -4161,9 +4178,9 @@ d2r2_convert(Arena *arena, D2R2_ConvertParams *params)
                     }
                   }
                   
-                  //- rjf: collect
+                  //- collect
                   {
-                    RDIM_Rng1U64 voff_range = {range.min - base_vaddr, range.max - base_vaddr};
+                    RDIM_Rng1U64 voff_range = d2r2_voff_range_from_vaddr_range(base_vaddr, range);
                     if(bytecode_is_framebase_dependent)
                     {
                       voff_range.min = Max(voff_range.min, framebase_voff_range.min);
