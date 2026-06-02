@@ -451,6 +451,38 @@ RDI_RegCodeARM64Table:
   {sp              32}
   {pc              33}
   {cpsr            34}
+  {q0              35}
+  {q1              36}
+  {q2              37}
+  {q3              38}
+  {q4              39}
+  {q5              40}
+  {q6              41}
+  {q7              42}
+  {q8              43}
+  {q9              44}
+  {q10             45}
+  {q11             46}
+  {q12             47}
+  {q13             48}
+  {q14             49}
+  {q15             50}
+  {q16             51}
+  {q17             52}
+  {q18             53}
+  {q19             54}
+  {q20             55}
+  {q21             56}
+  {q22             57}
+  {q23             58}
+  {q24             59}
+  {q25             60}
+  {q26             61}
+  {q27             62}
+  {q28             63}
+  {q29             64}
+  {q30             65}
+  {q31             66}
 }
 
 @enum(RDI_U32) RDI_Arch:
@@ -944,7 +976,7 @@ RDI_EnumMemberTable:
     {
       RDI_U32 name_string_idx;
     } built_in;
-    
+
     // kind is 'constructed'
     struct
     {
@@ -959,7 +991,7 @@ RDI_EnumMemberTable:
       };
     }
     constructed;
-    
+
     // kind is 'user defined'
     struct
     {
@@ -968,7 +1000,7 @@ RDI_EnumMemberTable:
       RDI_U32 udt_idx;
     }
     user_defined;
-    
+
     // (kind = Bitfield)
     struct
     {
@@ -1581,7 +1613,7 @@ rdi_eval_op_typegroup_are_compatible(RDI_EvalOp op, RDI_EvalTypeGroup group)
     case RDI_EvalOp_Mod:case RDI_EvalOp_LShift:case RDI_EvalOp_RShift:
     case RDI_EvalOp_BitNot:case RDI_EvalOp_BitAnd:case RDI_EvalOp_BitXor:
     case RDI_EvalOp_BitOr:case RDI_EvalOp_LogNot:case RDI_EvalOp_LogAnd:
-    case RDI_EvalOp_LogOr: 
+    case RDI_EvalOp_LogOr:
     {
       if(group == RDI_EvalTypeGroup_S || group == RDI_EvalTypeGroup_U)
       {

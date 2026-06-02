@@ -281,6 +281,38 @@ RDI_RegCodeARM64_lr         = 31,
 RDI_RegCodeARM64_sp         = 32,
 RDI_RegCodeARM64_pc         = 33,
 RDI_RegCodeARM64_cpsr       = 34,
+RDI_RegCodeARM64_q0         = 35,
+RDI_RegCodeARM64_q1         = 36,
+RDI_RegCodeARM64_q2         = 37,
+RDI_RegCodeARM64_q3         = 38,
+RDI_RegCodeARM64_q4         = 39,
+RDI_RegCodeARM64_q5         = 40,
+RDI_RegCodeARM64_q6         = 41,
+RDI_RegCodeARM64_q7         = 42,
+RDI_RegCodeARM64_q8         = 43,
+RDI_RegCodeARM64_q9         = 44,
+RDI_RegCodeARM64_q10        = 45,
+RDI_RegCodeARM64_q11        = 46,
+RDI_RegCodeARM64_q12        = 47,
+RDI_RegCodeARM64_q13        = 48,
+RDI_RegCodeARM64_q14        = 49,
+RDI_RegCodeARM64_q15        = 50,
+RDI_RegCodeARM64_q16        = 51,
+RDI_RegCodeARM64_q17        = 52,
+RDI_RegCodeARM64_q18        = 53,
+RDI_RegCodeARM64_q19        = 54,
+RDI_RegCodeARM64_q20        = 55,
+RDI_RegCodeARM64_q21        = 56,
+RDI_RegCodeARM64_q22        = 57,
+RDI_RegCodeARM64_q23        = 58,
+RDI_RegCodeARM64_q24        = 59,
+RDI_RegCodeARM64_q25        = 60,
+RDI_RegCodeARM64_q26        = 61,
+RDI_RegCodeARM64_q27        = 62,
+RDI_RegCodeARM64_q28        = 63,
+RDI_RegCodeARM64_q29        = 64,
+RDI_RegCodeARM64_q30        = 65,
+RDI_RegCodeARM64_q31        = 66,
 } RDI_RegCodeARM64Enum;
 
 typedef RDI_U32 RDI_BinarySectionFlags;
@@ -756,6 +788,38 @@ X(lr, 31)\
 X(sp, 32)\
 X(pc, 33)\
 X(cpsr, 34)\
+X(q0, 35)\
+X(q1, 36)\
+X(q2, 37)\
+X(q3, 38)\
+X(q4, 39)\
+X(q5, 40)\
+X(q6, 41)\
+X(q7, 42)\
+X(q8, 43)\
+X(q9, 44)\
+X(q10, 45)\
+X(q11, 46)\
+X(q12, 47)\
+X(q13, 48)\
+X(q14, 49)\
+X(q15, 50)\
+X(q16, 51)\
+X(q17, 52)\
+X(q18, 53)\
+X(q19, 54)\
+X(q20, 55)\
+X(q21, 56)\
+X(q22, 57)\
+X(q23, 58)\
+X(q24, 59)\
+X(q25, 60)\
+X(q26, 61)\
+X(q27, 62)\
+X(q28, 63)\
+X(q29, 64)\
+X(q30, 65)\
+X(q31, 66)\
 
 #define RDI_TopLevelInfo_XList \
 X(RDI_Arch, arch)\
@@ -1355,7 +1419,7 @@ RDI_U32 byte_size;
     {
       RDI_U32 name_string_idx;
     } built_in;
-    
+
     // kind is 'constructed'
     struct
     {
@@ -1370,7 +1434,7 @@ RDI_U32 byte_size;
       };
     }
     constructed;
-    
+
     // kind is 'user defined'
     struct
     {
@@ -1379,7 +1443,7 @@ RDI_U32 byte_size;
       RDI_U32 udt_idx;
     }
     user_defined;
-    
+
     // (kind = Bitfield)
     struct
     {
