@@ -210,6 +210,7 @@ RDI_PROC RDI_Line rdi_line_from_line_table_voff(RDI_Parsed *rdi, RDI_LineTable *
 RDI_PROC RDI_SourceFile *rdi_source_file_from_line(RDI_Parsed *rdi, RDI_Line *line);
 
 //- source files
+RDI_PROC RDI_U32 *rdi_source_file_idxs_from_normal_path(RDI_Parsed *rdi, RDI_U8 *name, RDI_U64 name_size, RDI_U32 *n_out);
 RDI_PROC RDI_SourceFile *rdi_source_file_from_normal_path(RDI_Parsed *rdi, RDI_U8 *name, RDI_U64 name_size);
 RDI_PROC RDI_SourceFile *rdi_source_file_from_normal_path_cstr(RDI_Parsed *rdi, char *cstr);
 RDI_PROC RDI_U8 *rdi_normal_path_from_source_file(RDI_Parsed *rdi, RDI_SourceFile *src_file, RDI_U64 *len_out);
