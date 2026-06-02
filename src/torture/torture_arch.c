@@ -79,3 +79,25 @@ TEST(arm64_rdi_dwarf_mappings)
   T_Ok(d2r_rdi_reg_code_from_dw_reg(Arch_arm64, DW_RegARM64_Pc) == RDI_RegCodeARM64_pc);
   T_Ok(str8_match(rdi_string_from_reg_code(arena, RDI_Arch_ARM64, RDI_RegCodeARM64_pc), str8_lit("pc"), 0));
 }
+
+TEST(arm64_vector_register_metadata)
+{
+  ARCH_Info *info = arch_info_from_arch(Arch_arm64);
+
+  T_Ok(arch_reg_code_from_name(info, str8_lit("q0")) == ARM64_RegCode_q0);
+  T_Ok(arch_reg_code_from_name(info, str8_lit("q31")) == ARM64_RegCode_q31);
+  T_Ok(info->reg_code_is_vector_table[ARM64_RegCode_q0] == 1);
+  T_Ok(info->reg_code_is_vector_table[ARM64_RegCode_q31] == 1);
+  T_Ok(info->reg_code_rng_table[ARM64_RegCode_q0].max - info->reg_code_rng_table[ARM64_RegCode_q0].min == 16);
+  T_Ok(info->reg_code_rng_table[ARM64_RegCode_q31].max - info->reg_code_rng_table[ARM64_RegCode_q31].min == 16);
+
+  T_Ok(arch_reg_code_from_rdi(Arch_arm64, RDI_RegCodeARM64_q0) == ARM64_RegCode_q0);
+  T_Ok(arch_reg_code_from_rdi(Arch_arm64, RDI_RegCodeARM64_q31) == ARM64_RegCode_q31);
+  T_Ok(str8_match(rdi_string_from_reg_code(arena, RDI_Arch_ARM64, RDI_RegCodeARM64_q0), str8_lit("q0"), 0));
+
+  T_Ok(arch_reg_code_from_dw(Arch_arm64, DW_RegARM64_V0) == ARM64_RegCode_q0);
+  T_Ok(arch_reg_code_from_dw(Arch_arm64, DW_RegARM64_V31) == ARM64_RegCode_q31);
+  T_Ok(dw_reg_size_from_code(Arch_arm64, DW_RegARM64_V0) == 16);
+  T_Ok(dw_reg_size_from_code(Arch_arm64, DW_RegARM64_V31) == 16);
+  T_Ok(d2r_rdi_reg_code_from_dw_reg(Arch_arm64, DW_RegARM64_V0) == RDI_RegCodeARM64_q0);
+}
