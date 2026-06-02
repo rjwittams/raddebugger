@@ -16,6 +16,9 @@ TEST(arm64_metadata)
   T_Ok(((U8 *)info->trap_instruction.str)[1] == 0x00);
   T_Ok(((U8 *)info->trap_instruction.str)[2] == 0x20);
   T_Ok(((U8 *)info->trap_instruction.str)[3] == 0xd4);
+  T_Ok(max_ops_per_instruction_from_arch(Arch_arm64) == 1);
+  T_Ok(min_instruction_size_from_arch(Arch_arm64) == 4);
+  T_Ok(max_instruction_size_from_arch(Arch_arm64) == 4);
   
   ARM64_RegBlock regs = {0};
   regs.pc = 0x1234567887654321ull;
@@ -29,6 +32,34 @@ TEST(arm64_metadata)
   T_Ok(arch_reg_block_write_sp(info, &regs, new_sp));
   T_Ok(regs.pc == new_ip);
   T_Ok(regs.sp == new_sp);
+}
+
+TEST(call_return_address_storage)
+{
+  T_Ok(arch_call_return_address_storage_kind(Arch_x64) == ArchCallReturnAddressStorageKind_Stack);
+  T_Ok(arch_call_return_address_storage_kind(Arch_x86) == ArchCallReturnAddressStorageKind_Stack);
+  T_Ok(arch_call_return_address_storage_kind(Arch_arm64) == ArchCallReturnAddressStorageKind_LinkRegister);
+  T_Ok(arch_call_return_address_storage_kind(Arch_arm32) == ArchCallReturnAddressStorageKind_LinkRegister);
+}
+
+TEST(software_breakpoint_pc_offsets)
+{
+  T_Ok(arch_software_breakpoint_pc_offset(OperatingSystem_Mac, Arch_x64) == arch_info_from_arch(Arch_x64)->trap_instruction.size);
+  T_Ok(arch_software_breakpoint_pc_offset(OperatingSystem_Linux, Arch_x64) == arch_info_from_arch(Arch_x64)->trap_instruction.size);
+  T_Ok(arch_software_breakpoint_pc_offset(OperatingSystem_Windows, Arch_x64) == arch_info_from_arch(Arch_x64)->trap_instruction.size);
+  T_Ok(arch_software_breakpoint_pc_offset(OperatingSystem_Mac, Arch_arm64) == 0);
+  T_Ok(arch_software_breakpoint_pc_offset(OperatingSystem_Linux, Arch_arm64) == 0);
+  T_Ok(arch_software_breakpoint_pc_offset(OperatingSystem_Windows, Arch_arm64) == arch_info_from_arch(Arch_arm64)->trap_instruction.size);
+}
+
+TEST(arm64_ctrl_flow_point_extents)
+{
+  U8 bl_code[] = {0x02, 0x00, 0x00, 0x94};
+  DASM_CtrlFlowInfo info = dasm_ctrl_flow_info_from_arch_vaddr_code(arena, DASM_InstFlag_Call, Arch_arm64, 0x1000, str8_array_fixed(bl_code));
+  T_Ok(info.exit_points.count == 1);
+  T_Ok(info.exit_points.first->v.vaddr == 0x1000);
+  T_Ok(info.exit_points.first->v.vaddr_opl == 0x1004);
+  T_Ok(info.exit_points.first->v.jump_dest_vaddr == 0x1008);
 }
 
 TEST(arm64_rdi_dwarf_mappings)
