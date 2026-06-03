@@ -437,6 +437,19 @@ d2r_rdi_reg_code_from_dw_reg_x64(DW_RegX64 v)
   return result;
 }
 
+internal RDI_RegCodeARM64
+d2r_rdi_reg_code_from_dw_reg_arm64(DW_RegARM64 v)
+{
+  RDI_RegCodeARM64 result = RDI_RegCode_nil;
+  switch (v) {
+    default: {} break;
+#define X(reg_dw, val_dw, reg_rdi, off, size) case DW_RegARM64_##reg_dw: { result = RDI_RegCodeARM64_##reg_rdi; } break;
+    DW_Regs_ARM64_XList
+#undef X
+  }
+  return result;
+}
+
 internal RDI_RegCode
 d2r_rdi_reg_code_from_dw_reg(Arch arch, DW_Reg v)
 {
@@ -445,6 +458,7 @@ d2r_rdi_reg_code_from_dw_reg(Arch arch, DW_Reg v)
     default: NotImplemented; break;
     case Arch_Null: break;
     case Arch_x64:{ result = d2r_rdi_reg_code_from_dw_reg_x64(v); } break;
+    case Arch_arm64:{ result = d2r_rdi_reg_code_from_dw_reg_arm64(v); } break;
   }
   return result;
 }

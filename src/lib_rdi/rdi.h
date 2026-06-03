@@ -134,6 +134,7 @@ typedef enum RDI_ArchEnum
 RDI_Arch_NULL       = 0,
 RDI_Arch_X64        = 1,
 RDI_Arch_X86        = 2,
+RDI_Arch_ARM64      = 3,
 } RDI_ArchEnum;
 
 typedef RDI_U8 RDI_RegCode;
@@ -241,6 +242,78 @@ RDI_RegCodeX64_mxcsr_mask = 92,
 RDI_RegCodeX64_cetmsr     = 93,
 RDI_RegCodeX64_cetssp     = 94,
 } RDI_RegCodeX64Enum;
+
+typedef RDI_U8 RDI_RegCodeARM64;
+typedef enum RDI_RegCodeARM64Enum
+{
+RDI_RegCodeARM64_nil        = 0,
+RDI_RegCodeARM64_x0         = 1,
+RDI_RegCodeARM64_x1         = 2,
+RDI_RegCodeARM64_x2         = 3,
+RDI_RegCodeARM64_x3         = 4,
+RDI_RegCodeARM64_x4         = 5,
+RDI_RegCodeARM64_x5         = 6,
+RDI_RegCodeARM64_x6         = 7,
+RDI_RegCodeARM64_x7         = 8,
+RDI_RegCodeARM64_x8         = 9,
+RDI_RegCodeARM64_x9         = 10,
+RDI_RegCodeARM64_x10        = 11,
+RDI_RegCodeARM64_x11        = 12,
+RDI_RegCodeARM64_x12        = 13,
+RDI_RegCodeARM64_x13        = 14,
+RDI_RegCodeARM64_x14        = 15,
+RDI_RegCodeARM64_x15        = 16,
+RDI_RegCodeARM64_x16        = 17,
+RDI_RegCodeARM64_x17        = 18,
+RDI_RegCodeARM64_x18        = 19,
+RDI_RegCodeARM64_x19        = 20,
+RDI_RegCodeARM64_x20        = 21,
+RDI_RegCodeARM64_x21        = 22,
+RDI_RegCodeARM64_x22        = 23,
+RDI_RegCodeARM64_x23        = 24,
+RDI_RegCodeARM64_x24        = 25,
+RDI_RegCodeARM64_x25        = 26,
+RDI_RegCodeARM64_x26        = 27,
+RDI_RegCodeARM64_x27        = 28,
+RDI_RegCodeARM64_x28        = 29,
+RDI_RegCodeARM64_fp         = 30,
+RDI_RegCodeARM64_lr         = 31,
+RDI_RegCodeARM64_sp         = 32,
+RDI_RegCodeARM64_pc         = 33,
+RDI_RegCodeARM64_cpsr       = 34,
+RDI_RegCodeARM64_q0         = 35,
+RDI_RegCodeARM64_q1         = 36,
+RDI_RegCodeARM64_q2         = 37,
+RDI_RegCodeARM64_q3         = 38,
+RDI_RegCodeARM64_q4         = 39,
+RDI_RegCodeARM64_q5         = 40,
+RDI_RegCodeARM64_q6         = 41,
+RDI_RegCodeARM64_q7         = 42,
+RDI_RegCodeARM64_q8         = 43,
+RDI_RegCodeARM64_q9         = 44,
+RDI_RegCodeARM64_q10        = 45,
+RDI_RegCodeARM64_q11        = 46,
+RDI_RegCodeARM64_q12        = 47,
+RDI_RegCodeARM64_q13        = 48,
+RDI_RegCodeARM64_q14        = 49,
+RDI_RegCodeARM64_q15        = 50,
+RDI_RegCodeARM64_q16        = 51,
+RDI_RegCodeARM64_q17        = 52,
+RDI_RegCodeARM64_q18        = 53,
+RDI_RegCodeARM64_q19        = 54,
+RDI_RegCodeARM64_q20        = 55,
+RDI_RegCodeARM64_q21        = 56,
+RDI_RegCodeARM64_q22        = 57,
+RDI_RegCodeARM64_q23        = 58,
+RDI_RegCodeARM64_q24        = 59,
+RDI_RegCodeARM64_q25        = 60,
+RDI_RegCodeARM64_q26        = 61,
+RDI_RegCodeARM64_q27        = 62,
+RDI_RegCodeARM64_q28        = 63,
+RDI_RegCodeARM64_q29        = 64,
+RDI_RegCodeARM64_q30        = 65,
+RDI_RegCodeARM64_q31        = 66,
+} RDI_RegCodeARM64Enum;
 
 typedef RDI_U32 RDI_BinarySectionFlags;
 typedef enum RDI_BinarySectionFlagsEnum
@@ -580,6 +653,7 @@ X(RDI_U64, idx)\
 X(NULL)\
 X(X64)\
 X(X86)\
+X(ARM64)\
 
 #define RDI_RegCodeX64_XList \
 X(nil, 0)\
@@ -677,6 +751,75 @@ X(fdp, 91)\
 X(mxcsr_mask, 92)\
 X(cetmsr, 93)\
 X(cetssp, 94)\
+
+#define RDI_RegCodeARM64_XList \
+X(nil, 0)\
+X(x0, 1)\
+X(x1, 2)\
+X(x2, 3)\
+X(x3, 4)\
+X(x4, 5)\
+X(x5, 6)\
+X(x6, 7)\
+X(x7, 8)\
+X(x8, 9)\
+X(x9, 10)\
+X(x10, 11)\
+X(x11, 12)\
+X(x12, 13)\
+X(x13, 14)\
+X(x14, 15)\
+X(x15, 16)\
+X(x16, 17)\
+X(x17, 18)\
+X(x18, 19)\
+X(x19, 20)\
+X(x20, 21)\
+X(x21, 22)\
+X(x22, 23)\
+X(x23, 24)\
+X(x24, 25)\
+X(x25, 26)\
+X(x26, 27)\
+X(x27, 28)\
+X(x28, 29)\
+X(fp, 30)\
+X(lr, 31)\
+X(sp, 32)\
+X(pc, 33)\
+X(cpsr, 34)\
+X(q0, 35)\
+X(q1, 36)\
+X(q2, 37)\
+X(q3, 38)\
+X(q4, 39)\
+X(q5, 40)\
+X(q6, 41)\
+X(q7, 42)\
+X(q8, 43)\
+X(q9, 44)\
+X(q10, 45)\
+X(q11, 46)\
+X(q12, 47)\
+X(q13, 48)\
+X(q14, 49)\
+X(q15, 50)\
+X(q16, 51)\
+X(q17, 52)\
+X(q18, 53)\
+X(q19, 54)\
+X(q20, 55)\
+X(q21, 56)\
+X(q22, 57)\
+X(q23, 58)\
+X(q24, 59)\
+X(q25, 60)\
+X(q26, 61)\
+X(q27, 62)\
+X(q28, 63)\
+X(q29, 64)\
+X(q30, 65)\
+X(q31, 66)\
 
 #define RDI_TopLevelInfo_XList \
 X(RDI_Arch, arch)\
