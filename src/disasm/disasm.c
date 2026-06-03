@@ -20,8 +20,35 @@ dasm_inst_from_code(Arena *arena, Arch arch, U64 vaddr, String8 code, DASM_Synta
       inst = x64_dasm_inst_from_code(arena, vaddr, code, syntax);
     }break;
 #endif
+#if defined(ARM64_H)
+    case Arch_arm64:
+    {
+      inst = arm64_dasm_inst_from_code(arena, vaddr, code, syntax);
+    }break;
+#endif
   }
   return inst;
+}
+
+internal U64
+dasm_invalid_inst_size_from_arch_vaddr_code(Arch arch, U64 vaddr, String8 code)
+{
+  U64 result = 0;
+  switch(arch)
+  {
+    case Arch_arm64:
+    {
+      U64 inst_size = min_instruction_size_from_arch(arch);
+      if(inst_size != 0 && code.size != 0)
+      {
+        U64 misalignment = vaddr%inst_size;
+        result = (misalignment != 0 ? inst_size-misalignment : inst_size);
+        result = Min(result, code.size);
+      }
+    }break;
+    default:{}break;
+  }
+  return result;
 }
 
 ////////////////////////////////
@@ -189,7 +216,44 @@ dasm_artifact_create(String8 key, B32 *cancel_signal, B32 *retry_out, U64 *gen_o
         DASM_Inst inst = dasm_inst_from_code(scratch.arena, params.arch, params.vaddr+off, str8_skip(data, off), params.syntax);
         if(inst.size == 0)
         {
-          break;
+          U64 invalid_size = dasm_invalid_inst_size_from_arch_vaddr_code(params.arch, params.vaddr+off, str8_skip(data, off));
+          if(invalid_size == 0)
+          {
+            break;
+          }
+
+          String8 addr_part = {0};
+          if(params.style_flags & DASM_StyleFlag_Addresses)
+          {
+            addr_part = push_str8f(scratch.arena, "%s0x%016I64x  ", rdi != &rdi_parsed_nil ? "  " : "", params.vaddr+off);
+          }
+          String8 code_bytes_part = {0};
+          if(params.style_flags & DASM_StyleFlag_CodeBytes)
+          {
+            String8List code_bytes_strings = {0};
+            str8_list_push(scratch.arena, &code_bytes_strings, str8_lit("{"));
+            for(U64 byte_idx = 0; byte_idx < invalid_size || byte_idx < 16; byte_idx += 1)
+            {
+              if(byte_idx < invalid_size)
+              {
+                str8_list_pushf(scratch.arena, &code_bytes_strings, "%02x%s ", (U32)data.str[off+byte_idx], byte_idx == invalid_size-1 ? "}" : "");
+              }
+              else if(byte_idx < 8)
+              {
+                str8_list_push(scratch.arena, &code_bytes_strings, str8_lit("   "));
+              }
+            }
+            str8_list_push(scratch.arena, &code_bytes_strings, str8_lit(" "));
+            code_bytes_part = str8_list_join(scratch.arena, &code_bytes_strings, 0);
+          }
+          String8 inst_string = push_str8f(scratch.arena, "%S%S<invalid>", addr_part, code_bytes_part);
+          DASM_Line line = {u32_from_u64_saturate(off), 0, 0, r1u64(inst_strings.total_size + inst_strings.node_count,
+                                                                    inst_strings.total_size + inst_strings.node_count + inst_string.size)};
+          dasm_line_chunk_list_push(scratch.arena, &line_list, 1024, &line);
+          str8_list_push(scratch.arena, &inst_strings, inst_string);
+
+          off += invalid_size;
+          continue;
         }
         
         // rjf: push strings derived from voff -> line info

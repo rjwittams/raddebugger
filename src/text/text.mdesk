@@ -12,6 +12,7 @@ TXT_LangKindTable:
   { Zig            zig                zig                c                          null}
   { Rust           rs                 rust               c                          null}
   { DisasmX64Intel disasm_x64_intel   null               null                       null}
+  { DisasmARM64    disasm_arm64       null               null                       null}
 }
 
 @table(string kind)
