@@ -1,3 +1,4 @@
+#undef T_Group
 #define T_Group "eval"
 
 TEST(eval_compiler_basics)
