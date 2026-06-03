@@ -96,6 +96,16 @@ TEST(arm64_vector_register_metadata)
   T_Ok(dw_from_reg_code_table[ARM64_RegCode_q31] == DW_RegCodeARM64_q31);
 }
 
+TEST(arm64_ctrl_flow_point_extents)
+{
+  U8 bl_code[] = {0x02, 0x00, 0x00, 0x94};
+  DASM_CtrlFlowInfo info = dasm_ctrl_flow_info_from_arch_vaddr_code(arena, DASM_InstFlag_Call, 0, Arch_arm64, 0x1000, str8_array_fixed(bl_code));
+  T_Ok(info.exit_points.count == 1);
+  T_Ok(info.exit_points.first->v.vaddr == 0x1000);
+  T_Ok(info.exit_points.first->v.vaddr_opl == 0x1004);
+  T_Ok(info.exit_points.first->v.jump_dest_vaddr == 0x1008);
+}
+
 TEST(arm64_disasm_basic)
 {
   U8 nop_code[] = {0x1f, 0x20, 0x03, 0xd5};
