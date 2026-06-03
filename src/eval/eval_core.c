@@ -851,6 +851,132 @@ e_dbg_info_from_module(E_Module *module)
   return result;
 }
 
+internal U32
+e_dbg_info_num_from_rdi_prefer_primary(RDI_Parsed *rdi)
+{
+  U32 result = 0;
+  if(rdi != 0 && e_base_ctx != 0)
+  {
+    if(e_base_ctx->primary_dbg_info != 0 &&
+       e_base_ctx->dbg_infos <= e_base_ctx->primary_dbg_info &&
+       e_base_ctx->primary_dbg_info < e_base_ctx->dbg_infos + e_base_ctx->dbg_infos_count &&
+       e_base_ctx->primary_dbg_info->rdi == rdi)
+    {
+      result = (U32)(e_base_ctx->primary_dbg_info - e_base_ctx->dbg_infos) + 1;
+    }
+    for EachIndex(idx, e_base_ctx->dbg_infos_count)
+    {
+      if(result != 0)
+      {
+        break;
+      }
+      if(e_base_ctx->dbg_infos[idx].rdi == rdi)
+      {
+        result = (U32)idx + 1;
+      }
+    }
+  }
+  return result;
+}
+
+internal DI_Match
+e_match_from_rdi_name_maps(Arena *arena, RDI_Parsed *rdi, DI_Key key, String8 string, U64 index)
+{
+  DI_Match result = {0};
+  if(rdi != 0 && rdi != &rdi_parsed_nil)
+  {
+    read_only local_persist RDI_NameMapKind name_map_kinds[] =
+    {
+      RDI_NameMapKind_GlobalVariables,
+      RDI_NameMapKind_ThreadVariables,
+      RDI_NameMapKind_Constants,
+      RDI_NameMapKind_Procedures,
+      RDI_NameMapKind_Types,
+    };
+    read_only local_persist RDI_SectionKind name_map_section_kinds[] =
+    {
+      RDI_SectionKind_GlobalVariables,
+      RDI_SectionKind_ThreadVariables,
+      RDI_SectionKind_Constants,
+      RDI_SectionKind_Procedures,
+      RDI_SectionKind_TypeNodes,
+    };
+    U64 container_part_opl = 0;
+    U64 leaf_part_first = 0;
+    for(U64 off = 0; off+1 < string.size; off += 1)
+    {
+      if(string.str[off] == '.')
+      {
+        container_part_opl = off;
+        leaf_part_first = off+1;
+      }
+      else if(string.str[off] == ':' && string.str[off+1] == ':')
+      {
+        container_part_opl = off;
+        leaf_part_first = off+2;
+      }
+    }
+    String8 leaf_part_of_name = str8_skip(string, leaf_part_first);
+    String8 container_part_of_name = str8_prefix(string, container_part_opl);
+
+    for EachElement(name_map_kind_idx, name_map_kinds)
+    {
+      RDI_NameMap *name_map = rdi_element_from_name_idx(rdi, NameMaps, name_map_kinds[name_map_kind_idx]);
+      RDI_ParsedNameMap parsed_name_map = {0};
+      rdi_parsed_from_name_map(rdi, name_map, &parsed_name_map);
+      RDI_NameMapNode *map_node = rdi_name_map_lookup(rdi, &parsed_name_map, leaf_part_of_name.str, leaf_part_of_name.size);
+      U32 matches_count = 0;
+      U32 *matches = rdi_matches_from_map_node(rdi, map_node, &matches_count);
+      U32 *filtered_matches = matches;
+      U32 filtered_matches_count = matches_count;
+      if(container_part_of_name.size != 0)
+      {
+        filtered_matches = push_array(arena, U32, matches_count);
+        filtered_matches_count = 0;
+        for EachIndex(match_idx, matches_count)
+        {
+          String8 match_fully_qualified_name = {0};
+          switch(name_map_section_kinds[name_map_kind_idx])
+          {
+            default:{}break;
+            case RDI_SectionKind_GlobalVariables:
+            case RDI_SectionKind_ThreadVariables:
+            case RDI_SectionKind_Constants:
+            case RDI_SectionKind_Procedures:
+            {
+              RDI_Symbol *symbol = (RDI_Symbol *)rdi_section_raw_element_from_kind_idx(rdi, name_map_section_kinds[name_map_kind_idx], matches[match_idx]);
+              match_fully_qualified_name = fully_qualified_str8_from_rdi_symbol(arena, rdi, symbol);
+            }break;
+            case RDI_SectionKind_TypeNodes:
+            {
+              RDI_TypeNode *type_node = rdi_element_from_name_idx(rdi, TypeNodes, matches[match_idx]);
+              if(RDI_TypeKind_FirstUserDefined <= type_node->kind && type_node->kind <= RDI_TypeKind_LastUserDefined)
+              {
+                match_fully_qualified_name = fully_qualified_str8_from_rdi_type(arena, rdi, type_node);
+              }
+            }break;
+          }
+          if(str8_match(match_fully_qualified_name, string, 0))
+          {
+            filtered_matches[filtered_matches_count] = matches[match_idx];
+            filtered_matches_count += 1;
+          }
+        }
+      }
+      if(filtered_matches_count != 0)
+      {
+        U64 selected_match_idx = (filtered_matches_count-1) - Min(index, filtered_matches_count-1);
+        result.key = key;
+        result.section_kind = name_map_section_kinds[name_map_kind_idx];
+        result.idx = filtered_matches[selected_match_idx];
+        result.count = filtered_matches_count;
+        break;
+      }
+    }
+  }
+  return result;
+}
+
 internal E_DbgInfo *
 e_dbg_info_from_type_key(E_TypeKey type_key)
 {
