@@ -807,6 +807,10 @@ file_open(AccessFlags flags, String8 path)
   {
     lnx_flags |= O_APPEND;
   }
+  else if(flags & AccessFlag_Write)
+  {
+    lnx_flags |= O_TRUNC;
+  }
   if(flags & (AccessFlag_Write|AccessFlag_Append))
   {
     lnx_flags |= O_CREAT;
@@ -841,10 +845,14 @@ file_read(File file, Rng1U64 rng, void *out_data)
   for(;total_num_bytes_left_to_read > 0;)
   {
     int read_result = pread(fd, (U8 *)out_data + total_num_bytes_read, total_num_bytes_left_to_read, rng.min + total_num_bytes_read);
-    if(read_result >= 0)
+    if(read_result > 0)
     {
       total_num_bytes_read += read_result;
       total_num_bytes_left_to_read -= read_result;
+    }
+    else if(read_result == 0)
+    {
+      break;
     }
     else if(errno != EINTR)
     {
@@ -1090,7 +1098,7 @@ file_iter_begin(Arena *arena, String8 path, FileIterFlags flags)
   base_iter->flags = flags;
   LNX_FileIter *iter = (LNX_FileIter *)base_iter->memory;
   {
-    String8 path_copy = push_str8_copy(arena, path);
+    String8 path_copy = path.size == 0 ? str8_lit("/") : push_str8_copy(arena, path);
     iter->dir = opendir((char *)path_copy.str);
     iter->path = path_copy;
   }
@@ -1153,7 +1161,10 @@ internal void
 file_iter_end(FileIter *iter)
 {
   LNX_FileIter *lnx_iter = (LNX_FileIter *)iter->memory;
-  closedir(lnx_iter->dir);
+  if(lnx_iter->dir != 0)
+  {
+    closedir(lnx_iter->dir);
+  }
 }
 
 //- rjf: directory creation
@@ -1167,6 +1178,10 @@ make_directory(String8 path)
   if(mkdir((char *)path_copy.str, 0755) != -1)
   {
     result = 1;
+  }
+  else if(errno == EEXIST)
+  {
+    result = folder_path_exists(path);
   }
   scratch_end(scratch);
   return result;
@@ -1292,6 +1307,7 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
 {
   pid_t pid = (pid_t)process.u64[0];
   B32 result = 0;
+  int status = 0;
   if(endt_us == 0)
   {
     if(kill(pid, 0) >= 0)
@@ -1299,7 +1315,6 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
       result = (errno == ENOENT);
       if(result)
       {
-        int status;
         waitpid(pid, &status, 0);
       }
     }
@@ -1308,10 +1323,13 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
   {
     for(;;)
     {
-      int status = 0;
       int w = waitpid(pid, &status, 0);
       if(w == -1)
       {
+        if(errno == EINTR)
+        {
+          continue;
+        }
         break;
       }
       if(WIFEXITED(status) || WIFSTOPPED(status) || WIFSIGNALED(status))
@@ -1324,6 +1342,21 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
   else
   {
     NotImplemented;
+  }
+  if(result && exit_code_out != 0)
+  {
+    if(WIFEXITED(status))
+    {
+      *exit_code_out = (U64)WEXITSTATUS(status);
+    }
+    else if(WIFSIGNALED(status))
+    {
+      *exit_code_out = (U64)(128 + WTERMSIG(status));
+    }
+    else if(WIFSTOPPED(status))
+    {
+      *exit_code_out = (U64)(128 + WSTOPSIG(status));
+    }
   }
   return result;
 }
