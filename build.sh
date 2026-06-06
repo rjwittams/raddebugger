@@ -1,6 +1,11 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -eu
 cd "$(dirname "$0")"
+
+if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 2) )); then
+  echo "[ERROR] build.sh requires Bash 4.2 or newer."
+  exit 1
+fi
 
 # --- Unpack Arguments --------------------------------------------------------
 for arg in "$@"; do declare $arg='1'; done
