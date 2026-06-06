@@ -198,3 +198,4 @@ RDI_RegCodeX64_cetssp,
 };
 
 C_LINKAGE_END
+

@@ -1276,7 +1276,7 @@ RDI_U32 byte_size;
     {
       RDI_U32 name_string_idx;
     } built_in;
-
+    
     // kind is 'constructed'
     struct
     {
@@ -1291,7 +1291,7 @@ RDI_U32 byte_size;
       };
     }
     constructed;
-
+    
     // kind is 'user defined'
     struct
     {
@@ -1300,7 +1300,7 @@ RDI_U32 byte_size;
       RDI_U32 udt_idx;
     }
     user_defined;
-
+    
     // (kind = Bitfield)
     struct
     {

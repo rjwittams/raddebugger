@@ -317,7 +317,7 @@ rdi_eval_op_typegroup_are_compatible(RDI_EvalOp op, RDI_EvalTypeGroup group)
     case RDI_EvalOp_Mod:case RDI_EvalOp_LShift:case RDI_EvalOp_RShift:
     case RDI_EvalOp_BitNot:case RDI_EvalOp_BitAnd:case RDI_EvalOp_BitXor:
     case RDI_EvalOp_BitOr:case RDI_EvalOp_LogNot:case RDI_EvalOp_LogAnd:
-    case RDI_EvalOp_LogOr:
+    case RDI_EvalOp_LogOr: 
     {
       if(group == RDI_EvalTypeGroup_S || group == RDI_EvalTypeGroup_U)
       {

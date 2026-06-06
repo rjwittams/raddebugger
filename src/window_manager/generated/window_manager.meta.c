@@ -299,3 +299,4 @@ str8_lit_comp("right_mouse"),
 };
 
 C_LINKAGE_END
+
