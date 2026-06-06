@@ -1,6 +1,11 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -eu
 cd "$(dirname "$0")"
+
+if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 2) )); then
+  echo "[ERROR] build.sh requires Bash 4.2 or newer."
+  exit 1
+fi
 
 # --- Unpack Arguments --------------------------------------------------------
 for arg in "$@"; do declare $arg='1'; done
@@ -16,9 +21,14 @@ git_hash=$(git describe --always --dirty)
 git_hash_full=$(git rev-parse HEAD)
 
 # --- Compile/Link Line Definitions -------------------------------------------
+host_arch=$(uname -m)
+cc_host_flags=""
+if [[ "$host_arch" == "x86_64" || "$host_arch" == "amd64" ]]; then
+  cc_host_flags="-mcx16 -msse2"
+fi
 cc_cflags_gcc=""
-cc_cflags_clang=${cc_sanitize}" -fdiagnostics-absolute-paths -Wno-for-loop-analysis  -Wno-incompatible-pointer-types-discards-qualifiers -Wno-initializer-overrides -Wno-compare-distinct-pointer-types -Wno-single-bit-bitfield-constant-conversion -Wno-deprecated-declarations -Wno-writable-strings -Wno-unknown-warning-option -Wno-deprecated-register -Wno-unused-local-typedef -msse2"
-cc_common="-mcx16 -I../src/ -I../local/ -D_GNU_SOURCE -g -DBUILD_GIT_HASH=\"$git_hash\" -DBUILD_GIT_HASH_FULL=\"$git_hash_full\" -Wall -Wno-missing-braces -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-value -D_USE_MATH_DEFINES -Dstrdup=_strdup -Dgnu_printf=printf"
+cc_cflags_clang=${cc_sanitize}" -fdiagnostics-absolute-paths -Wno-for-loop-analysis  -Wno-incompatible-pointer-types-discards-qualifiers -Wno-initializer-overrides -Wno-compare-distinct-pointer-types -Wno-single-bit-bitfield-constant-conversion -Wno-deprecated-declarations -Wno-writable-strings -Wno-unknown-warning-option -Wno-deprecated-register -Wno-unused-local-typedef"
+cc_common="$cc_host_flags -I../src/ -I../local/ -D_GNU_SOURCE -g -DBUILD_GIT_HASH=\"$git_hash\" -DBUILD_GIT_HASH_FULL=\"$git_hash_full\" -Wall -Wno-missing-braces -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-value -D_USE_MATH_DEFINES -Dstrdup=_strdup -Dgnu_printf=printf"
 cc_debug="-g -O0 -DBUILD_DEBUG=1 ${cc_common}"
 cc_release="-g -O2 -DBUILD_DEBUG=0 ${cc_common}"
 cc_link="-lpthread -lm -lrt -ldl"
