@@ -184,7 +184,7 @@ t_radbin_path(void)
 #if OS_WINDOWS
     path = full_path_from_path(arena, str8_lit("radbin.exe"));
 #else
-    path = full_path_from_path(arena, str8_lit("radbin"));
+    path = push_str8f(arena, "%S" T_PATH_SEP "radbin", get_process_info()->binary_path);
 #endif
     AssertAlways(path.size);
   }
@@ -256,7 +256,7 @@ t_radlink_path(void)
 #if OS_WINDOWS
     path = full_path_from_path(arena, str8_lit("radlink.exe"));
 #else
-    path = full_path_from_path(arena, str8_lit("radlink"));
+    path = push_str8f(arena, "%S" T_PATH_SEP "radlink", get_process_info()->binary_path);
 #endif
     AssertAlways(path.size);
   }

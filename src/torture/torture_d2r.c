@@ -7,6 +7,25 @@
 
 #define T_Group "d2r"
 
+TEST(d2r2_vaddr_ranges_are_normalized_to_voffs)
+{
+  U64 base_vaddr = 0x100000000;
+  Rng1U64 absolute_range = r1u64(0x100001860, 0x100001b20);
+  Rng1U64 relative_range = r1u64(0x1860, 0x1b20);
+  Rng1U64 nil_range = r1u64(0, 0);
+  
+  RDIM_Rng1U64 absolute_voff_range = d2r2_voff_range_from_vaddr_range(base_vaddr, absolute_range);
+  RDIM_Rng1U64 relative_voff_range = d2r2_voff_range_from_vaddr_range(base_vaddr, relative_range);
+  RDIM_Rng1U64 nil_voff_range = d2r2_voff_range_from_vaddr_range(base_vaddr, nil_range);
+  
+  T_Ok(absolute_voff_range.min == 0x1860);
+  T_Ok(absolute_voff_range.max == 0x1b20);
+  T_Ok(relative_voff_range.min == 0x1860);
+  T_Ok(relative_voff_range.max == 0x1b20);
+  T_Ok(nil_voff_range.min == 0);
+  T_Ok(nil_voff_range.max == 0);
+}
+
 internal RDI_Parsed *
 d2r_rdi_from_dwarf_writer(Arena *arena, DW_Writer *writer)
 {
@@ -59,6 +78,89 @@ d2rt_type_from_name(RDI_Parsed *rdi, RDI_ParsedNameMap *map, char *name)
     return rdi_element_from_name_idx(rdi, TypeNodes, ids[0]);
   }
   return 0;
+}
+
+internal RDI_Symbol *
+d2rt_global_from_name(RDI_Parsed *rdi, char *name)
+{
+  RDI_Symbol *result = 0;
+  String8 name_str = str8_cstring(name);
+  U64 globals_count = 0;
+  RDI_Symbol *globals = rdi_table_from_name(rdi, GlobalVariables, &globals_count);
+  for(U64 idx = 1; idx < globals_count; idx += 1)
+  {
+    RDI_Symbol *gvar = &globals[idx];
+    String8 gvar_name = str8_from_rdi_string_idx(rdi, gvar->name_string_idx);
+    if(str8_match(gvar_name, name_str, 0))
+    {
+      result = gvar;
+      break;
+    }
+  }
+  return result;
+}
+
+TEST(d2r2_locations_under_parent_without_framebase)
+{
+  DW_Writer *writer = dw_writer_begin(DW_Format_32Bit, DW_Version_5, DW_CompUnitKind_Compile, Arch_x64);
+  U64 image_base = coff_default_exe_base_from_machine(COFF_MachineType_X64);
+  U64 proc_voff = 0x1000;
+  U64 global_voff = 0x3000;
+  {
+    dw_writer_tag_begin(writer, DW_TagKind_CompileUnit);
+    dw_writer_push_attrib_stringf(writer, DW_AttribKind_Producer, "Test");
+
+    DW_WriterTag *int_type = dw_writer_tag_begin(writer, DW_TagKind_BaseType);
+    dw_writer_push_attrib_sint(writer, DW_AttribKind_ByteSize, 4);
+    dw_writer_push_attrib_enum(writer, DW_AttribKind_Encoding, DW_ATE_Signed);
+    dw_writer_push_attrib_stringf(writer, DW_AttribKind_Name, "int");
+    dw_writer_tag_end(writer);
+
+    dw_writer_tag_begin(writer, DW_TagKind_Module);
+    dw_writer_push_attrib_stringf(writer, DW_AttribKind_Name, "ParentWithoutFrameBase");
+
+    dw_writer_tag_begin(writer, DW_TagKind_Variable);
+    dw_writer_push_attrib_stringf(writer, DW_AttribKind_Name, "ParentedGlobal");
+    dw_writer_push_attrib_ref(writer, DW_AttribKind_Type, int_type);
+    dw_writer_push_attrib_exprv(writer, DW_AttribKind_Location, DW_ExprEnc_Op(Addr), DW_ExprEnc_Addr(image_base + global_voff));
+    dw_writer_tag_end(writer);
+
+    dw_writer_tag_begin(writer, DW_TagKind_SubProgram);
+    dw_writer_push_attrib_stringf(writer, DW_AttribKind_Name, "ParentedFunc");
+    dw_writer_push_attrib_address(writer, DW_AttribKind_LowPc, image_base + proc_voff);
+    dw_writer_push_attrib_address(writer, DW_AttribKind_HighPc, image_base + proc_voff + 0x10);
+    dw_writer_push_attrib_exprv(writer, DW_AttribKind_FrameBase, DW_ExprEnc_Op(Reg7));
+
+    dw_writer_tag_begin(writer, DW_TagKind_Variable);
+    dw_writer_push_attrib_stringf(writer, DW_AttribKind_Name, "ParentedLocal");
+    dw_writer_push_attrib_ref(writer, DW_AttribKind_Type, int_type);
+    dw_writer_push_attrib_exprv(writer, DW_AttribKind_Location, DW_ExprEnc_Op(FBReg), DW_ExprEnc_SLEB128(-16));
+    dw_writer_tag_end(writer);
+
+    dw_writer_tag_end(writer);
+    dw_writer_tag_end(writer);
+    dw_writer_tag_end(writer);
+  }
+
+  RDI_Parsed *rdi = d2r_rdi_from_dwarf_writer(arena, writer);
+
+  RDI_Symbol *gvar = d2rt_global_from_name(rdi, "ParentedGlobal");
+  T_Ok(gvar);
+  T_Ok(rdi_kind_from_location(gvar->location) == RDI_LocationKind_ModuleOff);
+  T_Ok(rdi_voff_from_location(gvar->location) == global_voff);
+
+  RDI_Symbol *proc = rdi_procedure_from_name_cstr(rdi, "ParentedFunc");
+  T_Ok(proc);
+  RDI_Scope *root_scope = rdi_root_scope_from_procedure(rdi, proc);
+  T_Ok(root_scope);
+  T_Ok(root_scope->local_count == 1);
+  RDI_Symbol *local = rdi_element_from_name_idx(rdi, LocalVariables, root_scope->local_first);
+  T_Ok(local);
+  T_Ok(rdi_kind_from_location(local->location) == RDI_LocationKind_AddrRegPlusOff);
+  T_Ok(rdi_regcode_from_location(local->location) == RDI_RegCodeX64_rsp);
+  T_Ok(rdi_regoff_from_location(local->location) == -16);
+
+  dw_writer_end(&writer);
 }
 
 TEST(d2r_types)
@@ -244,6 +346,7 @@ TEST(d2r_line_table)
     { comp_file, 8, 5 },
     { foo_file, 1, 3 },
     { foo_file, 100, 1 },
+    { comp_file, 0, 4 },
     { comp_file, max_U32 - 0x100, 10 },
   };
   
@@ -270,16 +373,36 @@ TEST(d2r_line_table)
   dw_writer_push_attrib_address(writer, DW_AttribKind_HighPc, exe_base + voff);
   dw_writer_push_attrib_line_ptr(writer, DW_AttribKind_StmtList, 0);
   dw_writer_tag_end(writer);
+
+  RDI_Parsed *rdi = d2r_rdi_from_dwarf_writer(arena, writer);
   
-  d2r_rdi_from_dwarf_writer(arena, writer);
+  String8 comp_file_normal_path = rdim_normalize_path_str8(arena, comp_file->path);
+  U32 comp_src_file_idx_count = 0;
+  U32 *comp_src_file_idxs = rdi_source_file_idxs_from_normal_path(rdi, comp_file_normal_path.str, comp_file_normal_path.size, &comp_src_file_idx_count);
+  B32 saw_comp_line_map = 0;
+  for EachIndex(idx, comp_src_file_idx_count)
+  {
+    RDI_SourceFile *src_file = rdi_element_from_name_idx(rdi, SourceFiles, comp_src_file_idxs[idx]);
+    saw_comp_line_map = saw_comp_line_map || src_file->source_line_map_idx != 0;
+  }
+  T_Ok(saw_comp_line_map);
   
   for EachElement(i, test_table) {
     for EachIndex(k, test_table[i].line_size) {
+      RDI_Line parsed_line = rdi_line_from_voff(rdi, test_table[i].voff + k);
+      T_Ok(parsed_line.line_num == test_table[i].ln);
+
+      if(test_table[i].ln == 0)
+      {
+        continue;
+      }
+
       String8 cmd_line = str8f(arena, "-voff2line -voff:0x%llx a.rdi", test_table[i].voff + k);
       String8 output = {0};
       t_invoke_(t_radbin_path(), cmd_line, max_U64, arena, &output);
       T_Ok(g_last_exit_code == 0);
-      T_MatchLinef(&output, "%S:%llu", test_table[i].file->path, test_table[i].ln);
+      String8 expected_line = push_str8f(arena, "%S:%S", test_table[i].file->path, str8_from_u64(arena, test_table[i].ln, 10, 0, 0));
+      T_Ok(t_match_line(&output, expected_line));
     }
   }
   

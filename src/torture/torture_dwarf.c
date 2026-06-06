@@ -3,6 +3,25 @@
 
 #define T_Group "Dwarf"
 
+TEST(dwarf_reference_form_info_offsets)
+{
+  DW2_ParseCtx ctx =
+  {
+    .version = DW_Version_5,
+    .format = DW_Format_32Bit,
+    .addr_size = 8,
+    .unit_base_info_off = 0x100,
+  };
+
+  DW2_FormVal ref4 = {.kind = DW_Form_Ref4, .u128.u64[0] = 0x37};
+  DW2_FormVal ref_udata = {.kind = DW_Form_RefUData, .u128.u64[0] = 0x38};
+  DW2_FormVal ref_addr = {.kind = DW_Form_RefAddr, .u128.u64[0] = 0x39};
+
+  T_Ok(dw2_reference_info_off_from_form_val(&ctx, &ref4) == 0x137);
+  T_Ok(dw2_reference_info_off_from_form_val(&ctx, &ref_udata) == 0x138);
+  T_Ok(dw2_reference_info_off_from_form_val(&ctx, &ref_addr) == 0x39);
+}
+
 internal U64
 t_dw_test_uleb128(U64 v, U64 expected_length)
 {
@@ -120,7 +139,7 @@ dw_input_from_writer(Arena *arena, DW_Writer *writer)
   String8 raw_coff = coff_from_obj(scratch.arena, obj);
   
   t_write_file(str8_lit("dwarf.obj"), raw_coff);
-  t_invoke(str8_lit("radlink"), str8_lit("/subsystem:console /entry:entry /out:a.exe /debug:full dwarf.obj"), max_U64);
+  t_invoke(t_radlink_path(), str8_lit("/subsystem:console /entry:entry /out:a.exe /debug:full dwarf.obj"), max_U64);
   delete_file_at_path(t_make_file_path(scratch.arena, str8_lit("a.pdb")));
   
   String8             exe           = t_read_file(arena, str8_lit("a.exe"));
