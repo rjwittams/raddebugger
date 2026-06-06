@@ -7,48 +7,51 @@
 #include "x64/generated/x64.meta.c"
 
 ////////////////////////////////
+//~ Includes
+
+#if (COMPILER_CLANG || COMPILER_GCC) && ARCH_X64
+# include <cpuid.h>
+#endif
+
+////////////////////////////////
 //~ cpuid
 
 internal void
 x64_cpuid(U32 leaf, U32 *eax, U32 *ebx, U32 *ecx, U32 *edx)
 {
   U32 info[4] = {0};
-#if COMPILER_MSVC
+#if COMPILER_MSVC && ARCH_X64
   __cpuid(info, leaf);
+#elif (COMPILER_CLANG || COMPILER_GCC) && ARCH_X64
+  __get_cpuid(leaf, &info[0], &info[1], &info[2], &info[3]);
+#elif ARCH_X64
+# error "cpuid is not defined for this compiler"
+#else
+  InvalidPath;
+#endif
   if (eax) { *eax = info[0]; }
   if (ebx) { *ebx = info[1]; }
   if (ecx) { *ecx = info[2]; }
   if (edx) { *edx = info[3]; }
-#elif COMPILER_CLANG || COMPILER_GCC
-  if (!eax) { eax = &info[0]; }
-  if (!ebx) { ebx = &info[1]; }
-  if (!ecx) { ecx = &info[2]; }
-  if (!edx) { edx = &info[3]; }
-  __get_cpuid(leaf, eax, ebx, ecx, edx);
-#else
-# error "cpuid is not defined for this compiler"
-#endif
 }
 
 internal void
 x64_cpuid_ex(U32 leaf, U32 sub_leaf, U32 *eax, U32 *ebx, U32 *ecx, U32 *edx)
 {
-  U32 info[4];
-#if COMPILER_MSVC
+  U32 info[4] = {0};
+#if COMPILER_MSVC && ARCH_X64
   __cpuidex(info, leaf, sub_leaf);
+#elif (COMPILER_CLANG || COMPILER_GCC) && ARCH_X64
+  __get_cpuid_count(leaf, sub_leaf, &info[0], &info[1], &info[2], &info[3]);
+#elif ARCH_X64
+# error "cpuid_count is not defined for this compiler"
+#else
+  InvalidPath;
+#endif
   if (eax) { *eax = info[0]; }
   if (ebx) { *ebx = info[1]; }
   if (ecx) { *ecx = info[2]; }
   if (edx) { *edx = info[3]; }
-#elif COMPILER_CLANG || COMPILER_GCC
-  if (!eax) { eax = &info[0]; }
-  if (!ebx) { ebx = &info[1]; }
-  if (!ecx) { ecx = &info[2]; }
-  if (!edx) { edx = &info[3]; }
-  __get_cpuid_count(leaf, sub_leaf, eax, ebx, ecx, edx);
-#else
-# error "cpuid_count is not defined for this compiler"
-#endif
 }
 
 ////////////////////////////////
