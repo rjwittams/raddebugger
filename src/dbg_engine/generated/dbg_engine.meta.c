@@ -205,3 +205,4 @@ B8 d_exception_code_kind_default_enable_table[38] =
 };
 
 C_LINKAGE_END
+

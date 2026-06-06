@@ -1115,3 +1115,4 @@ str8_lit_comp("theme:\n{\n  theme_color:{tags: background, value: 0x000080ff}\n 
 };
 
 C_LINKAGE_END
+

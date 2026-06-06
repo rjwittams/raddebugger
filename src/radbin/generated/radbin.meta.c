@@ -19,3 +19,4 @@ str8_lit_comp("RDI"),
 };
 
 C_LINKAGE_END
+

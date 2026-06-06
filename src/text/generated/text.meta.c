@@ -455,3 +455,4 @@ str8_lit_comp("union"),
 };
 
 C_LINKAGE_END
+
