@@ -166,7 +166,7 @@ struct DMN_RunCtrls
 };
 
 ////////////////////////////////
-//~ rjf: Thread Call Types
+//~ Thread Call Types
 
 typedef enum DMN_ThreadCallValueKind
 {
