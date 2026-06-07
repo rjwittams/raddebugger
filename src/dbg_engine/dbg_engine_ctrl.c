@@ -5096,7 +5096,9 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
 
         if(path.size != 0)
         {
-          exe_dbg_path = path;
+          str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S.rdi", str8_chop_last_dot(path));
+          str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S.rdi", path);
+
           String8 file_data = data_from_file_path(scratch.arena, path);
           if(file_data.size != 0)
           {
@@ -5104,6 +5106,24 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
             if(macho_function_start_voffs.count == 0)
             {
               macho_function_start_voffs = macho_function_start_voffs_from_data(arena, file_data, &file_bin);
+            }
+            if(dw_is_dwarf_present_from_macho_bin(file_data, &file_bin))
+            {
+              str8_list_push(scratch.arena, &image_dbg_path_candidates, path);
+            }
+
+            String8 dsym_path = macho_dsym_path_from_executable_path(scratch.arena, path);
+            if(dsym_path.size != 0 && file_path_exists(dsym_path))
+            {
+              String8 dsym_data = data_from_file_path(scratch.arena, dsym_path);
+              MachO_Bin dsym_bin = macho_bin_from_data(scratch.arena, dsym_data);
+              MachO_UUID exe_uuid = macho_uuid_from_bin(file_data, &file_bin);
+              MachO_UUID dsym_uuid = macho_uuid_from_bin(dsym_data, &dsym_bin);
+              if(!macho_uuid_is_zero(exe_uuid) &&
+                 macho_uuid_match(exe_uuid, dsym_uuid))
+              {
+                str8_list_push(scratch.arena, &image_dbg_path_candidates, dsym_path);
+              }
             }
           }
         }
