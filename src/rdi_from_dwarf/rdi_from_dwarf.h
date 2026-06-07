@@ -176,6 +176,7 @@ internal B32 rdim_static_eval_bytecode_to_voff(RDIM_EvalBytecode bc, U64 image_b
 
 internal RDI_Language   d2r_rdi_language_from_dw_language(DW_Language v);
 internal RDI_RegCodeX64 d2r_rdi_reg_code_from_dw_reg_x64 (DW_RegX64 v);
+internal RDI_RegCodeARM64 d2r_rdi_reg_code_from_dw_reg_arm64(DW_RegARM64 v);
 internal RDI_RegCode    d2r_rdi_reg_code_from_dw_reg     (Arch arch, DW_Reg v);
 
 ////////////////////////////////
