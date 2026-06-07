@@ -590,6 +590,12 @@ TEST(d2r_general)
     dw_writer_push_attrib_stringf(writer, DW_AttribKind_Name, "TestLocal");
     dw_writer_push_attrib_ref(writer, DW_AttribKind_Type, char_type);
     dw_writer_tag_end(writer);
+    // declare stack local
+    dw_writer_tag_begin(writer, DW_TagKind_Variable);
+    dw_writer_push_attrib_exprv(writer, DW_AttribKind_Location, DW_ExprEnc_Op(BReg7), DW_ExprEnc_SLEB128(24));
+    dw_writer_push_attrib_stringf(writer, DW_AttribKind_Name, "TestStackLocal");
+    dw_writer_push_attrib_ref(writer, DW_AttribKind_Type, char_type);
+    dw_writer_tag_end(writer);
     // declare param
     dw_writer_tag_begin(writer, DW_TagKind_FormalParameter);
     dw_writer_push_attrib_exprv(writer, DW_AttribKind_Location, DW_ExprEnc_Op(Reg7));
@@ -608,7 +614,7 @@ TEST(d2r_general)
   
   RDI_Scope *root_scope = rdi_root_scope_from_procedure(rdi, proc);
   T_Ok(root_scope);
-  T_Ok(root_scope->local_count == 2);
+  T_Ok(root_scope->local_count == 3);
   
   {
     RDI_Symbol *test_local = rdi_element_from_name_idx(rdi, LocalVariables, root_scope->local_first + 0);
@@ -635,6 +641,17 @@ TEST(d2r_general)
   
   {
     RDI_Symbol *test_local = rdi_element_from_name_idx(rdi, LocalVariables, root_scope->local_first + 1);
+    T_Ok(test_local);
+    T_Ok((test_local->symbol_flags & RDI_SymbolFlag_IsParam) == 0);
+    String8 test_local_name = str8_from_rdi_string_idx(rdi, test_local->name_string_idx);
+    T_Ok(str8_match(test_local_name, str8_lit("TestStackLocal"), 0));
+    T_Ok(rdi_kind_from_location(test_local->location) == RDI_LocationKind_AddrRegPlusOff);
+    T_Ok(rdi_regcode_from_location(test_local->location) == RDI_RegCodeX64_rsp);
+    T_Ok(rdi_regoff_from_location(test_local->location) == 24);
+  }
+
+  {
+    RDI_Symbol *test_local = rdi_element_from_name_idx(rdi, LocalVariables, root_scope->local_first + 2);
     T_Ok(test_local);
     T_Ok((test_local->symbol_flags & RDI_SymbolFlag_IsParam) != 0);
     String8 test_local_name = str8_from_rdi_string_idx(rdi, test_local->name_string_idx);
