@@ -5,6 +5,7 @@
 //
 // [ ] d2r_types alias size and byte size on __float80 typedef mismatch
 
+#undef T_Group
 #define T_Group "d2r"
 
 TEST(d2r2_vaddr_ranges_are_normalized_to_voffs)
