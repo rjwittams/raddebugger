@@ -5082,14 +5082,17 @@ d_ctrl_thread__launch(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   file_close(stdin_handle);
   
   //- rjf: record (id -> entry points), so that we know custom entry points for this PID
-  D_EntityCtxRWStore *entity_ctx_rw_store = d_ctrl_state->ctrl_thread_entity_store;
-  MutexScopeW(d_ctrl_state->ctrl_thread_entity_ctx_rw_mutex)
+  if(id != 0)
   {
-    for(String8Node *n = msg->entry_points.first; n != 0; n = n->next)
+    D_EntityCtxRWStore *entity_ctx_rw_store = d_ctrl_state->ctrl_thread_entity_store;
+    MutexScopeW(d_ctrl_state->ctrl_thread_entity_ctx_rw_mutex)
     {
-      String8 string = n->string;
-      D_Entity *entry = d_entity_alloc(entity_ctx_rw_store, entity_ctx_rw_store->ctx.root, D_EntityKind_EntryPoint, Arch_Null, d_handle_zero(), (U64)id);
-      d_entity_equip_string(entity_ctx_rw_store, entry, string);
+      for(String8Node *n = msg->entry_points.first; n != 0; n = n->next)
+      {
+        String8 string = n->string;
+        D_Entity *entry = d_entity_alloc(entity_ctx_rw_store, entity_ctx_rw_store->ctx.root, D_EntityKind_EntryPoint, Arch_Null, d_handle_zero(), (U64)id);
+        d_entity_equip_string(entity_ctx_rw_store, entry, string);
+      }
     }
   }
   
