@@ -44,6 +44,7 @@
 #include "pe/pe_section_flags.h"
 #include "pe/pe_make_import_table.h"
 #include "elf/elf.h"
+#include "macho/macho.h"
 #include "gnu/gnu.h"
 #include "gnu/gnu_parse.h"
 #include "elf/elf_parse.h"
@@ -56,9 +57,11 @@
 #include "pdb/pdb_parse.h"
 #include "pdb/pdb_stringize.h"
 #include "dwarf/dwarf_inc.h"
+#include "dwarf/dwarf_macho.h"
 #include "llvm/llvm.h"
 #include "rdi_from_coff/rdi_from_coff.h"
 #include "rdi_from_elf/rdi_from_elf.h"
+#include "rdi_from_macho/rdi_from_macho.h"
 #include "rdi_from_pdb/rdi_from_pdb.h"
 #include "rdi_from_dwarf/rdi_from_dwarf.h"
 #include "rdi_from_dwarf/rdi_from_dwarf_2.h"
@@ -119,6 +122,7 @@
 #include "pe/pe.c"
 #include "pe/pe_make_import_table.c"
 #include "elf/elf.c"
+#include "macho/macho.c"
 #include "gnu/gnu.c"
 #include "gnu/gnu_parse.c"
 #include "elf/elf_parse.c"
@@ -131,9 +135,11 @@
 #include "pdb/pdb_parse.c"
 #include "pdb/pdb_stringize.c"
 #include "dwarf/dwarf_inc.c"
+#include "dwarf/dwarf_macho.c"
 #include "llvm/llvm.c"
 #include "rdi_from_coff/rdi_from_coff.c"
 #include "rdi_from_elf/rdi_from_elf.c"
+#include "rdi_from_macho/rdi_from_macho.c"
 #include "rdi_from_pdb/rdi_from_pdb.c"
 #include "rdi_from_dwarf/rdi_from_dwarf.c"
 #include "rdi_from_dwarf/rdi_from_dwarf_2.c"
@@ -182,4 +188,3 @@ entry_point(CmdLine *cmdline)
 {
   t_entry_point(cmdline);
 }
-
