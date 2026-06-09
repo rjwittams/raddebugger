@@ -190,12 +190,16 @@ mac_dmn_ctrl_consume_exit_status(Arena *arena, DMN_EventList *events, pid_t pid,
     }
     if(WIFEXITED(status))
     {
+      mac_dmn_process_clear_thread_entities(arena, events, process_entity);
+      mac_dmn_process_clear_module_entities(arena, events, process_entity);
       mac_dmn_push_event_exit_process(arena, events, process_entity, (U32)WEXITSTATUS(status));
       mac_dmn_process_entity_release(process_entity);
       result = 1;
     }
     else if(WIFSIGNALED(status))
     {
+      mac_dmn_process_clear_thread_entities(arena, events, process_entity);
+      mac_dmn_process_clear_module_entities(arena, events, process_entity);
       mac_dmn_push_event_exit_process(arena, events, process_entity, (U32)WTERMSIG(status));
       mac_dmn_process_entity_release(process_entity);
       result = 1;
@@ -3099,10 +3103,10 @@ mac_dmn_arm64_reg_block_from_thread_state(ARM64_RegBlock *dst, arm_thread_state6
   dst->x26 = src->__x[26];
   dst->x27 = src->__x[27];
   dst->x28 = src->__x[28];
-  dst->fp = src->__fp;
-  dst->lr = src->__lr;
-  dst->sp = src->__sp;
-  dst->pc = src->__pc;
+  dst->fp = arm_thread_state64_get_fp(*src);
+  dst->lr = arm_thread_state64_get_lr(*src);
+  dst->sp = arm_thread_state64_get_sp(*src);
+  dst->pc = arm_thread_state64_get_pc(*src);
   dst->cpsr = src->__cpsr;
 }
 
@@ -3138,10 +3142,10 @@ mac_dmn_arm64_thread_state_from_reg_block(arm_thread_state64_t *dst, ARM64_RegBl
   dst->__x[26] = src->x26;
   dst->__x[27] = src->x27;
   dst->__x[28] = src->x28;
-  dst->__fp = src->fp;
-  dst->__lr = src->lr;
-  dst->__sp = src->sp;
-  dst->__pc = src->pc;
+  arm_thread_state64_set_fp(*dst, src->fp);
+  arm_thread_state64_set_lr_presigned_fptr(*dst, (void *)(uintptr_t)src->lr);
+  arm_thread_state64_set_sp(*dst, src->sp);
+  arm_thread_state64_set_pc_presigned_fptr(*dst, (void *)(uintptr_t)src->pc);
   dst->__cpsr = src->cpsr;
 }
 
@@ -3978,6 +3982,417 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
   return result;
 }
 
+internal B32
+mac_dmn_thread_call_lower(Arena *arena, Arch arch, DMN_Handle process_handle,
+                          DMN_ThreadCallParams *params, U64 return_vaddr,
+                          U64 stack_top_vaddr, void *call_regs,
+                          String8 *error_out)
+{
+  B32 result = 0;
+  switch(arch)
+  {
+    default:
+    {
+      *error_out = push_str8f(arena, "unsupported target-call architecture: %S", string_from_arch(arch));
+    }break;
+
+    case Arch_arm64:
+    {
+      ARM64_RegBlock *regs = (ARM64_RegBlock *)call_regs;
+      U64 *x_regs = &regs->x0;
+      for(U32 idx = 0; idx < params->arg_count; idx += 1)
+      {
+        x_regs[idx] = params->args[idx].u64;
+      }
+      regs->lr = return_vaddr;
+      regs->pc = params->function_vaddr;
+      result = 1;
+    }break;
+#if ARCH_X64
+    case Arch_x64:
+    {
+      if(params->arg_count > 6)
+      {
+        *error_out = push_str8f(arena, "too many x64 target-call register arguments: %u", params->arg_count);
+      }
+      else
+      {
+        X64_RegBlock *regs = (X64_RegBlock *)call_regs;
+        U64 *arg_regs[] =
+        {
+          &regs->rdi,
+          &regs->rsi,
+          &regs->rdx,
+          &regs->rcx,
+          &regs->r8,
+          &regs->r9,
+        };
+        for(U32 idx = 0; idx < params->arg_count; idx += 1)
+        {
+          *arg_regs[idx] = params->args[idx].u64;
+        }
+        U64 rsp = stack_top_vaddr & ~0xfull;
+        rsp -= 8;
+        // x64 has no link register, so synthesize the return address a call would have pushed.
+        if(!dmn_process_write(process_handle, r1u64(rsp, rsp+sizeof(return_vaddr)), &return_vaddr))
+        {
+          *error_out = push_str8f(arena, "could not write x64 target-call return address at 0x%I64x", rsp);
+        }
+        else
+        {
+          regs->rax = 0;
+          regs->rsp = rsp;
+          regs->rip = params->function_vaddr;
+          result = 1;
+        }
+      }
+    }break;
+#endif
+  }
+  return result;
+}
+
+internal B32
+mac_dmn_thread_call_read_return_value(Arena *arena, Arch arch, DMN_ThreadCallValueKind kind, void *return_regs, DMN_ThreadCallValue *value_out, String8 *error_out)
+{
+  B32 result = 0;
+  switch(arch)
+  {
+    default:
+    {
+      *error_out = push_str8f(arena, "unsupported target-call return architecture: %S", string_from_arch(arch));
+    }break;
+
+    case Arch_arm64:
+    {
+      ARM64_RegBlock *regs = (ARM64_RegBlock *)return_regs;
+      switch(kind)
+      {
+        default:
+        {
+          *error_out = str8_lit("unsupported target-call return kind");
+        }break;
+
+        case DMN_ThreadCallValueKind_U64:
+        {
+          value_out->kind = DMN_ThreadCallValueKind_U64;
+          value_out->u64 = regs->x0;
+          result = 1;
+        }break;
+      }
+    }break;
+#if ARCH_X64
+    case Arch_x64:
+    {
+      X64_RegBlock *regs = (X64_RegBlock *)return_regs;
+      switch(kind)
+      {
+        default:
+        {
+          *error_out = str8_lit("unsupported target-call return kind");
+        }break;
+
+        case DMN_ThreadCallValueKind_U64:
+        {
+          value_out->kind = DMN_ThreadCallValueKind_U64;
+          value_out->u64 = regs->rax;
+          result = 1;
+        }break;
+      }
+    }break;
+#endif
+  }
+  return result;
+}
+
+internal DMN_ThreadCallResult
+dmn_thread_call(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread_handle, DMN_ThreadCallParams *params)
+{
+  DMN_ThreadCallResult result = {0};
+  MAC_DMN_Entity *thread_entity = mac_dmn_entity_from_handle(thread_handle);
+  if(thread_entity != 0 && thread_entity->kind != MAC_DMN_EntityKind_Thread)
+  {
+    thread_entity = 0;
+  }
+  MAC_DMN_Entity *process_entity = 0;
+  if(thread_entity != 0)
+  {
+    MAC_DMN_Process *process = thread_entity->thread.process;
+    for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+    {
+      if(entity->kind == MAC_DMN_EntityKind_Process && &entity->process == process)
+      {
+        process_entity = entity;
+        break;
+      }
+    }
+  }
+
+  if(thread_entity == 0)
+  {
+    result.error = str8_lit("thread not found");
+  }
+  else if(process_entity == 0)
+  {
+    result.error = str8_lit("process not found");
+  }
+  else if(params == 0)
+  {
+    result.error = str8_lit("missing call params");
+  }
+  else if(params->function_vaddr == 0)
+  {
+    result.error = str8_lit("function address is zero");
+  }
+  else if(params->arg_count > DMN_ThreadCallMaxArgCount)
+  {
+    result.error = push_str8f(arena, "too many target-call arguments: %u", params->arg_count);
+  }
+  else if(params->return_value_kind != DMN_ThreadCallValueKind_U64)
+  {
+    result.error = str8_lit("unsupported target-call return kind");
+  }
+  else
+  {
+    B32 args_are_supported = 1;
+    for(U32 idx = 0; idx < params->arg_count; idx += 1)
+    {
+      if(params->args[idx].kind != DMN_ThreadCallValueKind_U64)
+      {
+        args_are_supported = 0;
+        break;
+      }
+    }
+
+    if(!args_are_supported)
+    {
+      result.error = str8_lit("unsupported target-call argument kind");
+    }
+    else
+    {
+      ARCH_Info *arch_info = arch_info_from_arch(thread_entity->thread.arch);
+      if(arch_info->reg_block_size == 0)
+      {
+        result.error = push_str8f(arena, "unsupported target-call architecture: %S", string_from_arch(thread_entity->thread.arch));
+      }
+      else
+      {
+        void *saved_regs = push_array(arena, U8, arch_info->reg_block_size);
+        void *call_regs = push_array(arena, U8, arch_info->reg_block_size);
+        if(!dmn_thread_read_reg_block(thread_handle, saved_regs))
+        {
+          result.error = str8_lit("could not read thread registers");
+        }
+        else
+        {
+          DMN_Handle process_handle = mac_dmn_handle_from_entity(process_entity);
+          U64 page_size = get_system_info()->page_size;
+          if(page_size == 0)
+          {
+            result.error = str8_lit("could not reserve target scratch memory");
+          }
+          else
+          {
+            U64 scratch_size = page_size*3;
+            U64 scratch_base_vaddr = dmn_process_memory_reserve(process_handle, 0, scratch_size);
+            U64 return_vaddr = scratch_base_vaddr + page_size;
+            if(scratch_base_vaddr == 0)
+            {
+              result.error = str8_lit("could not reserve target scratch memory");
+            }
+            else
+            {
+              dmn_process_memory_commit(process_handle, return_vaddr, page_size);
+              dmn_process_memory_protect(process_handle, return_vaddr, page_size, AccessFlag_Read|AccessFlag_Execute);
+              U64 stack_vaddr = scratch_base_vaddr + page_size*2;
+              dmn_process_memory_commit(process_handle, stack_vaddr, page_size);
+              dmn_process_memory_protect(process_handle, stack_vaddr, page_size, AccessFlag_Read|AccessFlag_Write);
+              result.stop_vaddr = return_vaddr;
+
+              MemoryCopy(call_regs, saved_regs, arch_info->reg_block_size);
+              String8 lower_error = {0};
+
+              if(!mac_dmn_thread_call_lower(arena, thread_entity->thread.arch, process_handle,
+                                            params, return_vaddr, stack_vaddr+page_size,
+                                            call_regs, &lower_error))
+              {
+                result.error = lower_error;
+              }
+              else if(!dmn_thread_write_reg_block(thread_handle, call_regs))
+              {
+                result.error = str8_lit("could not write call registers");
+              }
+              else
+              {
+                DMN_TrapChunkList traps = {0};
+                DMN_Trap return_trap = {process_handle, return_vaddr, 0};
+                dmn_trap_chunk_list_push(arena, &traps, 1, &return_trap);
+
+                B32 done = 0;
+                for(U64 run_idx = 0; run_idx < 64 && !done; run_idx += 1)
+                {
+                  DMN_Handle run_thread = thread_handle;
+                  DMN_RunCtrls run_ctrls = {0};
+                  run_ctrls.priority_thread = thread_handle;
+                  run_ctrls.run_entities = &run_thread;
+                  run_ctrls.run_entity_count = 1;
+                  run_ctrls.run_entities_are_unfrozen = 1;
+                  run_ctrls.ignore_previous_exception = 1;
+                  run_ctrls.traps = traps;
+
+                  DMN_EventList events = dmn_ctrl_run(arena, ctx, &run_ctrls);
+                  if(events.count == 0)
+                  {
+                    done = 1;
+                    result.error = str8_lit("no event returned");
+                  }
+                  for(DMN_EventNode *n = events.first; n != 0 && !done; n = n->next)
+                  {
+                    DMN_Event *event = &n->v;
+                    if(event->kind == DMN_EventKind_Breakpoint &&
+                       dmn_handle_match(event->process, process_handle) &&
+                       dmn_handle_match(event->thread, thread_handle) &&
+                       (event->address == return_vaddr || event->instruction_pointer == return_vaddr))
+                    {
+                      void *return_regs = push_array(arena, U8, arch_info->reg_block_size);
+                      if(dmn_thread_read_reg_block(thread_handle, return_regs))
+                      {
+                        String8 return_error = {0};
+                        if(mac_dmn_thread_call_read_return_value(arena, thread_entity->thread.arch, params->return_value_kind, return_regs, &result.return_value, &return_error))
+                        {
+                          result.returned = 1;
+                        }
+                        else
+                        {
+                          result.error = return_error;
+                        }
+                      }
+                      else
+                      {
+                        result.error = str8_lit("could not read return registers");
+                      }
+                      done = 1;
+                    }
+                    else switch(event->kind)
+                    {
+                      default:{}break;
+                      case DMN_EventKind_Error:
+                      case DMN_EventKind_ExitProcess:
+                      case DMN_EventKind_ExitThread:
+                      case DMN_EventKind_Trap:
+                      case DMN_EventKind_Exception:
+                      case DMN_EventKind_Halt:
+                      {
+                        done = 1;
+                        result.error = push_str8f(arena,
+                                                  "unexpected event %S process:0x%I64x thread:0x%I64x target_thread:0x%I64x address:0x%I64x ip:0x%I64x code:0x%x scratch_return:0x%I64x",
+                                                  dmn_event_kind_string_table[event->kind],
+                                                  event->process.u64[0], event->thread.u64[0], thread_handle.u64[0],
+                                                  event->address, event->instruction_pointer, event->code, return_vaddr);
+                      }break;
+                    }
+                  }
+                }
+
+                result.regs_restored = dmn_thread_write_reg_block(thread_handle, saved_regs);
+                if(result.returned && result.regs_restored)
+                {
+                  result.success = 1;
+                }
+                else if(result.returned && !result.regs_restored)
+                {
+                  result.error = push_str8f(arena, "call returned 0x%I64x but original registers were not restored", result.return_value.u64);
+                }
+                else if(result.error.size == 0)
+                {
+                  result.error = str8_lit("call did not reach scratch return trap within run limit");
+                }
+              }
+
+              dmn_process_memory_release(process_handle, scratch_base_vaddr, scratch_size);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+internal DMN_TLSAddressResult
+dmn_tls_vaddr_from_thread(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread_handle, U64 platform_tls_vaddr)
+{
+  DMN_TLSAddressResult result = {0};
+  MAC_DMN_Entity *thread_entity = mac_dmn_entity_from_handle(thread_handle);
+  if(thread_entity != 0 && thread_entity->kind != MAC_DMN_EntityKind_Thread)
+  {
+    thread_entity = 0;
+  }
+  MAC_DMN_Entity *process_entity = 0;
+  if(thread_entity != 0)
+  {
+    MAC_DMN_Process *process = thread_entity->thread.process;
+    for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+    {
+      if(entity->kind == MAC_DMN_EntityKind_Process && &entity->process == process)
+      {
+        process_entity = entity;
+        break;
+      }
+    }
+  }
+
+  if(thread_entity == 0)
+  {
+    result.error = str8_lit("thread not found");
+  }
+  else if(process_entity == 0)
+  {
+    result.error = str8_lit("process not found");
+  }
+  else if(thread_entity->thread.arch != Arch_arm64 && thread_entity->thread.arch != Arch_x64)
+  {
+    result.error = push_str8f(arena, "unsupported platform TLS architecture: %S", string_from_arch(thread_entity->thread.arch));
+  }
+  else if(platform_tls_vaddr == 0)
+  {
+    result.error = str8_lit("platform TLS address is zero");
+  }
+  else
+  {
+    DMN_Handle process_handle = mac_dmn_handle_from_entity(process_entity);
+    U64 thunk_vaddr = 0;
+    U64 thunk_read_size = dmn_process_read(process_handle, r1u64(platform_tls_vaddr, platform_tls_vaddr+sizeof(thunk_vaddr)), &thunk_vaddr);
+    if(thunk_read_size != sizeof(thunk_vaddr) || thunk_vaddr == 0)
+    {
+      result.error = push_str8f(arena, "could not read TLV thunk pointer at 0x%I64x", platform_tls_vaddr);
+    }
+    else
+    {
+      DMN_ThreadCallParams call_params = {0};
+      call_params.function_vaddr = thunk_vaddr;
+      call_params.arg_count = 1;
+      call_params.args[0].kind = DMN_ThreadCallValueKind_U64;
+      call_params.args[0].u64 = platform_tls_vaddr;
+      call_params.return_value_kind = DMN_ThreadCallValueKind_U64;
+
+      DMN_ThreadCallResult call = dmn_thread_call(arena, ctx, thread_handle, &call_params);
+      if(call.success)
+      {
+        result.success = 1;
+        result.vaddr = call.return_value.u64;
+      }
+      else
+      {
+        result.error = call.error.size != 0 ? call.error : str8_lit("platform TLS resolver call failed");
+      }
+    }
+  }
+
+  return result;
+}
+
 internal void
 dmn_halt(U64 code, U64 user_data)
 {
@@ -4233,15 +4648,19 @@ dmn_thread_write_reg_block(DMN_Handle handle, void *reg_block)
         case Arch_arm64:
         {
           arm_thread_state64_t state = {0};
-          mac_dmn_arm64_thread_state_from_reg_block(&state, (ARM64_RegBlock *)reg_block);
-          if(thread_set_state(thread->thread, ARM_THREAD_STATE64, (thread_state_t)&state, ARM_THREAD_STATE64_COUNT) == KERN_SUCCESS)
+          mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
+          if(thread_get_state(thread->thread, ARM_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS)
           {
-            arm_neon_state64_t neon_state = {0};
-            mach_msg_type_number_t neon_count = ARM_NEON_STATE64_COUNT;
-            if(thread_get_state(thread->thread, ARM_NEON_STATE64, (thread_state_t)&neon_state, &neon_count) == KERN_SUCCESS)
+            mac_dmn_arm64_thread_state_from_reg_block(&state, (ARM64_RegBlock *)reg_block);
+            if(thread_set_state(thread->thread, ARM_THREAD_STATE64, (thread_state_t)&state, ARM_THREAD_STATE64_COUNT) == KERN_SUCCESS)
             {
-              mac_dmn_arm64_neon_state_from_reg_block(&neon_state, (ARM64_RegBlock *)reg_block);
-              result = (thread_set_state(thread->thread, ARM_NEON_STATE64, (thread_state_t)&neon_state, ARM_NEON_STATE64_COUNT) == KERN_SUCCESS);
+              arm_neon_state64_t neon_state = {0};
+              mach_msg_type_number_t neon_count = ARM_NEON_STATE64_COUNT;
+              if(thread_get_state(thread->thread, ARM_NEON_STATE64, (thread_state_t)&neon_state, &neon_count) == KERN_SUCCESS)
+              {
+                mac_dmn_arm64_neon_state_from_reg_block(&neon_state, (ARM64_RegBlock *)reg_block);
+                result = (thread_set_state(thread->thread, ARM_NEON_STATE64, (thread_state_t)&neon_state, ARM_NEON_STATE64_COUNT) == KERN_SUCCESS);
+              }
             }
           }
         }break;
