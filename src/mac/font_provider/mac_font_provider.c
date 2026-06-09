@@ -173,24 +173,44 @@ fp_raster(Arena *arena, FP_Handle handle, F32 size, FP_RasterFlags flags, String
                                                    kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big);
           if(ctx != 0)
           {
-            B32 smooth = !!(flags & FP_RasterFlag_Smooth);
             B32 hinted = !!(flags & FP_RasterFlag_Hinted);
             CGContextSetTextMatrix(ctx, CGAffineTransformIdentity);
             CGContextSetRGBFillColor(ctx, 1.f, 1.f, 1.f, 1.f);
             CGContextSetAllowsAntialiasing(ctx, 1);
             CGContextSetShouldAntialias(ctx, 1);
-            CGContextSetAllowsFontSmoothing(ctx, 1);
-            CGContextSetShouldSmoothFonts(ctx, smooth);
+            // NOTE: force grayscale antialiasing, never LCD/subpixel "font
+            // smoothing". The atlas is consumed as a coverage mask, so subpixel
+            // color would be collapsed away regardless and only smears text on
+            // 1x displays. Grayscale AA makes every channel carry the same
+            // coverage, matching the Win32 (DWrite) and Linux (FreeType)
+            // providers. (Subpixel glyph *positioning* below is unrelated and
+            // stays on.)
+            CGContextSetAllowsFontSmoothing(ctx, 0);
+            CGContextSetShouldSmoothFonts(ctx, 0);
             CGContextSetAllowsFontSubpixelPositioning(ctx, 1);
             CGContextSetShouldSubpixelPositionFonts(ctx, !hinted);
             CGContextSetAllowsFontSubpixelQuantization(ctx, 1);
             CGContextSetShouldSubpixelQuantizeFonts(ctx, hinted);
             CTFontDrawGlyphs(ct_font, glyphs, positions, glyph_count, ctx);
 
+            // NOTE: store each pixel as a tintable white coverage mask (white
+            // RGB, coverage in alpha) to match the renderer's mask contract and
+            // the Win32/FreeType providers. The Metal renderer samples the
+            // atlas as sRGBA, linearizes the RGB, and multiplies by the UI text
+            // color, so it expects a pure coverage mask, not CoreText's
+            // premultiplied RGB. With grayscale AA forced above the channels are
+            // already equal coverage; max() keeps this robust. (RAD has no
+            // source-color glyphs, so every glyph is treated as a mask.)
             U64 alpha_sum = 0;
-            for(U64 idx = 3; idx < atlas_size; idx += 4)
+            for(U64 idx = 0; idx < atlas_size; idx += 4)
             {
-              alpha_sum += atlas[idx];
+              U8 *px = &atlas[idx];
+              U8 coverage = Max(px[3], Max(px[0], Max(px[1], px[2])));
+              px[0] = 255;
+              px[1] = 255;
+              px[2] = 255;
+              px[3] = coverage;
+              alpha_sum += coverage;
             }
             if(alpha_sum != 0)
             {
