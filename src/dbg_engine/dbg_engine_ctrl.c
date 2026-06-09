@@ -62,6 +62,7 @@ d_string_from_event_kind(D_EventKind kind)
     case D_EventKind_ModuleDebugInfoPathChange:         { result = str8_lit("ModuleDebugInfoPathChange");}break;
     case D_EventKind_DebugString:                       { result = str8_lit("DebugString");}break;
     case D_EventKind_ThreadName:                        { result = str8_lit("ThreadName");}break;
+    case D_EventKind_PlatformTLSResolved:               { result = str8_lit("PlatformTLSResolved");}break;
     case D_EventKind_MemReserve:                        { result = str8_lit("MemReserve");}break;
     case D_EventKind_MemCommit:                         { result = str8_lit("MemCommit");}break;
     case D_EventKind_MemDecommit:                       { result = str8_lit("MemDecommit");}break;
@@ -85,6 +86,7 @@ d_string_from_msg_kind(D_MsgKind kind)
     case D_MsgKind_Detach:                    {result = str8_lit("Detach");}break;
     case D_MsgKind_Run:                       {result = str8_lit("Run");}break;
     case D_MsgKind_SingleStep:                {result = str8_lit("SingleStep");}break;
+    case D_MsgKind_ResolvePlatformTLS:        {result = str8_lit("ResolvePlatformTLS");}break;
     case D_MsgKind_SetUserEntryPoints:        {result = str8_lit("SetUserEntryPoints");}break;
     case D_MsgKind_SetModuleDebugInfoPath:    {result = str8_lit("SetModuleDebugInfoPath");}break;
   }
@@ -380,6 +382,7 @@ d_serialized_string_from_msg_list(Arena *arena, D_MsgList *msgs)
       str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->env_inherit);
       str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->debug_subprocesses);
       str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->auto_download_debug_info);
+      str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->vaddr);
       str8_serial_push_array (scratch.arena, &msgs_srlzed, &msg->exception_code_filters[0], ArrayCount(msg->exception_code_filters));
       
       // rjf: write path string
@@ -481,6 +484,7 @@ d_msg_list_from_serialized_string(Arena *arena, String8 string)
       read_off += str8_deserial_read_struct(string, read_off, &msg->env_inherit);
       read_off += str8_deserial_read_struct(string, read_off, &msg->debug_subprocesses);
       read_off += str8_deserial_read_struct(string, read_off, &msg->auto_download_debug_info);
+      read_off += str8_deserial_read_struct(string, read_off, &msg->vaddr);
       read_off += str8_deserial_read_array (string, read_off, &msg->exception_code_filters[0], ArrayCount(msg->exception_code_filters));
       
       // rjf: read path string
@@ -3130,6 +3134,7 @@ d_ctrl_thread__entry_point(void *p)
           case D_MsgKind_Detach:            {d_ctrl_thread__detach              (ctrl_ctx, msg);}break;
           case D_MsgKind_Run:               {d_ctrl_thread__run                 (ctrl_ctx, msg);}break;
           case D_MsgKind_SingleStep:        {d_ctrl_thread__single_step         (ctrl_ctx, msg);}break;
+          case D_MsgKind_ResolvePlatformTLS:{d_ctrl_thread__resolve_platform_tls(ctrl_ctx, msg);}break;
           
           //- rjf: configuration
           case D_MsgKind_SetUserEntryPoints:
@@ -6519,6 +6524,39 @@ d_ctrl_thread__single_step(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
     d_c2u_push_events(&evts);
   }
   
+  scratch_end(scratch);
+  ProfEnd();
+}
+
+internal void
+d_ctrl_thread__resolve_platform_tls(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
+{
+  ProfBeginFunction();
+  Temp scratch = scratch_begin(0, 0);
+  D_Entity *thread = d_entity_from_handle(msg->entity);
+  U64 platform_tls_vaddr = msg->vaddr;
+  U64 resolved_vaddr = 0;
+  B32 success = 0;
+  if(thread != &d_entity_nil && thread->kind == D_EntityKind_Thread && platform_tls_vaddr != 0)
+  {
+    DMN_TLSAddressResult tls_address = dmn_tls_vaddr_from_thread(scratch.arena, ctrl_ctx, d_dmn_from_handle(thread->handle), platform_tls_vaddr);
+    ins_atomic_u64_inc_eval(&d_ctrl_state->mem_gen);
+    ins_atomic_u64_inc_eval(&d_ctrl_state->reg_gen);
+    ins_atomic_u64_inc_eval(&d_ctrl_state->run_gen);
+    if(tls_address.success)
+    {
+      success = 1;
+      resolved_vaddr = tls_address.vaddr;
+    }
+  }
+  D_EventList evts = {0};
+  D_Event *evt = d_event_list_push(scratch.arena, &evts);
+  evt->kind = D_EventKind_PlatformTLSResolved;
+  evt->msg_id = msg->msg_id;
+  evt->entity = msg->entity;
+  evt->u64_code = success;
+  evt->vaddr_rng = r1u64(platform_tls_vaddr, resolved_vaddr);
+  d_c2u_push_events(&evts);
   scratch_end(scratch);
   ProfEnd();
 }
