@@ -12,7 +12,8 @@
 }
 - (void)macLiveResizeTick:(CADisplayLink *)display_link
 {
-  if(window != 0 && !live_resize_update_in_progress)
+  if(window != 0 && !live_resize_update_in_progress &&
+     !(mac_wm_state != 0 && mac_wm_state->suppress_reentrant_frame))
   {
     live_resize_update_in_progress = 1;
     update();
@@ -37,7 +38,7 @@
 - (void)windowDidEndLiveResize:(NSNotification *)notification
 {
   [self macLiveResizeStopDisplayLink];
-  if(window != 0)
+  if(window != 0 && !(mac_wm_state != 0 && mac_wm_state->suppress_reentrant_frame))
   {
     update();
   }
@@ -891,7 +892,19 @@ wm_window_set_fullscreen(WM_Window handle, B32 fullscreen)
   MAC_WM_Window *window = mac_wm_window_from_handle(handle);
   if(window != 0 && wm_window_is_fullscreen(handle) != fullscreen)
   {
+    // NOTE: -[NSWindow toggleFullScreen:] drives the enter/exit transition
+    // synchronously and posts NSWindowDidEndLiveResizeNotification before it
+    // returns. The window delegate handles that notification by re-entering the
+    // application frame hook (update()). On the project-restoration path this
+    // call originates from inside the frame hook itself, so the re-entry would
+    // recurse back into window creation/fullscreen restoration without bound and
+    // overflow the stack. Suppress re-entrant frame execution while the toggle
+    // runs; the transition completes asynchronously and is serviced by the next
+    // normal frame.
+    B32 prev_suppress = mac_wm_state->suppress_reentrant_frame;
+    mac_wm_state->suppress_reentrant_frame = 1;
     [window->ns_window toggleFullScreen:0];
+    mac_wm_state->suppress_reentrant_frame = prev_suppress;
   }
 }
 

@@ -130,6 +130,7 @@ struct MAC_WM_State
   MAC_WM_FileDropNode *last_pending_file_drop;
   MAC_WM_FileDropNode *free_file_drop_node;
   B32 key_is_down[WM_Key_COUNT];
+  B32 suppress_reentrant_frame;
 };
 
 global MAC_WM_State *mac_wm_state = 0;
