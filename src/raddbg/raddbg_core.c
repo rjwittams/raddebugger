@@ -1427,6 +1427,28 @@ rd_file_path_from_eval_string(Arena *arena, String8 string)
   return result;
 }
 
+internal B32
+rd_tls_vaddr_from_platform_vaddr(E_Space space, U64 platform_tls_vaddr, U64 *vaddr_out)
+{
+  B32 result = 0;
+  D_Entity *process = rd_ctrl_entity_from_eval_space(space);
+  D_Entity *thread = rd_ctrl_entity_from_eval_space(e_base_ctx->thread_reg_space);
+  if(process != &d_entity_nil &&
+     process->kind == D_EntityKind_Process &&
+     process->target_os == OperatingSystem_Mac &&
+     thread != &d_entity_nil &&
+     thread->kind == D_EntityKind_Thread)
+  {
+    U64 vaddr = d_query_cached_platform_tls_vaddr_from_thread_vaddr(thread, platform_tls_vaddr);
+    result = 1;
+    if(vaddr != 0)
+    {
+      *vaddr_out = vaddr;
+    }
+  }
+  return result;
+}
+
 internal String8
 rd_eval_string_from_file_path(Arena *arena, String8 string)
 {
@@ -11704,6 +11726,7 @@ rd_frame(void)
       ctx->space_gen   = rd_eval_space_gen;
       ctx->space_read  = rd_eval_space_read;
       ctx->space_write = rd_eval_space_write;
+      ctx->tls_vaddr_from_platform_vaddr = rd_tls_vaddr_from_platform_vaddr;
     }
     e_select_base_ctx(eval_base_ctx);
     
