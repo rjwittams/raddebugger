@@ -4650,6 +4650,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
   Guid rdi_dbg_guid = {0};
   String8 exe_dbg_path = {0};
   String8 rdi_dbg_path = {0};
+  String8List image_dbg_path_candidates = {0};
   String8 raddbg_data = {0};
   Rng1U64 raddbg_section_voff_range = {0};
   Rng1U64 raddbg_is_attached_section_voff_range = {0};
@@ -4949,10 +4950,29 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
       entry_point_voff = e_entry - vaddr_range.min;
     }
     
-    // TODO: is there a way to detect DWARF in runtime ELF?
-    if(1)
+    if(path.size != 0)
     {
-      exe_dbg_path = path;
+      str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S.rdi", str8_chop_last_dot(path));
+      str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S.rdi", path);
+
+      String8 file_data = data_from_file_path(scratch.arena, path);
+      if(file_data.size != 0)
+      {
+        ELF_Bin file_bin = elf_bin_from_data(scratch.arena, file_data);
+        if(dw_is_dwarf_present_from_elf_bin(file_data, &file_bin))
+        {
+          str8_list_push(scratch.arena, &image_dbg_path_candidates, path);
+        }
+
+        ELF_GnuDebugLink debug_link = elf_gnu_debug_link_from_bin(file_data, &file_bin);
+        if(debug_link.path.size != 0)
+        {
+          String8 exe_folder = str8_chop_last_slash(path);
+          str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S/%S", exe_folder, debug_link.path);
+          str8_list_pushf(scratch.arena, &image_dbg_path_candidates, "%S/.debug/%S", exe_folder, debug_link.path);
+          str8_list_push(scratch.arena, &image_dbg_path_candidates, debug_link.path);
+        }
+      }
     }
     elf_exit:;
   }
@@ -5117,6 +5137,7 @@ d_ctrl_thread__module_open(D_Handle process, D_Handle module, Rng1U64 vaddr_rang
     {
       str8_list_push(scratch.arena, &dbg_path_candidates, path);
     }
+    str8_list_concat_in_place(&dbg_path_candidates, &image_dbg_path_candidates);
     if(pdb_dbg_path.size != 0)
     {
       str8_list_pushf(scratch.arena, &dbg_path_candidates, "%S/%S", exe_folder, pdb_dbg_path);
