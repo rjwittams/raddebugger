@@ -7,14 +7,59 @@ internal DMN_Handle
 mac_dmn_handle_from_entity(MAC_DMN_Entity *entity)
 {
   DMN_Handle result = {0};
-  result.u64[0] = (U64)entity;
+  if(entity != 0)
+  {
+    result.u32[0] = entity->id;
+    result.u32[1] = entity->gen;
+  }
   return result;
 }
 
 internal MAC_DMN_Entity *
-mac_dmn_entity_from_handle(DMN_Handle handle)
+mac_dmn_entity_from_handle(DMN_Handle handle, MAC_DMN_EntityKind expected_kind)
 {
-  MAC_DMN_Entity *result = (MAC_DMN_Entity *)handle.u64[0];
+  MAC_DMN_Entity *result = 0;
+  U32 id = handle.u32[0];
+  U32 gen = handle.u32[1];
+  if(id != 0)
+  {
+    for(MAC_DMN_Entity *process_entity = mac_dmn_state->first_process_entity; process_entity != 0; process_entity = process_entity->next)
+    {
+      if(process_entity->id == id && process_entity->gen == gen)
+      {
+        result = process_entity;
+        break;
+      }
+      for(MAC_DMN_Entity *thread_entity = process_entity->process.first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+      {
+        if(thread_entity->id == id && thread_entity->gen == gen)
+        {
+          result = thread_entity;
+          break;
+        }
+      }
+      if(result != 0)
+      {
+        break;
+      }
+      for(MAC_DMN_Entity *module_entity = process_entity->process.first_module_entity; module_entity != 0; module_entity = module_entity->next)
+      {
+        if(module_entity->id == id && module_entity->gen == gen)
+        {
+          result = module_entity;
+          break;
+        }
+      }
+      if(result != 0)
+      {
+        break;
+      }
+    }
+  }
+  if(result != 0 && result->kind != expected_kind)
+  {
+    result = 0;
+  }
   return result;
 }
 
@@ -22,16 +67,21 @@ internal MAC_DMN_Entity *
 mac_dmn_entity_alloc(MAC_DMN_EntityKind kind)
 {
   MAC_DMN_Entity *result = mac_dmn_state->free_entity;
+  U32 id = 0;
+  U32 gen = 0;
   if(result != 0)
   {
     SLLStackPop(mac_dmn_state->free_entity);
+    id = result->id;
+    gen = result->gen;
   }
   else
   {
-    result = push_array_no_zero(mac_dmn_state->arena, MAC_DMN_Entity, 1);
+    result = push_array(mac_dmn_state->arena, MAC_DMN_Entity, 1);
+    id = ++mac_dmn_state->next_entity_id;
   }
-  U32 gen = result->gen;
   MemoryZeroStruct(result);
+  result->id = id;
   result->gen = gen + 1;
   result->kind = kind;
   return result;
@@ -272,9 +322,9 @@ mac_dmn_process_entity_release(MAC_DMN_Entity *entity)
 internal MAC_DMN_Process *
 mac_dmn_process_from_handle(DMN_Handle handle)
 {
-  MAC_DMN_Entity *entity = mac_dmn_entity_from_handle(handle);
+  MAC_DMN_Entity *entity = mac_dmn_entity_from_handle(handle, MAC_DMN_EntityKind_Process);
   MAC_DMN_Process *result = 0;
-  if(entity != 0 && entity->kind == MAC_DMN_EntityKind_Process)
+  if(entity != 0)
   {
     result = &entity->process;
   }
@@ -299,9 +349,9 @@ mac_dmn_process_entity_from_exception_port(mach_port_t exception_port)
 internal MAC_DMN_Thread *
 mac_dmn_thread_from_handle(DMN_Handle handle)
 {
-  MAC_DMN_Entity *entity = mac_dmn_entity_from_handle(handle);
+  MAC_DMN_Entity *entity = mac_dmn_entity_from_handle(handle, MAC_DMN_EntityKind_Thread);
   MAC_DMN_Thread *result = 0;
-  if(entity != 0 && entity->kind == MAC_DMN_EntityKind_Thread)
+  if(entity != 0)
   {
     result = &entity->thread;
   }
@@ -311,9 +361,9 @@ mac_dmn_thread_from_handle(DMN_Handle handle)
 internal MAC_DMN_Module *
 mac_dmn_module_from_handle(DMN_Handle handle)
 {
-  MAC_DMN_Entity *entity = mac_dmn_entity_from_handle(handle);
+  MAC_DMN_Entity *entity = mac_dmn_entity_from_handle(handle, MAC_DMN_EntityKind_Module);
   MAC_DMN_Module *result = 0;
-  if(entity != 0 && entity->kind == MAC_DMN_EntityKind_Module)
+  if(entity != 0)
   {
     result = &entity->module;
   }
@@ -2875,8 +2925,8 @@ mac_dmn_push_detach_events(Arena *arena, DMN_EventList *events)
 {
   for(DMN_HandleNode *n = mac_dmn_state->detach_processes.first; n != 0; n = n->next)
   {
-    MAC_DMN_Entity *process_entity = mac_dmn_entity_from_handle(n->v);
-    if(process_entity != 0 && process_entity->kind == MAC_DMN_EntityKind_Process)
+    MAC_DMN_Entity *process_entity = mac_dmn_entity_from_handle(n->v, MAC_DMN_EntityKind_Process);
+    if(process_entity != 0)
     {
       MAC_DMN_Process *process = &process_entity->process;
       mac_dmn_process_resume_suspended_threads(process);
@@ -3409,9 +3459,9 @@ dmn_ctrl_kill(DMN_CtrlCtx *ctx, DMN_Handle handle, U32 exit_code)
 internal B32
 dmn_ctrl_detach(DMN_CtrlCtx *ctx, DMN_Handle handle)
 {
-  MAC_DMN_Entity *entity = mac_dmn_entity_from_handle(handle);
+  MAC_DMN_Entity *entity = mac_dmn_entity_from_handle(handle, MAC_DMN_EntityKind_Process);
   B32 result = 0;
-  if(entity != 0 && entity->kind == MAC_DMN_EntityKind_Process)
+  if(entity != 0)
   {
     MAC_DMN_Process *process = &entity->process;
     if(process->is_attached)
@@ -3601,8 +3651,8 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
     MAC_DMN_Entity *single_step_thread_entity = 0;
     if(ctrls != 0 && !dmn_handle_match(ctrls->single_step_thread, dmn_handle_zero()))
     {
-      single_step_thread_entity = mac_dmn_entity_from_handle(ctrls->single_step_thread);
-      if(single_step_thread_entity != 0 && single_step_thread_entity->kind == MAC_DMN_EntityKind_Thread)
+      single_step_thread_entity = mac_dmn_entity_from_handle(ctrls->single_step_thread, MAC_DMN_EntityKind_Thread);
+      if(single_step_thread_entity != 0)
       {
         mac_dmn_set_single_step_flag(&single_step_thread_entity->thread, 1);
       }
@@ -3652,9 +3702,8 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
 
     for(MAC_DMN_FlaggedTrapTask *task = first_flagged_trap_task; task != 0; task = task->next)
     {
-      MAC_DMN_Entity *process_entity = mac_dmn_entity_from_handle(task->process);
+      MAC_DMN_Entity *process_entity = mac_dmn_entity_from_handle(task->process, MAC_DMN_EntityKind_Process);
       if(process_entity != 0 &&
-         process_entity->kind == MAC_DMN_EntityKind_Process &&
          mac_dmn_thread_entity_stepping_over_debug_trap(&process_entity->process) == 0)
       {
         mac_dmn_process_set_debug_traps(&process_entity->process, &task->traps);
@@ -3930,8 +3979,8 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       }
       for(MAC_DMN_FlaggedTrapTask *task = first_flagged_trap_task; task != 0; task = task->next)
       {
-        MAC_DMN_Entity *process_entity = mac_dmn_entity_from_handle(task->process);
-        if(process_entity != 0 && process_entity->kind == MAC_DMN_EntityKind_Process)
+        MAC_DMN_Entity *process_entity = mac_dmn_entity_from_handle(task->process, MAC_DMN_EntityKind_Process);
+        if(process_entity != 0)
         {
           mac_dmn_process_clear_debug_traps(&process_entity->process);
         }
@@ -3945,8 +3994,8 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
       }
       for(MAC_DMN_FlaggedTrapTask *task = first_flagged_trap_task; task != 0; task = task->next)
       {
-        MAC_DMN_Entity *process_entity = mac_dmn_entity_from_handle(task->process);
-        if(process_entity != 0 && process_entity->kind == MAC_DMN_EntityKind_Process)
+        MAC_DMN_Entity *process_entity = mac_dmn_entity_from_handle(task->process, MAC_DMN_EntityKind_Process);
+        if(process_entity != 0)
         {
           mac_dmn_process_clear_debug_traps(&process_entity->process);
         }
@@ -4109,11 +4158,7 @@ internal DMN_ThreadCallResult
 dmn_thread_call(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread_handle, DMN_ThreadCallParams *params)
 {
   DMN_ThreadCallResult result = {0};
-  MAC_DMN_Entity *thread_entity = mac_dmn_entity_from_handle(thread_handle);
-  if(thread_entity != 0 && thread_entity->kind != MAC_DMN_EntityKind_Thread)
-  {
-    thread_entity = 0;
-  }
+  MAC_DMN_Entity *thread_entity = mac_dmn_entity_from_handle(thread_handle, MAC_DMN_EntityKind_Thread);
   MAC_DMN_Entity *process_entity = 0;
   if(thread_entity != 0)
   {
@@ -4324,11 +4369,7 @@ internal DMN_TLSAddressResult
 dmn_tls_vaddr_from_thread(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread_handle, U64 platform_tls_vaddr)
 {
   DMN_TLSAddressResult result = {0};
-  MAC_DMN_Entity *thread_entity = mac_dmn_entity_from_handle(thread_handle);
-  if(thread_entity != 0 && thread_entity->kind != MAC_DMN_EntityKind_Thread)
-  {
-    thread_entity = 0;
-  }
+  MAC_DMN_Entity *thread_entity = mac_dmn_entity_from_handle(thread_handle, MAC_DMN_EntityKind_Thread);
   MAC_DMN_Entity *process_entity = 0;
   if(thread_entity != 0)
   {
