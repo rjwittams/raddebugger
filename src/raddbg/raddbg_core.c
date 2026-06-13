@@ -10118,6 +10118,105 @@ rd_pop_regs(void)
   return regs;
 }
 
+////////////////////////////////
+//~ Command Output
+
+internal void
+rd_cmd_output_clear(void)
+{
+  arena_clear(rd_state->cmd_output_arena);
+  MemoryZeroStruct(&rd_state->cmd_outputs);
+}
+
+////////////////////////////////
+//~ Command Text Helpers
+
+internal D_Entity *
+rd_ctrl_entity_from_string(String8 string, D_EntityKind kind)
+{
+  D_Entity *result = &d_entity_nil;
+  
+  if(str8_match(string, str8_lit("selected"), 0) ||
+     str8_match(string, str8_lit("current"), 0))
+  {
+    switch(kind)
+    {
+      case D_EntityKind_Process:
+      {
+        D_Entity *thread = d_entity_from_handle(rd_base_regs()->thread);
+        result = d_entity_ancestor_from_kind(thread, D_EntityKind_Process);
+        if(result == &d_entity_nil)
+        {
+          result = d_entity_from_handle(rd_base_regs()->process);
+        }
+      }break;
+      case D_EntityKind_Thread:
+      {
+        result = d_entity_from_handle(rd_base_regs()->thread);
+      }break;
+      case D_EntityKind_Module:
+      {
+        result = d_entity_from_handle(rd_base_regs()->module);
+      }break;
+      default:{}break;
+    }
+  }
+  
+  if(result == &d_entity_nil)
+  {
+    D_Handle handle = d_handle_from_string(string);
+    D_Entity *entity = d_entity_from_handle(handle);
+    if(entity != &d_entity_nil && (kind == D_EntityKind_COUNT || entity->kind == kind))
+    {
+      result = entity;
+    }
+  }
+  
+  if(result == &d_entity_nil)
+  {
+    U64 id = 0;
+    if(try_u64_from_str8_c_rules(string, &id))
+    {
+      if(kind == D_EntityKind_COUNT)
+      {
+        D_EntityArray entities[] =
+        {
+          d_entity_array_from_kind(D_EntityKind_Process),
+          d_entity_array_from_kind(D_EntityKind_Thread),
+          d_entity_array_from_kind(D_EntityKind_Module),
+          d_entity_array_from_kind(D_EntityKind_Machine),
+        };
+        for(U64 array_idx = 0; array_idx < ArrayCount(entities) && result == &d_entity_nil; array_idx += 1)
+        {
+          D_EntityArray *array = &entities[array_idx];
+          for(U64 idx = 0; idx < array->count; idx += 1)
+          {
+            if(array->v[idx]->id == id)
+            {
+              result = array->v[idx];
+              break;
+            }
+          }
+        }
+      }
+      else
+      {
+        D_EntityArray array = d_entity_array_from_kind(kind);
+        for(U64 idx = 0; idx < array.count; idx += 1)
+        {
+          if(array.v[idx]->id == id)
+          {
+            result = array.v[idx];
+            break;
+          }
+        }
+      }
+    }
+  }
+  
+  return result;
+}
+
 internal void
 rd_regs_fill_slot_from_string(RD_RegSlot slot, String8 query_expr, String8 string)
 {
@@ -10152,7 +10251,29 @@ rd_regs_fill_slot_from_string(RD_RegSlot slot, String8 query_expr, String8 strin
     case RD_RegSlot_Thread:
     case RD_RegSlot_CtrlEntity:
     {
-      
+      D_EntityKind entity_kind = D_EntityKind_Null;
+      switch(slot)
+      {
+        case RD_RegSlot_Machine:    {entity_kind = D_EntityKind_Machine;}break;
+        case RD_RegSlot_Module:     {entity_kind = D_EntityKind_Module;}break;
+        case RD_RegSlot_Process:    {entity_kind = D_EntityKind_Process;}break;
+        case RD_RegSlot_Thread:     {entity_kind = D_EntityKind_Thread;}break;
+        case RD_RegSlot_CtrlEntity: {entity_kind = D_EntityKind_COUNT;}break;
+        default:{}break;
+      }
+      D_Entity *entity = rd_ctrl_entity_from_string(string, entity_kind);
+      if(entity != &d_entity_nil)
+      {
+        switch(slot)
+        {
+          case RD_RegSlot_Machine:    {rd_regs()->machine = entity->handle;}break;
+          case RD_RegSlot_Module:     {rd_regs()->module = entity->handle;}break;
+          case RD_RegSlot_Process:    {rd_regs()->process = entity->handle;}break;
+          case RD_RegSlot_Thread:     {rd_regs()->thread = entity->handle;}break;
+          case RD_RegSlot_CtrlEntity: {rd_regs()->ctrl_entity = entity->handle;}break;
+          default:{}break;
+        }
+      }
     }break;
     
     //- rjf: cfgs
@@ -12809,41 +12930,239 @@ rd_frame(void)
           //- rjf: external driver textual commands
           case RD_CmdKind_RunExternalDriverTextCommand:
           {
+            rd_cmd_output_clear();
             String8 msg = rd_regs()->string;
             String8List msg_parts = str8_split(scratch.arena, msg, (U8 *)" ", 1, 0);
-            String8List msg_cmd_line_parts = {0};
-            str8_list_push(scratch.arena, &msg_cmd_line_parts, str8_lit("ipc"));
-            str8_list_concat_in_place(&msg_cmd_line_parts, &msg_parts);
-            CmdLine msg_cmd_line = cmd_line_from_string_list(scratch.arena, msg_cmd_line_parts);
-            String8 cmd_kind_name = str8_list_first(&msg_cmd_line.inputs);
-            RD_CmdKindInfo *cmd_kind_info = rd_cmd_kind_info_from_string(cmd_kind_name);
-            if(cmd_kind_info != &rd_nil_cmd_kind_info) RD_RegsScope()
+            String8 cmd_name = str8_list_first(&msg_parts);
+            if(str8_match(cmd_name, str8_lit("darwin_tlv_probe"), 0))
             {
-              for EachNonZeroEnumVal(RD_RegSlot, s)
+              String8 thread_or_process_string = {0};
+              String8 descriptor_vaddr_string = {0};
+              String8 value_size_string = {0};
+              if(msg_parts.first != 0 && msg_parts.first->next != 0)
               {
-                String8 reg_slot_name = rd_reg_slot_code_name_table[s];
-                String8 value = cmd_line_string(&msg_cmd_line, reg_slot_name);
-                if(value.size != 0)
+                thread_or_process_string = msg_parts.first->next->string;
+                if(msg_parts.first->next->next != 0)
                 {
-                  rd_regs_fill_slot_from_string(s, cmd_kind_info->query.expr, value);
+                  descriptor_vaddr_string = msg_parts.first->next->next->string;
+                  if(msg_parts.first->next->next->next != 0)
+                  {
+                    value_size_string = msg_parts.first->next->next->next->string;
+                  }
                 }
               }
-              String8 primary_args_string = {0};
-              if(msg_cmd_line.inputs.first != 0)
+
+              D_Entity *thread = &d_entity_nil;
+              if(str8_match(thread_or_process_string, str8_lit("selected"), 0))
               {
-                String8List primary_args_strings = {0};
-                for(String8Node *n = msg_cmd_line.inputs.first->next; n != 0; n = n->next)
-                {
-                  str8_list_push(scratch.arena, &primary_args_strings, n->string);
-                }
-                primary_args_string = str8_list_join(scratch.arena, &primary_args_strings, &(StringJoin){.sep = str8_lit(" ")});
+                thread = d_entity_from_handle(rd_base_regs()->thread);
               }
-              rd_regs_fill_slot_from_string(cmd_kind_info->query.slot, cmd_kind_info->query.expr, primary_args_string);
-              rd_push_cmd(cmd_kind_name, rd_regs());
+              else if(thread_or_process_string.size != 0)
+              {
+                D_Entity *entity = d_entity_from_handle(d_handle_from_string(thread_or_process_string));
+                if(entity != &d_entity_nil)
+                {
+                  if(entity->kind == D_EntityKind_Process)
+                  {
+                    thread = d_entity_child_from_kind(entity, D_EntityKind_Thread);
+                  }
+                  else
+                  {
+                    thread = entity;
+                  }
+                }
+                else
+                {
+                  U64 id = 0;
+                  if(try_u64_from_str8_c_rules(thread_or_process_string, &id))
+                  {
+                    D_EntityArray threads = d_entity_array_from_kind(D_EntityKind_Thread);
+                    for(U64 idx = 0; idx < threads.count; idx += 1)
+                    {
+                      if(threads.v[idx]->id == id)
+                      {
+                        thread = threads.v[idx];
+                        break;
+                      }
+                    }
+                  }
+                }
+              }
+              if(thread == &d_entity_nil)
+              {
+                thread = d_entity_from_handle(rd_base_regs()->thread);
+              }
+
+              U64 descriptor_vaddr = 0;
+              U64 value_size = 4;
+              if(thread == &d_entity_nil || thread->kind != D_EntityKind_Thread)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: thread not found");
+              }
+              else if(!try_u64_from_str8_c_rules(descriptor_vaddr_string, &descriptor_vaddr) || descriptor_vaddr == 0)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: TLV descriptor address required");
+              }
+              else if(value_size_string.size != 0 && (!try_u64_from_str8_c_rules(value_size_string, &value_size) || value_size == 0 || value_size > 64))
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad value size");
+              }
+              else
+              {
+                D_CmdParams params = {0};
+                params.thread = thread->handle;
+                params.vaddr = descriptor_vaddr;
+                params.string = str8_lit("darwin_tlv_probe");
+                params.target_call_arg_count = 1;
+                params.target_call_args[0] = value_size;
+                d_push_cmd(D_CmdKind_TargetCallU64, &params);
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs,
+                                "queued result:dump_output thread:%S descriptor:0x%I64x size:%I64u",
+                                thread->string, descriptor_vaddr, value_size);
+              }
+            }
+            else if(str8_match(cmd_name, str8_lit("target_call_u64"), 0))
+            {
+              String8 thread_or_process_string = {0};
+              String8 function_vaddr_string = {0};
+              if(msg_parts.first != 0 && msg_parts.first->next != 0)
+              {
+                thread_or_process_string = msg_parts.first->next->string;
+                if(msg_parts.first->next->next != 0)
+                {
+                  function_vaddr_string = msg_parts.first->next->next->string;
+                }
+              }
+
+              D_Entity *thread = &d_entity_nil;
+              if(str8_match(thread_or_process_string, str8_lit("selected"), 0))
+              {
+                thread = d_entity_from_handle(rd_base_regs()->thread);
+              }
+              else if(thread_or_process_string.size != 0)
+              {
+                D_Entity *entity = d_entity_from_handle(d_handle_from_string(thread_or_process_string));
+                if(entity != &d_entity_nil)
+                {
+                  if(entity->kind == D_EntityKind_Process)
+                  {
+                    thread = d_entity_child_from_kind(entity, D_EntityKind_Thread);
+                  }
+                  else
+                  {
+                    thread = entity;
+                  }
+                }
+                else
+                {
+                  U64 id = 0;
+                  if(try_u64_from_str8_c_rules(thread_or_process_string, &id))
+                  {
+                    D_EntityArray threads = d_entity_array_from_kind(D_EntityKind_Thread);
+                    for(U64 idx = 0; idx < threads.count; idx += 1)
+                    {
+                      if(threads.v[idx]->id == id)
+                      {
+                        thread = threads.v[idx];
+                        break;
+                      }
+                    }
+                  }
+                }
+              }
+              if(thread == &d_entity_nil)
+              {
+                thread = d_entity_from_handle(rd_base_regs()->thread);
+              }
+
+              U64 function_vaddr = 0;
+              if(thread == &d_entity_nil || thread->kind != D_EntityKind_Thread)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: thread not found");
+              }
+              else if(!try_u64_from_str8_c_rules(function_vaddr_string, &function_vaddr) || function_vaddr == 0)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: function address required");
+              }
+              else
+              {
+                D_CmdParams params = {0};
+                params.thread = thread->handle;
+                params.vaddr = function_vaddr;
+                String8Node *arg = msg_parts.first->next->next;
+                if(arg != 0)
+                {
+                  arg = arg->next;
+                }
+                B32 args_good = 1;
+                for(; arg != 0 && params.target_call_arg_count < ArrayCount(params.target_call_args); arg = arg->next)
+                {
+                  U64 arg_value = 0;
+                  if(try_u64_from_str8_c_rules(arg->string, &arg_value))
+                  {
+                    params.target_call_args[params.target_call_arg_count] = arg_value;
+                    params.target_call_arg_count += 1;
+                  }
+                  else
+                  {
+                    args_good = 0;
+                    break;
+                  }
+                }
+
+                if(!args_good)
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad argument");
+                }
+                else if(arg != 0)
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: too many arguments");
+                }
+                else
+                {
+                  d_push_cmd(D_CmdKind_TargetCallU64, &params);
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs,
+                                  "queued result:dump_output thread:%S function:0x%I64x",
+                                  thread->string, function_vaddr);
+                }
+              }
             }
             else
             {
-              log_user_errorf("`%S` is not a command.", cmd_kind_name);
+              String8List msg_cmd_line_parts = {0};
+              str8_list_push(scratch.arena, &msg_cmd_line_parts, str8_lit("ipc"));
+              str8_list_concat_in_place(&msg_cmd_line_parts, &msg_parts);
+              CmdLine msg_cmd_line = cmd_line_from_string_list(scratch.arena, msg_cmd_line_parts);
+              String8 cmd_kind_name = str8_list_first(&msg_cmd_line.inputs);
+              RD_CmdKindInfo *cmd_kind_info = rd_cmd_kind_info_from_string(cmd_kind_name);
+              if(cmd_kind_info != &rd_nil_cmd_kind_info) RD_RegsScope()
+              {
+                for EachNonZeroEnumVal(RD_RegSlot, s)
+                {
+                  String8 reg_slot_name = rd_reg_slot_code_name_table[s];
+                  String8 value = cmd_line_string(&msg_cmd_line, reg_slot_name);
+                  if(value.size != 0)
+                  {
+                    rd_regs_fill_slot_from_string(s, cmd_kind_info->query.expr, value);
+                  }
+                }
+                String8 primary_args_string = {0};
+                if(msg_cmd_line.inputs.first != 0)
+                {
+                  String8List primary_args_strings = {0};
+                  for(String8Node *n = msg_cmd_line.inputs.first->next; n != 0; n = n->next)
+                  {
+                    str8_list_push(scratch.arena, &primary_args_strings, n->string);
+                  }
+                  primary_args_string = str8_list_join(scratch.arena, &primary_args_strings, &(StringJoin){.sep = str8_lit(" ")});
+                }
+                rd_regs_fill_slot_from_string(cmd_kind_info->query.slot, cmd_kind_info->query.expr, primary_args_string);
+                rd_push_cmd(cmd_kind_name, rd_regs());
+              }
+              else
+              {
+                log_user_errorf("`%S` is not a command.", cmd_kind_name);
+              }
             }
           }break;
           
@@ -15619,6 +15938,446 @@ rd_frame(void)
             cfg_node_insert_child(rd_state->cfg, project, project->last, cfg);
           }break;
           
+          //- debugger state IPC commands
+          case RD_CmdKind_ListTargets:
+          {
+            rd_cmd_output_clear();
+            CFG_NodePtrList targets = cfg_node_top_level_list_from_string(scratch.arena, str8_lit("target"));
+            String8List lines = {0};
+            str8_list_pushf(scratch.arena, &lines, "targets:%I64u", targets.count);
+            U64 idx = 0;
+            for(CFG_NodePtrNode *n = targets.first; n != 0; n = n->next, idx += 1)
+            {
+              CFG_Node *target = n->v;
+              D_Target target_info = rd_target_from_cfg(scratch.arena, target);
+              String8 label = rd_label_from_cfg(target);
+              String8 exe_name = str8_skip_last_slash(target_info.exe);
+              str8_list_pushf(scratch.arena, &lines, "\n#%I64u cfg:$%I64x enabled:%u label:%S executable:%S",
+                              idx, target->id, !rd_disabled_from_cfg(target), label, exe_name);
+            }
+            String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+            str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+          }break;
+          case RD_CmdKind_ListProcesses:
+          {
+            rd_cmd_output_clear();
+            D_Entity *selected_thread = d_entity_from_handle(rd_base_regs()->thread);
+            D_Entity *selected_process = d_entity_ancestor_from_kind(selected_thread, D_EntityKind_Process);
+            if(selected_process == &d_entity_nil)
+            {
+              selected_process = d_entity_from_handle(rd_base_regs()->process);
+            }
+            D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
+            String8List lines = {0};
+            str8_list_pushf(scratch.arena, &lines, "processes:%I64u running:%u", processes.count, d_ctrl_targets_running());
+            for(U64 idx = 0; idx < processes.count; idx += 1)
+            {
+              D_Entity *process = processes.v[idx];
+              U64 thread_count = 0;
+              U64 module_count = 0;
+              for(D_Entity *child = process->first; child != &d_entity_nil; child = child->next)
+              {
+                if(child->kind == D_EntityKind_Thread)
+                {
+                  thread_count += 1;
+                }
+                else if(child->kind == D_EntityKind_Module)
+                {
+                  module_count += 1;
+                }
+              }
+              String8 handle_string = d_string_from_handle(scratch.arena, process->handle);
+              String8 process_name = process->string.size != 0 ? str8_skip_last_slash(process->string) : str8_lit("???");
+              str8_list_pushf(scratch.arena, &lines, "\n#%I64u pid:%I64u handle:%S selected:%u threads:%I64u modules:%I64u name:%S",
+                              idx, process->id, handle_string, process == selected_process, thread_count, module_count, process_name);
+            }
+            String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+            str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+          }break;
+          case RD_CmdKind_ListThreads:
+          {
+            rd_cmd_output_clear();
+            D_Entity *selected_thread = d_entity_from_handle(rd_base_regs()->thread);
+            D_Event stop_event = d_ctrl_last_stop_event();
+            String8 stop_entity = d_string_from_handle(scratch.arena, stop_event.entity);
+            B32 targets_running = d_ctrl_targets_running();
+            String8List lines = {0};
+            str8_list_pushf(scratch.arena, &lines, "running:%u selected_thread:%S",
+                            targets_running, d_string_from_handle(scratch.arena, rd_base_regs()->thread));
+            if(targets_running)
+            {
+              str8_list_pushf(scratch.arena, &lines, " last_stop:{stale_while_running:1}");
+            }
+            else
+            {
+              str8_list_pushf(scratch.arena, &lines, " last_stop:{cause:%u entity:%S rip:0x%I64x}",
+                              stop_event.cause, stop_entity, stop_event.rip_vaddr);
+            }
+            D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
+            for(U64 process_idx = 0; process_idx < processes.count; process_idx += 1)
+            {
+              D_Entity *process = processes.v[process_idx];
+              String8 process_handle = d_string_from_handle(scratch.arena, process->handle);
+              String8 process_name = process->string.size != 0 ? str8_skip_last_slash(process->string) : str8_lit("???");
+              str8_list_pushf(scratch.arena, &lines, "\nprocess#%I64u pid:%I64u handle:%S name:%S",
+                              process_idx, process->id, process_handle, process_name);
+              U64 thread_idx = 0;
+              for(D_Entity *thread = process->first; thread != &d_entity_nil; thread = thread->next)
+              {
+                if(thread->kind != D_EntityKind_Thread) { continue; }
+                str8_list_pushf(scratch.arena, &lines, "\n  thread#%I64u id:%I64u handle:%S selected:%u frozen:%u soloed:%u",
+                                thread_idx, thread->id, d_string_from_handle(scratch.arena, thread->handle),
+                                thread == selected_thread, thread->is_frozen, thread->is_soloed);
+                if(targets_running)
+                {
+                  str8_list_pushf(scratch.arena, &lines, " rip:stale module:stale");
+                }
+                else
+                {
+                  U64 rip_vaddr = d_query_cached_rip_from_thread(thread);
+                  D_Entity *module = d_module_from_process_vaddr(process, rip_vaddr);
+                  String8 module_name = module != &d_entity_nil ? str8_skip_last_slash(module->string) : str8_lit("???");
+                  U64 module_base = module != &d_entity_nil ? module->vaddr_range.min : 0;
+                  U64 rip_voff = module != &d_entity_nil ? rip_vaddr - module_base : 0;
+                  str8_list_pushf(scratch.arena, &lines, " rip:0x%I64x module:%S+0x%I64x",
+                                  rip_vaddr, module_name, rip_voff);
+                }
+                thread_idx += 1;
+              }
+            }
+            String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+            str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+          }break;
+          case RD_CmdKind_ListModules:
+          {
+            rd_cmd_output_clear();
+            D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
+            String8List lines = {0};
+            U64 total_module_count = 0;
+            for(U64 process_idx = 0; process_idx < processes.count; process_idx += 1)
+            {
+              for(D_Entity *module = processes.v[process_idx]->first; module != &d_entity_nil; module = module->next)
+              {
+                if(module->kind == D_EntityKind_Module)
+                {
+                  total_module_count += 1;
+                }
+              }
+            }
+            str8_list_pushf(scratch.arena, &lines, "processes:%I64u modules:%I64u", processes.count, total_module_count);
+            Access *access = access_open();
+            for(U64 process_idx = 0; process_idx < processes.count; process_idx += 1)
+            {
+              D_Entity *process = processes.v[process_idx];
+              String8 process_handle = d_string_from_handle(scratch.arena, process->handle);
+              String8 process_name = process->string.size != 0 ? str8_skip_last_slash(process->string) : str8_lit("???");
+              str8_list_pushf(scratch.arena, &lines, "\nprocess#%I64u pid:%I64u handle:%S name:%S",
+                              process_idx, process->id, process_handle, process_name);
+              U64 module_idx = 0;
+              for(D_Entity *module = process->first; module != &d_entity_nil; module = module->next)
+              {
+                if(module->kind != D_EntityKind_Module) { continue; }
+                String8 module_handle = d_string_from_handle(scratch.arena, module->handle);
+                String8 module_name = module->string.size != 0 ? str8_skip_last_slash(module->string) : str8_lit("???");
+                D_Entity *debug_info_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
+                String8 debug_info_path_string = debug_info_path != &d_entity_nil ? debug_info_path->string : str8_zero();
+                U64 debug_info_timestamp = debug_info_path != &d_entity_nil ? debug_info_path->timestamp : 0;
+                FileProperties debug_info_props = properties_from_file_path(debug_info_path_string);
+                DI_Key dbgi_key = d_dbgi_key_from_module(module);
+                RDI_Parsed *rdi = di_rdi_from_key(access, dbgi_key, 0, 0);
+                str8_list_pushf(scratch.arena, &lines, "\n  module#%I64u handle:%S range:[0x%I64x,0x%I64x) name:%S path:%S",
+                                module_idx, module_handle, module->vaddr_range.min, module->vaddr_range.max,
+                                module_name, module->string);
+                str8_list_pushf(scratch.arena, &lines, " debug_info:{path:%S timestamp:%I64u exists:%u size:%I64u rdi_raw_size:%I64u}",
+                                debug_info_path_string, debug_info_timestamp, debug_info_props.modified != 0,
+                                debug_info_props.size, rdi->raw_data_size);
+                module_idx += 1;
+              }
+            }
+            access_close(access);
+            String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+            str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+          }break;
+          case RD_CmdKind_ListCallStack:
+          {
+            rd_cmd_output_clear();
+            D_Entity *thread = d_entity_from_handle(rd_regs()->thread);
+            if(thread == &d_entity_nil && rd_regs()->string.size != 0)
+            {
+              D_Entity *entity = rd_ctrl_entity_from_string(rd_regs()->string, D_EntityKind_COUNT);
+              if(entity->kind == D_EntityKind_Process)
+              {
+                thread = d_entity_child_from_kind(entity, D_EntityKind_Thread);
+              }
+              else if(entity->kind == D_EntityKind_Thread)
+              {
+                thread = entity;
+              }
+            }
+            if(thread == &d_entity_nil)
+            {
+              thread = d_entity_from_handle(rd_base_regs()->thread);
+            }
+            if(thread == &d_entity_nil || thread->kind != D_EntityKind_Thread)
+            {
+              str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: thread not found");
+            }
+            else
+            {
+              Access *access = access_open();
+              D_Entity *process = d_entity_ancestor_from_kind(thread, D_EntityKind_Process);
+              ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
+              D_CallStack call_stack = d_call_stack_from_thread(access, thread->handle, 1, now_time_us()+1000000);
+              String8List lines = {0};
+              str8_list_pushf(scratch.arena, &lines, "frames:%I64u concrete:%I64u", call_stack.frames_count, call_stack.concrete_frames_count);
+              for(U64 idx = 0; idx < call_stack.frames_count; idx += 1)
+              {
+                D_CallStackFrame *frame = &call_stack.frames[call_stack.frames_count - 1 - idx];
+                U64 rip_vaddr = arch_ip_from_reg_block(arch_info, frame->regs);
+                D_Entity *module = d_module_from_process_vaddr(process, rip_vaddr);
+                String8 module_name = str8_lit("???");
+                String8 procedure_name = str8_lit("???");
+                if(module != &d_entity_nil)
+                {
+                  module_name = str8_skip_last_slash(module->string);
+                  U64 rip_voff = d_voff_from_vaddr(module, rip_vaddr);
+                  DI_Key dbgi_key = d_dbgi_key_from_module(module);
+                  RDI_Parsed *rdi = di_rdi_from_key(access, dbgi_key, 0, 0);
+                  if(rdi != &rdi_parsed_nil)
+                  {
+                    RDI_Symbol *procedure = rdi_procedure_from_voff(rdi, rip_voff);
+                    String8 name = {0};
+                    name.str = rdi_string_from_idx(rdi, procedure->name_string_idx, &name.size);
+                    if(name.size != 0)
+                    {
+                      procedure_name = name;
+                    }
+                  }
+                }
+                str8_list_pushf(scratch.arena, &lines, "\n#%I64u 0x%I64x %S!%S cfa=0x%I64x unwind=%I64u inline=%I64u",
+                                idx, rip_vaddr, module_name, procedure_name, frame->cfa, frame->unwind_count, frame->inline_depth);
+              }
+              String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+              str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+              access_close(access);
+            }
+          }break;
+          case RD_CmdKind_ReadRegisters:
+          {
+            rd_cmd_output_clear();
+            String8List parts = str8_split(scratch.arena, rd_regs()->string, (U8 *)" ", 1, 0);
+            String8Node *arg = parts.first;
+            D_Entity *thread = d_entity_from_handle(rd_regs()->thread);
+            if(arg != 0)
+            {
+              D_Entity *entity = rd_ctrl_entity_from_string(arg->string, D_EntityKind_COUNT);
+              if(entity != &d_entity_nil)
+              {
+                if(entity->kind == D_EntityKind_Process)
+                {
+                  thread = d_entity_child_from_kind(entity, D_EntityKind_Thread);
+                }
+                else if(entity->kind == D_EntityKind_Thread)
+                {
+                  thread = entity;
+                }
+                arg = arg->next;
+              }
+            }
+            if(thread == &d_entity_nil)
+            {
+              thread = d_entity_from_handle(rd_base_regs()->thread);
+            }
+            if(thread == &d_entity_nil || thread->kind != D_EntityKind_Thread)
+            {
+              str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: thread not found");
+            }
+            else
+            {
+              ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
+              void *regs_block = d_cached_reg_block_from_thread(scratch.arena, thread->handle);
+              if(regs_block == 0 || arch_info == &arch_info_nil)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: registers not cached");
+              }
+              else
+              {
+                String8List reg_names = {0};
+                if(arg == 0)
+                {
+                  switch(thread->arch)
+                  {
+                    case Arch_x64:
+                    {
+                      str8_list_push(scratch.arena, &reg_names, str8_lit("rip"));
+                      str8_list_push(scratch.arena, &reg_names, str8_lit("rsp"));
+                      str8_list_push(scratch.arena, &reg_names, str8_lit("rbp"));
+                    }break;
+                    case Arch_arm64:
+                    {
+                      str8_list_push(scratch.arena, &reg_names, str8_lit("pc"));
+                      str8_list_push(scratch.arena, &reg_names, str8_lit("sp"));
+                      str8_list_push(scratch.arena, &reg_names, str8_lit("fp"));
+                      str8_list_push(scratch.arena, &reg_names, str8_lit("lr"));
+                      str8_list_push(scratch.arena, &reg_names, str8_lit("q0"));
+                      str8_list_push(scratch.arena, &reg_names, str8_lit("q8"));
+                      str8_list_push(scratch.arena, &reg_names, str8_lit("q31"));
+                    }break;
+                    default:{}break;
+                  }
+                }
+                else
+                {
+                  for(String8Node *n = arg; n != 0; n = n->next)
+                  {
+                    str8_list_push(scratch.arena, &reg_names, n->string);
+                  }
+                }
+                String8List lines = {0};
+                str8_list_pushf(scratch.arena, &lines, "thread:%S arch:%S",
+                                d_string_from_handle(scratch.arena, thread->handle),
+                                string_from_arch(thread->arch));
+                for(String8Node *n = reg_names.first; n != 0; n = n->next)
+                {
+                  ARCH_RegCode reg_code = arch_reg_code_from_name(arch_info, n->string);
+                  if(reg_code == 0)
+                  {
+                    str8_list_pushf(scratch.arena, &lines, "\n%S:error:unknown", n->string);
+                  }
+                  else
+                  {
+                    Rng1U16 range = arch_info->reg_code_rng_table[reg_code];
+                    U64 byte_size = dim_1u16(range);
+                    U8 bytes[32] = {0};
+                    if(byte_size > sizeof(bytes) ||
+                       !arch_reg_block_read_range(arch_info, regs_block, range, bytes))
+                    {
+                      str8_list_pushf(scratch.arena, &lines, "\n%S:error:unreadable", n->string);
+                    }
+                    else
+                    {
+                      str8_list_pushf(scratch.arena, &lines, "\n%S:", n->string);
+                      for(U64 byte_idx = 0; byte_idx < byte_size; byte_idx += 1)
+                      {
+                        str8_list_pushf(scratch.arena, &lines, "%02x", bytes[byte_idx]);
+                      }
+                    }
+                  }
+                }
+                String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+                str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+              }
+            }
+          }break;
+          
+          //- debugger memory IPC commands
+          case RD_CmdKind_ReadMemory:
+          case RD_CmdKind_WriteMemory:
+          {
+            rd_cmd_output_clear();
+            String8 process_string = {0};
+            String8 vaddr_string = {0};
+            String8 size_or_data_string = {0};
+            String8List parts = str8_split(scratch.arena, rd_regs()->string, (U8 *)" ", 1, 0);
+            if(parts.first != 0)
+            {
+              process_string = parts.first->string;
+              if(parts.first->next != 0)
+              {
+                vaddr_string = parts.first->next->string;
+                if(parts.first->next->next != 0)
+                {
+                  size_or_data_string = parts.first->next->next->string;
+                }
+              }
+            }
+            D_Entity *process = d_entity_from_handle(rd_regs()->process);
+            if(process == &d_entity_nil && process_string.size != 0)
+            {
+              process = rd_ctrl_entity_from_string(process_string, D_EntityKind_Process);
+            }
+            U64 vaddr = rd_regs()->vaddr;
+            B32 parsed_vaddr = (vaddr != 0);
+            if(vaddr_string.size != 0)
+            {
+              parsed_vaddr = try_u64_from_str8_c_rules(vaddr_string, &vaddr);
+            }
+            if(process == &d_entity_nil || process->kind != D_EntityKind_Process)
+            {
+              str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: process not found");
+            }
+            else if(!parsed_vaddr)
+            {
+              str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad address");
+            }
+            else if(kind == RD_CmdKind_ReadMemory)
+            {
+              U64 size = 0;
+              if(!try_u64_from_str8_c_rules(size_or_data_string, &size) || size == 0 || size > 4096)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad size");
+              }
+              else
+              {
+                D_ProcessMemorySlice slice = d_process_memory_slice_from_vaddr_range(scratch.arena, process->handle, r1u64(vaddr, vaddr+size), 1, now_time_us()+500000);
+                if(slice.data.size >= size && !slice.any_byte_bad)
+                {
+                  String8List bytes = {0};
+                  for(U64 idx = 0; idx < size; idx += 1)
+                  {
+                    str8_list_pushf(scratch.arena, &bytes, "%02x", slice.data.str[idx]);
+                  }
+                  String8 bytes_string = str8_list_join(rd_state->cmd_output_arena, &bytes, &(StringJoin){0});
+                  str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, bytes_string);
+                }
+                else
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: read failed%s", slice.stale ? " (stale)" : "");
+                }
+              }
+            }
+            else
+            {
+              String8 hex = size_or_data_string;
+              if(str8_match(str8_prefix(hex, 2), str8_lit("0x"), StringMatchFlag_CaseInsensitive))
+              {
+                hex = str8_skip(hex, 2);
+              }
+              if(hex.size == 0 || (hex.size%2) != 0)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad hex data");
+              }
+              else
+              {
+                U64 size = hex.size/2;
+                U8 *data = push_array(scratch.arena, U8, size);
+                B32 good_hex = 1;
+                for(U64 idx = 0; idx < size; idx += 1)
+                {
+                  String8 byte_string = str8(hex.str + idx*2, 2);
+                  if(!char_is_digit(byte_string.str[0], 16) || !char_is_digit(byte_string.str[1], 16))
+                  {
+                    good_hex = 0;
+                    break;
+                  }
+                  data[idx] = (U8)u64_from_str8(byte_string, 16);
+                }
+                if(!good_hex)
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad hex data");
+                }
+                else if(d_process_write(process->handle, r1u64(vaddr, vaddr+size), data))
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "ok");
+                }
+                else
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: write failed");
+                }
+              }
+            }
+          }break;
+          
           //- rjf: breakpoints
           case RD_CmdKind_AddBreakpoint:
           case RD_CmdKind_ToggleBreakpoint:
@@ -15627,6 +16386,19 @@ rd_frame(void)
             TxtPt pt = rd_regs()->cursor;
             U64 vaddr = rd_regs()->vaddr;
             String8 expr = rd_regs()->expr;
+            if(file_path.size == 0 && expr.size == 0 && vaddr == 0 && rd_regs()->string.size != 0)
+            {
+              String8TxtPtPair pair = str8_txt_pt_pair_from_string(rd_regs()->string);
+              if(pair.string.size != rd_regs()->string.size)
+              {
+                file_path = pair.string;
+                pt = pair.pt;
+              }
+              else
+              {
+                expr = rd_regs()->string;
+              }
+            }
             if(expr.size == 0 && vaddr != 0)
             {
               expr = push_str8f(scratch.arena, "0x%I64x", vaddr);
@@ -15701,6 +16473,37 @@ rd_frame(void)
           {
             MTX_Op op = {r1u64(0, 0xffffffffffffffffull), str8_lit("")};
             mtx_push_op(d_user_state->output_log_key, op);
+          }break;
+          case RD_CmdKind_ReadOutputLog:
+          {
+            rd_cmd_output_clear();
+            U64 max_bytes = KB(16);
+            if(rd_regs()->string.size != 0)
+            {
+              U64 parsed_max_bytes = 0;
+              if(try_u64_from_str8_c_rules(rd_regs()->string, &parsed_max_bytes))
+              {
+                max_bytes = parsed_max_bytes;
+              }
+            }
+            Access *access = access_open();
+            C_Key key = d_user_state->output_log_key;
+            U128 hash = c_hash_from_key(key, 0);
+            String8 data = c_data_from_hash(access, hash);
+            String8 tail = data;
+            if(tail.size > max_bytes)
+            {
+              tail = str8_skip(tail, tail.size - max_bytes);
+            }
+            String8List lines = {0};
+            str8_list_pushf(scratch.arena, &lines, "bytes:%I64u shown:%I64u", data.size, tail.size);
+            if(tail.size != 0)
+            {
+              str8_list_pushf(scratch.arena, &lines, "\n%S", tail);
+            }
+            String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+            str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+            access_close(access);
           }break;
           
           //- rjf: watch pins
