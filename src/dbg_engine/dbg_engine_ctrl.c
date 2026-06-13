@@ -842,7 +842,11 @@ internal DI_Key
 d_dbgi_key_from_module(D_Entity *module)
 {
   D_Entity *debug_info_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
-  DI_Key dbgi_key = di_key_from_path_timestamp(debug_info_path->string, debug_info_path->timestamp);
+  DI_Key dbgi_key = {0};
+  if(debug_info_path != &d_entity_nil && debug_info_path->string.size != 0)
+  {
+    dbgi_key = di_key_from_path_timestamp(debug_info_path->string, debug_info_path->timestamp);
+  }
   return dbgi_key;
 }
 
@@ -4383,16 +4387,26 @@ d_ctrl_thread__entry_point(void *p)
             String8 path = msg->path;
             D_Entity *module = d_entity_from_handle(msg->entity);
             D_Entity *debug_info_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
-            DI_Key old_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, debug_info_path->timestamp);
-            di_close(old_dbgi_key, 0);
+            if(debug_info_path == &d_entity_nil) MutexScopeW(d_ctrl_state->ctrl_thread_entity_ctx_rw_mutex)
+            {
+              debug_info_path = d_entity_alloc(d_ctrl_state->ctrl_thread_entity_store, module, D_EntityKind_DebugInfoPath, Arch_Null, d_handle_zero(), 0);
+            }
+            if(debug_info_path->string.size != 0)
+            {
+              DI_Key old_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, debug_info_path->timestamp);
+              di_close(old_dbgi_key, 0);
+            }
             MutexScopeW(d_ctrl_state->ctrl_thread_entity_ctx_rw_mutex)
             {
               d_entity_equip_string(d_ctrl_state->ctrl_thread_entity_store, debug_info_path, path_normalized_from_string(scratch.arena, path));
             }
             U64 new_dbgi_timestamp = properties_from_file_path(path).modified;
             debug_info_path->timestamp = new_dbgi_timestamp;
-            DI_Key new_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, new_dbgi_timestamp);
-            di_open(new_dbgi_key);
+            if(debug_info_path->string.size != 0)
+            {
+              DI_Key new_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, new_dbgi_timestamp);
+              di_open(new_dbgi_key);
+            }
             D_EventList evts = {0};
             D_Event *evt = d_event_list_push(scratch.arena, &evts);
             evt->kind       = D_EventKind_ModuleDebugInfoPathChange;
@@ -5593,17 +5607,20 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
       out_evt1->string     = module_path;
       out_evt1->tls_index  = event->tls_index;
       out_evt1->tls_offset = event->tls_offset;
-      D_Event *out_evt2 = d_event_list_push(scratch.arena, &evts);
       String8 initial_debug_info_path = d_initial_debug_info_path_from_module(scratch.arena, module_handle);
-      U64 debug_info_timestamp = properties_from_file_path(initial_debug_info_path).modified;
-      out_evt2->kind       = D_EventKind_ModuleDebugInfoPathChange;
-      out_evt2->msg_id     = msg->msg_id;
-      out_evt2->entity     = module_handle;
-      out_evt2->parent     = process_handle;
-      out_evt2->timestamp  = debug_info_timestamp;
-      out_evt2->string     = initial_debug_info_path;
-      DI_Key initial_dbgi_key = di_key_from_path_timestamp(initial_debug_info_path, debug_info_timestamp);
-      di_open(initial_dbgi_key);
+      if(initial_debug_info_path.size != 0)
+      {
+        D_Event *out_evt2 = d_event_list_push(scratch.arena, &evts);
+        U64 debug_info_timestamp = properties_from_file_path(initial_debug_info_path).modified;
+        out_evt2->kind       = D_EventKind_ModuleDebugInfoPathChange;
+        out_evt2->msg_id     = msg->msg_id;
+        out_evt2->entity     = module_handle;
+        out_evt2->parent     = process_handle;
+        out_evt2->timestamp  = debug_info_timestamp;
+        out_evt2->string     = initial_debug_info_path;
+        DI_Key initial_dbgi_key = di_key_from_path_timestamp(initial_debug_info_path, debug_info_timestamp);
+        di_open(initial_dbgi_key);
+      }
     }break;
     case DMN_EventKind_ExitProcess:
     {
@@ -5825,6 +5842,7 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
         {
           if(mod->kind != D_EntityKind_Module) { continue; }
           DI_Key dbgi_key = d_dbgi_key_from_module(mod);
+          B32 dbgi_key_is_good = !di_key_match(dbgi_key, di_key_zero());
           
           //- rjf: try to obtain this module's RDI
           RDI_Parsed *rdi = di_rdi_from_key(scope->access, dbgi_key, 0, 0);
@@ -5835,6 +5853,10 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
           //
           B32 rdi_is_necessary = 1;
           if(user_bps->count == 0)
+          {
+            rdi_is_necessary = 0;
+          }
+          else if(!dbgi_key_is_good)
           {
             rdi_is_necessary = 0;
           }
@@ -6440,11 +6462,14 @@ d_ctrl_thread__open_crash_dump(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
     Rng1U64 vaddr_range = dump_modules[idx].vaddr_range;
     d_ctrl_thread__module_open(process, module_handle, vaddr_range, dump_modules[idx].path, r1u64(0, 0), 0);
     
-    // rjf: open debug info
     String8 initial_debug_info_path = d_initial_debug_info_path_from_module(scratch.arena, module_handle);
-    U64 debug_info_timestamp = properties_from_file_path(initial_debug_info_path).modified;
-    DI_Key initial_dbgi_key = di_key_from_path_timestamp(initial_debug_info_path, debug_info_timestamp);
-    di_open(initial_dbgi_key);
+    U64 debug_info_timestamp = 0;
+    if(initial_debug_info_path.size != 0)
+    {
+      debug_info_timestamp = properties_from_file_path(initial_debug_info_path).modified;
+      DI_Key initial_dbgi_key = di_key_from_path_timestamp(initial_debug_info_path, debug_info_timestamp);
+      di_open(initial_dbgi_key);
+    }
     
     // rjf: push module load event
     {
@@ -6461,6 +6486,7 @@ d_ctrl_thread__open_crash_dump(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
     }
     
     // rjf: push debug info initial path set event
+    if(initial_debug_info_path.size != 0)
     {
       D_Event *evt = d_event_list_push(scratch.arena, &evts);
       evt->kind       = D_EventKind_ModuleDebugInfoPathChange;
