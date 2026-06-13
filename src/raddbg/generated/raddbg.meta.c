@@ -62,7 +62,7 @@ str8_lit_comp(""),
 str8_lit_comp(""),
 };
 
-RD_VocabInfo rd_vocab_info_table[370] =
+RD_VocabInfo rd_vocab_info_table[371] =
 {
 {str8_lit_comp("type_view"), str8_lit_comp("type_views"), str8_lit_comp("Type View"), str8_lit_comp("Type Views"), RD_IconKind_Binoculars},
 {str8_lit_comp("file_path_map"), str8_lit_comp("file_path_maps"), str8_lit_comp("File Path Map"), str8_lit_comp("File Path Maps"), RD_IconKind_FileOutline},
@@ -365,6 +365,7 @@ RD_VocabInfo rd_vocab_info_table[370] =
 {str8_lit_comp("read_registers"), str8_lit_comp(""), str8_lit_comp("Read Registers"), str8_lit_comp(""), RD_IconKind_Binoculars},
 {str8_lit_comp("read_memory"), str8_lit_comp(""), str8_lit_comp("Read Memory"), str8_lit_comp(""), RD_IconKind_Grid},
 {str8_lit_comp("write_memory"), str8_lit_comp(""), str8_lit_comp("Write Memory"), str8_lit_comp(""), RD_IconKind_Grid},
+{str8_lit_comp("diagnose_demon_state"), str8_lit_comp(""), str8_lit_comp("Diagnose Demon State"), str8_lit_comp(""), RD_IconKind_Binoculars},
 {str8_lit_comp("add_breakpoint"), str8_lit_comp(""), str8_lit_comp("Add Line Breakpoint"), str8_lit_comp(""), RD_IconKind_CircleFilled},
 {str8_lit_comp("add_address_breakpoint"), str8_lit_comp(""), str8_lit_comp("Add Address Breakpoint"), str8_lit_comp(""), RD_IconKind_CircleFilled},
 {str8_lit_comp("add_function_breakpoint"), str8_lit_comp(""), str8_lit_comp("Add Function Breakpoint"), str8_lit_comp(""), RD_IconKind_CircleFilled},
@@ -585,7 +586,7 @@ Rng1U64 rd_reg_slot_range_table[49] =
 {OffsetOf(RD_Regs, wm_event), OffsetOf(RD_Regs, wm_event) + sizeof(WM_Event *)},
 };
 
-RD_CmdKindInfo rd_cmd_kind_info_table[259] =
+RD_CmdKindInfo rd_cmd_kind_info_table[260] =
 {
 {0},
 { str8_lit_comp("launch_and_run"), str8_lit_comp("Starts debugging a new instance of a target, then runs."), str8_lit_comp("launch,start,run,target"), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*1)|(RD_CmdKindFlag_ListInIPCDocs*1)|(RD_CmdKindFlag_ListInTextPt*0)|(RD_CmdKindFlag_ListInTextRng*0), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*1)|(RD_QueryFlag_Required*1), RD_RegSlot_Cfg, str8_lit_comp("query:targets"), str8_lit_comp(""), D_EntityKind_Null}},
@@ -777,6 +778,7 @@ RD_CmdKindInfo rd_cmd_kind_info_table[259] =
 { str8_lit_comp("read_registers"), str8_lit_comp("Reads cached registers for a thread."), str8_lit_comp(""), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*0)|(RD_CmdKindFlag_ListInIPCDocs*1)|(RD_CmdKindFlag_ListInTextPt*0)|(RD_CmdKindFlag_ListInTextRng*0), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*0)|(RD_QueryFlag_Required*0), RD_RegSlot_String, str8_lit_comp(""), str8_lit_comp(""), D_EntityKind_Null}},
 { str8_lit_comp("read_memory"), str8_lit_comp("Reads process memory and returns hex bytes."), str8_lit_comp(""), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*0)|(RD_CmdKindFlag_ListInIPCDocs*1)|(RD_CmdKindFlag_ListInTextPt*0)|(RD_CmdKindFlag_ListInTextRng*0), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*0)|(RD_QueryFlag_Required*0), RD_RegSlot_String, str8_lit_comp(""), str8_lit_comp(""), D_EntityKind_Null}},
 { str8_lit_comp("write_memory"), str8_lit_comp("Writes hex bytes to process memory."), str8_lit_comp(""), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*0)|(RD_CmdKindFlag_ListInIPCDocs*1)|(RD_CmdKindFlag_ListInTextPt*0)|(RD_CmdKindFlag_ListInTextRng*0), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*0)|(RD_QueryFlag_Required*0), RD_RegSlot_String, str8_lit_comp(""), str8_lit_comp(""), D_EntityKind_Null}},
+{ str8_lit_comp("diagnose_demon_state"), str8_lit_comp("Reports debugger backend state for diagnostics."), str8_lit_comp(""), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*0)|(RD_CmdKindFlag_ListInIPCDocs*1)|(RD_CmdKindFlag_ListInTextPt*0)|(RD_CmdKindFlag_ListInTextRng*0), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*0)|(RD_QueryFlag_Required*0), RD_RegSlot_Null, str8_lit_comp(""), str8_lit_comp(""), D_EntityKind_Null}},
 { str8_lit_comp("add_breakpoint"), str8_lit_comp("Places a breakpoint at a given location (file path and line number, address, or symbol name)."), str8_lit_comp(""), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*1)|(RD_CmdKindFlag_ListInIPCDocs*1)|(RD_CmdKindFlag_ListInTextPt*0)|(RD_CmdKindFlag_ListInTextRng*0), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*0)|(RD_QueryFlag_Required*0), RD_RegSlot_Null, str8_lit_comp(""), str8_lit_comp(""), D_EntityKind_Null}},
 { str8_lit_comp("add_address_breakpoint"), str8_lit_comp("Places a breakpoint on the specified address."), str8_lit_comp(""), str8_lit_comp("$breakpoints,"), (RD_CmdKindFlag_ListInUI*1)|(RD_CmdKindFlag_ListInIPCDocs*0)|(RD_CmdKindFlag_ListInTextPt*0)|(RD_CmdKindFlag_ListInTextRng*0), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*1)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*1)|(RD_QueryFlag_Required*1), RD_RegSlot_Expr, str8_lit_comp(""), str8_lit_comp(""), D_EntityKind_Null}},
 { str8_lit_comp("add_function_breakpoint"), str8_lit_comp("Places a breakpoint on the first address of the specified function."), str8_lit_comp(""), str8_lit_comp("$breakpoints,"), (RD_CmdKindFlag_ListInUI*1)|(RD_CmdKindFlag_ListInIPCDocs*0)|(RD_CmdKindFlag_ListInTextPt*0)|(RD_CmdKindFlag_ListInTextRng*0), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*1)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*1)|(RD_QueryFlag_Required*1), RD_RegSlot_String, str8_lit_comp("query:procedures"), str8_lit_comp(""), D_EntityKind_Null}},
