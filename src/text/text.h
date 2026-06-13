@@ -205,6 +205,7 @@ internal TXT_TokenArray txt_token_array_from_string__jai(Arena *arena, U64 *byte
 internal TXT_TokenArray txt_token_array_from_string__zig(Arena *arena, U64 *bytes_processed_counter, String8 string);
 internal TXT_TokenArray txt_token_array_from_string__rust(Arena *arena, U64 *bytes_processed_counter, String8 string);
 internal TXT_TokenArray txt_token_array_from_string__disasm_x64_intel(Arena *arena, U64 *bytes_processed_counter, String8 string);
+internal TXT_TokenArray txt_token_array_from_string__disasm_arm64(Arena *arena, U64 *bytes_processed_counter, String8 string);
 
 ////////////////////////////////
 //~ rjf: Text Info Extractor Helpers

@@ -181,6 +181,7 @@
 #include "torture_d2r.c"
 #include "torture_p2r.c"
 #include "torture_eval.c"
+#include "torture_text.c"
 
 internal B32 frame(void) { return 0; }
 

@@ -1,6 +1,7 @@
 // Copyright (c) Epic Games Tools
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
+#undef T_Group
 #define T_Group "Base"
 
 TEST(str8_list_substr)
