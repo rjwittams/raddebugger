@@ -244,6 +244,8 @@ RD_CmdKind_ConditionCfg,
 RD_CmdKind_DuplicateCfg,
 RD_CmdKind_RelocateCfg,
 RD_CmdKind_SaveToProject,
+RD_CmdKind_ReadMemory,
+RD_CmdKind_WriteMemory,
 RD_CmdKind_AddBreakpoint,
 RD_CmdKind_AddAddressBreakpoint,
 RD_CmdKind_AddFunctionBreakpoint,
@@ -604,7 +606,7 @@ Z(getting_started)\
 C_LINKAGE_BEGIN
 extern String8 rd_tab_fast_path_view_name_table[25];
 extern String8 rd_tab_fast_path_query_name_table[25];
-extern RD_VocabInfo rd_vocab_info_table[361];
+extern RD_VocabInfo rd_vocab_info_table[363];
 extern RD_NameSchemaInfo rd_name_schema_info_table[39];
 extern String8 rd_reg_slot_code_name_table[49];
 extern Rng1U64 rd_reg_slot_range_table[49];

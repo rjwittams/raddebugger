@@ -15868,6 +15868,114 @@ rd_frame(void)
             cfg_node_insert_child(rd_state->cfg, project, project->last, cfg);
           }break;
           
+          //- debugger memory IPC commands
+          case RD_CmdKind_ReadMemory:
+          case RD_CmdKind_WriteMemory:
+          {
+            rd_cmd_output_clear();
+            String8 process_string = {0};
+            String8 vaddr_string = {0};
+            String8 size_or_data_string = {0};
+            String8List parts = str8_split(scratch.arena, rd_regs()->string, (U8 *)" ", 1, 0);
+            if(parts.first != 0)
+            {
+              process_string = parts.first->string;
+              if(parts.first->next != 0)
+              {
+                vaddr_string = parts.first->next->string;
+                if(parts.first->next->next != 0)
+                {
+                  size_or_data_string = parts.first->next->next->string;
+                }
+              }
+            }
+            D_Entity *process = d_entity_from_handle(rd_regs()->process);
+            if(process == &d_entity_nil && process_string.size != 0)
+            {
+              process = rd_ctrl_entity_from_string(process_string, D_EntityKind_Process);
+            }
+            U64 vaddr = rd_regs()->vaddr;
+            B32 parsed_vaddr = (vaddr != 0);
+            if(vaddr_string.size != 0)
+            {
+              parsed_vaddr = try_u64_from_str8_c_rules(vaddr_string, &vaddr);
+            }
+            if(process == &d_entity_nil || process->kind != D_EntityKind_Process)
+            {
+              str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: process not found");
+            }
+            else if(!parsed_vaddr)
+            {
+              str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad address");
+            }
+            else if(kind == RD_CmdKind_ReadMemory)
+            {
+              U64 size = 0;
+              if(!try_u64_from_str8_c_rules(size_or_data_string, &size) || size == 0 || size > 4096)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad size");
+              }
+              else
+              {
+                D_ProcessMemorySlice slice = d_process_memory_slice_from_vaddr_range(scratch.arena, process->handle, r1u64(vaddr, vaddr+size), 1, now_time_us()+500000);
+                if(slice.data.size >= size && !slice.any_byte_bad)
+                {
+                  String8List bytes = {0};
+                  for(U64 idx = 0; idx < size; idx += 1)
+                  {
+                    str8_list_pushf(scratch.arena, &bytes, "%02x", slice.data.str[idx]);
+                  }
+                  String8 bytes_string = str8_list_join(rd_state->cmd_output_arena, &bytes, &(StringJoin){0});
+                  str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, bytes_string);
+                }
+                else
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: read failed%s", slice.stale ? " (stale)" : "");
+                }
+              }
+            }
+            else
+            {
+              String8 hex = size_or_data_string;
+              if(str8_match(str8_prefix(hex, 2), str8_lit("0x"), StringMatchFlag_CaseInsensitive))
+              {
+                hex = str8_skip(hex, 2);
+              }
+              if(hex.size == 0 || (hex.size%2) != 0)
+              {
+                str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad hex data");
+              }
+              else
+              {
+                U64 size = hex.size/2;
+                U8 *data = push_array(scratch.arena, U8, size);
+                B32 good_hex = 1;
+                for(U64 idx = 0; idx < size; idx += 1)
+                {
+                  String8 byte_string = str8(hex.str + idx*2, 2);
+                  if(!char_is_digit(byte_string.str[0], 16) || !char_is_digit(byte_string.str[1], 16))
+                  {
+                    good_hex = 0;
+                    break;
+                  }
+                  data[idx] = (U8)u64_from_str8(byte_string, 16);
+                }
+                if(!good_hex)
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: bad hex data");
+                }
+                else if(d_process_write(process->handle, r1u64(vaddr, vaddr+size), data))
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "ok");
+                }
+                else
+                {
+                  str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "error: write failed");
+                }
+              }
+            }
+          }break;
+          
           //- rjf: breakpoints
           case RD_CmdKind_AddBreakpoint:
           case RD_CmdKind_ToggleBreakpoint:
