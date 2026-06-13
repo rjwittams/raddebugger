@@ -67,6 +67,13 @@ str8_from_rdi_path_node_idx(Arena *arena, RDI_Parsed *rdi, PathStyle path_style,
     path_part.str = rdi_string_from_idx(rdi, fpn->name_string_idx, &path_part.size);
     str8_list_push_front(scratch.arena, &path_parts, path_part);
   }
+  if(path_style == PathStyle_UnixAbsolute &&
+     path_parts.first != 0 &&
+     path_parts.first->string.size != 0 &&
+     path_parts.first->string.str[0] == '/')
+  {
+    path_style = PathStyle_Relative;
+  }
   String8 path = str8_path_list_join_by_style(arena, &path_parts, path_style);
   scratch_end(scratch);
   return path;
