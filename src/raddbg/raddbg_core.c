@@ -15487,6 +15487,167 @@ rd_frame(void)
             cfg_node_insert_child(rd_state->cfg, project, project->last, cfg);
           }break;
           
+          //- debugger state IPC commands
+          case RD_CmdKind_ListTargets:
+          {
+            rd_cmd_output_clear();
+            CFG_NodePtrList targets = cfg_node_top_level_list_from_string(scratch.arena, str8_lit("target"));
+            String8List lines = {0};
+            str8_list_pushf(scratch.arena, &lines, "targets:%I64u", targets.count);
+            U64 idx = 0;
+            for(CFG_NodePtrNode *n = targets.first; n != 0; n = n->next, idx += 1)
+            {
+              CFG_Node *target = n->v;
+              D_Target target_info = rd_target_from_cfg(scratch.arena, target);
+              String8 label = rd_label_from_cfg(target);
+              String8 exe_name = str8_skip_last_slash(target_info.exe);
+              str8_list_pushf(scratch.arena, &lines, "\n#%I64u cfg:$%I64x enabled:%u label:%S executable:%S",
+                              idx, target->id, !rd_disabled_from_cfg(target), label, exe_name);
+            }
+            String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+            str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+          }break;
+          case RD_CmdKind_ListProcesses:
+          {
+            rd_cmd_output_clear();
+            D_Entity *selected_thread = d_entity_from_handle(rd_base_regs()->thread);
+            D_Entity *selected_process = d_entity_ancestor_from_kind(selected_thread, D_EntityKind_Process);
+            if(selected_process == &d_entity_nil)
+            {
+              selected_process = d_entity_from_handle(rd_base_regs()->process);
+            }
+            D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
+            String8List lines = {0};
+            str8_list_pushf(scratch.arena, &lines, "processes:%I64u running:%u", processes.count, d_ctrl_targets_running());
+            for(U64 idx = 0; idx < processes.count; idx += 1)
+            {
+              D_Entity *process = processes.v[idx];
+              U64 thread_count = 0;
+              U64 module_count = 0;
+              for(D_Entity *child = process->first; child != &d_entity_nil; child = child->next)
+              {
+                if(child->kind == D_EntityKind_Thread)
+                {
+                  thread_count += 1;
+                }
+                else if(child->kind == D_EntityKind_Module)
+                {
+                  module_count += 1;
+                }
+              }
+              String8 handle_string = d_string_from_handle(scratch.arena, process->handle);
+              String8 process_name = process->string.size != 0 ? str8_skip_last_slash(process->string) : str8_lit("???");
+              str8_list_pushf(scratch.arena, &lines, "\n#%I64u pid:%I64u handle:%S selected:%u threads:%I64u modules:%I64u name:%S",
+                              idx, process->id, handle_string, process == selected_process, thread_count, module_count, process_name);
+            }
+            String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+            str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+          }break;
+          case RD_CmdKind_ListThreads:
+          {
+            rd_cmd_output_clear();
+            D_Entity *selected_thread = d_entity_from_handle(rd_base_regs()->thread);
+            D_Event stop_event = d_ctrl_last_stop_event();
+            String8 stop_entity = d_string_from_handle(scratch.arena, stop_event.entity);
+            B32 targets_running = d_ctrl_targets_running();
+            String8List lines = {0};
+            str8_list_pushf(scratch.arena, &lines, "running:%u selected_thread:%S",
+                            targets_running, d_string_from_handle(scratch.arena, rd_base_regs()->thread));
+            if(targets_running)
+            {
+              str8_list_pushf(scratch.arena, &lines, " last_stop:{stale_while_running:1}");
+            }
+            else
+            {
+              str8_list_pushf(scratch.arena, &lines, " last_stop:{cause:%u entity:%S rip:0x%I64x}",
+                              stop_event.cause, stop_entity, stop_event.rip_vaddr);
+            }
+            D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
+            for(U64 process_idx = 0; process_idx < processes.count; process_idx += 1)
+            {
+              D_Entity *process = processes.v[process_idx];
+              String8 process_handle = d_string_from_handle(scratch.arena, process->handle);
+              String8 process_name = process->string.size != 0 ? str8_skip_last_slash(process->string) : str8_lit("???");
+              str8_list_pushf(scratch.arena, &lines, "\nprocess#%I64u pid:%I64u handle:%S name:%S",
+                              process_idx, process->id, process_handle, process_name);
+              U64 thread_idx = 0;
+              for(D_Entity *thread = process->first; thread != &d_entity_nil; thread = thread->next)
+              {
+                if(thread->kind != D_EntityKind_Thread) { continue; }
+                str8_list_pushf(scratch.arena, &lines, "\n  thread#%I64u id:%I64u handle:%S selected:%u frozen:%u soloed:%u",
+                                thread_idx, thread->id, d_string_from_handle(scratch.arena, thread->handle),
+                                thread == selected_thread, thread->is_frozen, thread->is_soloed);
+                if(targets_running)
+                {
+                  str8_list_pushf(scratch.arena, &lines, " rip:stale module:stale");
+                }
+                else
+                {
+                  U64 rip_vaddr = d_query_cached_rip_from_thread(thread);
+                  D_Entity *module = d_module_from_process_vaddr(process, rip_vaddr);
+                  String8 module_name = module != &d_entity_nil ? str8_skip_last_slash(module->string) : str8_lit("???");
+                  U64 module_base = module != &d_entity_nil ? module->vaddr_range.min : 0;
+                  U64 rip_voff = module != &d_entity_nil ? rip_vaddr - module_base : 0;
+                  str8_list_pushf(scratch.arena, &lines, " rip:0x%I64x module:%S+0x%I64x",
+                                  rip_vaddr, module_name, rip_voff);
+                }
+                thread_idx += 1;
+              }
+            }
+            String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+            str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+          }break;
+          case RD_CmdKind_ListModules:
+          {
+            rd_cmd_output_clear();
+            D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
+            String8List lines = {0};
+            U64 total_module_count = 0;
+            for(U64 process_idx = 0; process_idx < processes.count; process_idx += 1)
+            {
+              for(D_Entity *module = processes.v[process_idx]->first; module != &d_entity_nil; module = module->next)
+              {
+                if(module->kind == D_EntityKind_Module)
+                {
+                  total_module_count += 1;
+                }
+              }
+            }
+            str8_list_pushf(scratch.arena, &lines, "processes:%I64u modules:%I64u", processes.count, total_module_count);
+            Access *access = access_open();
+            for(U64 process_idx = 0; process_idx < processes.count; process_idx += 1)
+            {
+              D_Entity *process = processes.v[process_idx];
+              String8 process_handle = d_string_from_handle(scratch.arena, process->handle);
+              String8 process_name = process->string.size != 0 ? str8_skip_last_slash(process->string) : str8_lit("???");
+              str8_list_pushf(scratch.arena, &lines, "\nprocess#%I64u pid:%I64u handle:%S name:%S",
+                              process_idx, process->id, process_handle, process_name);
+              U64 module_idx = 0;
+              for(D_Entity *module = process->first; module != &d_entity_nil; module = module->next)
+              {
+                if(module->kind != D_EntityKind_Module) { continue; }
+                String8 module_handle = d_string_from_handle(scratch.arena, module->handle);
+                String8 module_name = module->string.size != 0 ? str8_skip_last_slash(module->string) : str8_lit("???");
+                D_Entity *debug_info_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
+                String8 debug_info_path_string = debug_info_path != &d_entity_nil ? debug_info_path->string : str8_zero();
+                U64 debug_info_timestamp = debug_info_path != &d_entity_nil ? debug_info_path->timestamp : 0;
+                FileProperties debug_info_props = properties_from_file_path(debug_info_path_string);
+                DI_Key dbgi_key = d_dbgi_key_from_module(module);
+                RDI_Parsed *rdi = di_rdi_from_key(access, dbgi_key, 0, 0);
+                str8_list_pushf(scratch.arena, &lines, "\n  module#%I64u handle:%S range:[0x%I64x,0x%I64x) name:%S path:%S",
+                                module_idx, module_handle, module->vaddr_range.min, module->vaddr_range.max,
+                                module_name, module->string);
+                str8_list_pushf(scratch.arena, &lines, " debug_info:{path:%S timestamp:%I64u exists:%u size:%I64u rdi_raw_size:%I64u}",
+                                debug_info_path_string, debug_info_timestamp, debug_info_props.modified != 0,
+                                debug_info_props.size, rdi->raw_data_size);
+                module_idx += 1;
+              }
+            }
+            access_close(access);
+            String8 output = str8_list_join(rd_state->cmd_output_arena, &lines, 0);
+            str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, output);
+          }break;
+          
           //- rjf: breakpoints
           case RD_CmdKind_AddBreakpoint:
           case RD_CmdKind_ToggleBreakpoint:
