@@ -421,3 +421,4 @@ Rng1U16 arm64_reg_code_rng_table[100] =
 };
 
 C_LINKAGE_END
+
