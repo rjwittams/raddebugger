@@ -10118,6 +10118,105 @@ rd_pop_regs(void)
   return regs;
 }
 
+////////////////////////////////
+//~ Command Output
+
+internal void
+rd_cmd_output_clear(void)
+{
+  arena_clear(rd_state->cmd_output_arena);
+  MemoryZeroStruct(&rd_state->cmd_outputs);
+}
+
+////////////////////////////////
+//~ Command Text Helpers
+
+internal D_Entity *
+rd_ctrl_entity_from_string(String8 string, D_EntityKind kind)
+{
+  D_Entity *result = &d_entity_nil;
+  
+  if(str8_match(string, str8_lit("selected"), 0) ||
+     str8_match(string, str8_lit("current"), 0))
+  {
+    switch(kind)
+    {
+      case D_EntityKind_Process:
+      {
+        D_Entity *thread = d_entity_from_handle(rd_base_regs()->thread);
+        result = d_entity_ancestor_from_kind(thread, D_EntityKind_Process);
+        if(result == &d_entity_nil)
+        {
+          result = d_entity_from_handle(rd_base_regs()->process);
+        }
+      }break;
+      case D_EntityKind_Thread:
+      {
+        result = d_entity_from_handle(rd_base_regs()->thread);
+      }break;
+      case D_EntityKind_Module:
+      {
+        result = d_entity_from_handle(rd_base_regs()->module);
+      }break;
+      default:{}break;
+    }
+  }
+  
+  if(result == &d_entity_nil)
+  {
+    D_Handle handle = d_handle_from_string(string);
+    D_Entity *entity = d_entity_from_handle(handle);
+    if(entity != &d_entity_nil && (kind == D_EntityKind_COUNT || entity->kind == kind))
+    {
+      result = entity;
+    }
+  }
+  
+  if(result == &d_entity_nil)
+  {
+    U64 id = 0;
+    if(try_u64_from_str8_c_rules(string, &id))
+    {
+      if(kind == D_EntityKind_COUNT)
+      {
+        D_EntityArray entities[] =
+        {
+          d_entity_array_from_kind(D_EntityKind_Process),
+          d_entity_array_from_kind(D_EntityKind_Thread),
+          d_entity_array_from_kind(D_EntityKind_Module),
+          d_entity_array_from_kind(D_EntityKind_Machine),
+        };
+        for(U64 array_idx = 0; array_idx < ArrayCount(entities) && result == &d_entity_nil; array_idx += 1)
+        {
+          D_EntityArray *array = &entities[array_idx];
+          for(U64 idx = 0; idx < array->count; idx += 1)
+          {
+            if(array->v[idx]->id == id)
+            {
+              result = array->v[idx];
+              break;
+            }
+          }
+        }
+      }
+      else
+      {
+        D_EntityArray array = d_entity_array_from_kind(kind);
+        for(U64 idx = 0; idx < array.count; idx += 1)
+        {
+          if(array.v[idx]->id == id)
+          {
+            result = array.v[idx];
+            break;
+          }
+        }
+      }
+    }
+  }
+  
+  return result;
+}
+
 internal void
 rd_regs_fill_slot_from_string(RD_RegSlot slot, String8 query_expr, String8 string)
 {
@@ -10152,7 +10251,29 @@ rd_regs_fill_slot_from_string(RD_RegSlot slot, String8 query_expr, String8 strin
     case RD_RegSlot_Thread:
     case RD_RegSlot_CtrlEntity:
     {
-      
+      D_EntityKind entity_kind = D_EntityKind_Null;
+      switch(slot)
+      {
+        case RD_RegSlot_Machine:    {entity_kind = D_EntityKind_Machine;}break;
+        case RD_RegSlot_Module:     {entity_kind = D_EntityKind_Module;}break;
+        case RD_RegSlot_Process:    {entity_kind = D_EntityKind_Process;}break;
+        case RD_RegSlot_Thread:     {entity_kind = D_EntityKind_Thread;}break;
+        case RD_RegSlot_CtrlEntity: {entity_kind = D_EntityKind_COUNT;}break;
+        default:{}break;
+      }
+      D_Entity *entity = rd_ctrl_entity_from_string(string, entity_kind);
+      if(entity != &d_entity_nil)
+      {
+        switch(slot)
+        {
+          case RD_RegSlot_Machine:    {rd_regs()->machine = entity->handle;}break;
+          case RD_RegSlot_Module:     {rd_regs()->module = entity->handle;}break;
+          case RD_RegSlot_Process:    {rd_regs()->process = entity->handle;}break;
+          case RD_RegSlot_Thread:     {rd_regs()->thread = entity->handle;}break;
+          case RD_RegSlot_CtrlEntity: {rd_regs()->ctrl_entity = entity->handle;}break;
+          default:{}break;
+        }
+      }
     }break;
     
     //- rjf: cfgs
@@ -12809,6 +12930,7 @@ rd_frame(void)
           //- rjf: external driver textual commands
           case RD_CmdKind_RunExternalDriverTextCommand:
           {
+            rd_cmd_output_clear();
             String8 msg = rd_regs()->string;
             String8List msg_parts = str8_split(scratch.arena, msg, (U8 *)" ", 1, 0);
             String8 cmd_name = str8_list_first(&msg_parts);
@@ -12830,42 +12952,7 @@ rd_frame(void)
                 }
               }
 
-              D_Entity *thread = &d_entity_nil;
-              if(str8_match(thread_or_process_string, str8_lit("selected"), 0))
-              {
-                thread = d_entity_from_handle(rd_base_regs()->thread);
-              }
-              else if(thread_or_process_string.size != 0)
-              {
-                D_Entity *entity = d_entity_from_handle(d_handle_from_string(thread_or_process_string));
-                if(entity != &d_entity_nil)
-                {
-                  if(entity->kind == D_EntityKind_Process)
-                  {
-                    thread = d_entity_child_from_kind(entity, D_EntityKind_Thread);
-                  }
-                  else
-                  {
-                    thread = entity;
-                  }
-                }
-                else
-                {
-                  U64 id = 0;
-                  if(try_u64_from_str8_c_rules(thread_or_process_string, &id))
-                  {
-                    D_EntityArray threads = d_entity_array_from_kind(D_EntityKind_Thread);
-                    for(U64 idx = 0; idx < threads.count; idx += 1)
-                    {
-                      if(threads.v[idx]->id == id)
-                      {
-                        thread = threads.v[idx];
-                        break;
-                      }
-                    }
-                  }
-                }
-              }
+              D_Entity *thread = rd_ctrl_entity_from_string(thread_or_process_string, D_EntityKind_Thread);
               if(thread == &d_entity_nil)
               {
                 thread = d_entity_from_handle(rd_base_regs()->thread);
@@ -12912,42 +12999,7 @@ rd_frame(void)
                 }
               }
 
-              D_Entity *thread = &d_entity_nil;
-              if(str8_match(thread_or_process_string, str8_lit("selected"), 0))
-              {
-                thread = d_entity_from_handle(rd_base_regs()->thread);
-              }
-              else if(thread_or_process_string.size != 0)
-              {
-                D_Entity *entity = d_entity_from_handle(d_handle_from_string(thread_or_process_string));
-                if(entity != &d_entity_nil)
-                {
-                  if(entity->kind == D_EntityKind_Process)
-                  {
-                    thread = d_entity_child_from_kind(entity, D_EntityKind_Thread);
-                  }
-                  else
-                  {
-                    thread = entity;
-                  }
-                }
-                else
-                {
-                  U64 id = 0;
-                  if(try_u64_from_str8_c_rules(thread_or_process_string, &id))
-                  {
-                    D_EntityArray threads = d_entity_array_from_kind(D_EntityKind_Thread);
-                    for(U64 idx = 0; idx < threads.count; idx += 1)
-                    {
-                      if(threads.v[idx]->id == id)
-                      {
-                        thread = threads.v[idx];
-                        break;
-                      }
-                    }
-                  }
-                }
-              }
+              D_Entity *thread = rd_ctrl_entity_from_string(thread_or_process_string, D_EntityKind_Thread);
               if(thread == &d_entity_nil)
               {
                 thread = d_entity_from_handle(rd_base_regs()->thread);
