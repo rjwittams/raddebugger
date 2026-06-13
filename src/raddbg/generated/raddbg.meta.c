@@ -62,7 +62,7 @@ str8_lit_comp(""),
 str8_lit_comp(""),
 };
 
-RD_VocabInfo rd_vocab_info_table[361] =
+RD_VocabInfo rd_vocab_info_table[362] =
 {
 {str8_lit_comp("type_view"), str8_lit_comp("type_views"), str8_lit_comp("Type View"), str8_lit_comp("Type Views"), RD_IconKind_Binoculars},
 {str8_lit_comp("file_path_map"), str8_lit_comp("file_path_maps"), str8_lit_comp("File Path Map"), str8_lit_comp("File Path Maps"), RD_IconKind_FileOutline},
@@ -367,6 +367,7 @@ RD_VocabInfo rd_vocab_info_table[361] =
 {str8_lit_comp("clear_breakpoints"), str8_lit_comp(""), str8_lit_comp("Clear Breakpoints"), str8_lit_comp(""), RD_IconKind_Trash},
 {str8_lit_comp("list_breakpoints"), str8_lit_comp(""), str8_lit_comp("List Breakpoints"), str8_lit_comp(""), RD_IconKind_Null},
 {str8_lit_comp("clear_output"), str8_lit_comp(""), str8_lit_comp("Clear Output"), str8_lit_comp(""), RD_IconKind_Null},
+{str8_lit_comp("read_output_log"), str8_lit_comp(""), str8_lit_comp("Read Output Log"), str8_lit_comp(""), RD_IconKind_Null},
 {str8_lit_comp("add_watch_pin"), str8_lit_comp(""), str8_lit_comp("Add Watch Pin"), str8_lit_comp(""), RD_IconKind_Pin},
 {str8_lit_comp("toggle_watch_pin"), str8_lit_comp(""), str8_lit_comp("Toggle Watch Pin"), str8_lit_comp(""), RD_IconKind_Pin},
 {str8_lit_comp("load_debug_info"), str8_lit_comp(""), str8_lit_comp("Load Debug Info"), str8_lit_comp(""), RD_IconKind_Module},
@@ -576,7 +577,7 @@ Rng1U64 rd_reg_slot_range_table[49] =
 {OffsetOf(RD_Regs, wm_event), OffsetOf(RD_Regs, wm_event) + sizeof(WM_Event *)},
 };
 
-RD_CmdKindInfo rd_cmd_kind_info_table[250] =
+RD_CmdKindInfo rd_cmd_kind_info_table[251] =
 {
 {0},
 { str8_lit_comp("launch_and_run"), str8_lit_comp("Starts debugging a new instance of a target, then runs."), str8_lit_comp("launch,start,run,target"), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*1)|(RD_CmdKindFlag_ListInIPCDocs*1)|(RD_CmdKindFlag_ListInTextPt*0)|(RD_CmdKindFlag_ListInTextRng*0), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*1)|(RD_QueryFlag_Required*1), RD_RegSlot_Cfg, str8_lit_comp("query:targets"), str8_lit_comp(""), D_EntityKind_Null}},
@@ -770,6 +771,7 @@ RD_CmdKindInfo rd_cmd_kind_info_table[250] =
 { str8_lit_comp("clear_breakpoints"), str8_lit_comp("Removes all breakpoints."), str8_lit_comp(""), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*1)|(RD_CmdKindFlag_ListInIPCDocs*1)|(RD_CmdKindFlag_ListInTextPt*0)|(RD_CmdKindFlag_ListInTextRng*0), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*0)|(RD_QueryFlag_Required*0), RD_RegSlot_Null, str8_lit_comp(""), str8_lit_comp(""), D_EntityKind_Null}},
 { str8_lit_comp("list_breakpoints"), str8_lit_comp("Lists all breakpoints."), str8_lit_comp(""), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*0)|(RD_CmdKindFlag_ListInIPCDocs*1)|(RD_CmdKindFlag_ListInTextPt*0)|(RD_CmdKindFlag_ListInTextRng*0), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*0)|(RD_QueryFlag_Required*0), RD_RegSlot_Null, str8_lit_comp(""), str8_lit_comp(""), D_EntityKind_Null}},
 { str8_lit_comp("clear_output"), str8_lit_comp("Clears all output."), str8_lit_comp(""), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*1)|(RD_CmdKindFlag_ListInIPCDocs*1)|(RD_CmdKindFlag_ListInTextPt*0)|(RD_CmdKindFlag_ListInTextRng*0), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*0)|(RD_QueryFlag_Required*0), RD_RegSlot_Null, str8_lit_comp(""), str8_lit_comp(""), D_EntityKind_Null}},
+{ str8_lit_comp("read_output_log"), str8_lit_comp("Reads the tail of the debugger output log."), str8_lit_comp(""), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*0)|(RD_CmdKindFlag_ListInIPCDocs*1)|(RD_CmdKindFlag_ListInTextPt*0)|(RD_CmdKindFlag_ListInTextRng*0), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*0)|(RD_QueryFlag_Required*0), RD_RegSlot_String, str8_lit_comp(""), str8_lit_comp(""), D_EntityKind_Null}},
 { str8_lit_comp("add_watch_pin"), str8_lit_comp("Places a watch pin at a given location (file path and line number or address)."), str8_lit_comp(""), str8_lit_comp("$watch_pins,"), (RD_CmdKindFlag_ListInUI*1)|(RD_CmdKindFlag_ListInIPCDocs*1)|(RD_CmdKindFlag_ListInTextPt*0)|(RD_CmdKindFlag_ListInTextRng*0), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*1)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*1)|(RD_QueryFlag_Required*1), RD_RegSlot_Expr, str8_lit_comp(""), str8_lit_comp(""), D_EntityKind_Null}},
 { str8_lit_comp("toggle_watch_pin"), str8_lit_comp("Places or removes a watch pin at a given location (file path and line number or address)."), str8_lit_comp(""), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*1)|(RD_CmdKindFlag_ListInIPCDocs*0)|(RD_CmdKindFlag_ListInTextPt*0)|(RD_CmdKindFlag_ListInTextRng*0), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*1)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*1)|(RD_QueryFlag_Required*1), RD_RegSlot_Expr, str8_lit_comp(""), str8_lit_comp(""), D_EntityKind_Null}},
 { str8_lit_comp("load_debug_info"), str8_lit_comp("Loads a debug info file."), str8_lit_comp(""), str8_lit_comp("$debug_infos,"), (RD_CmdKindFlag_ListInUI*1)|(RD_CmdKindFlag_ListInIPCDocs*1)|(RD_CmdKindFlag_ListInTextPt*0)|(RD_CmdKindFlag_ListInTextRng*0), {(RD_QueryFlag_AllowFiles*1)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*1)|(RD_QueryFlag_Required*1), RD_RegSlot_FilePath, str8_lit_comp("folder:\"$input\""), str8_lit_comp(""), D_EntityKind_Null}},
