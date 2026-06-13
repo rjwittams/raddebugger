@@ -1,0 +1,142 @@
+// Copyright (c) Epic Games Tools
+// Licensed under the MIT license (https://opensource.org/license/mit/)
+
+@table(name  base  off  size  is_vector  has_rdi  has_dwarf)
+ARM64_RegTable:
+{
+  {nil               -       0       0    - x -  }
+  {x0                -       0       8    - x x  }
+  {x1                -       0       8    - x x  }
+  {x2                -       0       8    - x x  }
+  {x3                -       0       8    - x x  }
+  {x4                -       0       8    - x x  }
+  {x5                -       0       8    - x x  }
+  {x6                -       0       8    - x x  }
+  {x7                -       0       8    - x x  }
+  {x8                -       0       8    - x x  }
+  {x9                -       0       8    - x x  }
+  {x10               -       0       8    - x x  }
+  {x11               -       0       8    - x x  }
+  {x12               -       0       8    - x x  }
+  {x13               -       0       8    - x x  }
+  {x14               -       0       8    - x x  }
+  {x15               -       0       8    - x x  }
+  {x16               -       0       8    - x x  }
+  {x17               -       0       8    - x x  }
+  {x18               -       0       8    - x x  }
+  {x19               -       0       8    - x x  }
+  {x20               -       0       8    - x x  }
+  {x21               -       0       8    - x x  }
+  {x22               -       0       8    - x x  }
+  {x23               -       0       8    - x x  }
+  {x24               -       0       8    - x x  }
+  {x25               -       0       8    - x x  }
+  {x26               -       0       8    - x x  }
+  {x27               -       0       8    - x x  }
+  {x28               -       0       8    - x x  }
+  {fp                -       0       8    - x x  }
+  {lr                -       0       8    - x x  }
+  {sp                -       0       8    - x x  }
+  {pc                -       0       8    - x x  }
+  {cpsr              -       0       4    - x -  }
+  {q0                -       0      16    x x x  }
+  {q1                -       0      16    x x x  }
+  {q2                -       0      16    x x x  }
+  {q3                -       0      16    x x x  }
+  {q4                -       0      16    x x x  }
+  {q5                -       0      16    x x x  }
+  {q6                -       0      16    x x x  }
+  {q7                -       0      16    x x x  }
+  {q8                -       0      16    x x x  }
+  {q9                -       0      16    x x x  }
+  {q10               -       0      16    x x x  }
+  {q11               -       0      16    x x x  }
+  {q12               -       0      16    x x x  }
+  {q13               -       0      16    x x x  }
+  {q14               -       0      16    x x x  }
+  {q15               -       0      16    x x x  }
+  {q16               -       0      16    x x x  }
+  {q17               -       0      16    x x x  }
+  {q18               -       0      16    x x x  }
+  {q19               -       0      16    x x x  }
+  {q20               -       0      16    x x x  }
+  {q21               -       0      16    x x x  }
+  {q22               -       0      16    x x x  }
+  {q23               -       0      16    x x x  }
+  {q24               -       0      16    x x x  }
+  {q25               -       0      16    x x x  }
+  {q26               -       0      16    x x x  }
+  {q27               -       0      16    x x x  }
+  {q28               -       0      16    x x x  }
+  {q29               -       0      16    x x x  }
+  {q30               -       0      16    x x x  }
+  {q31               -       0      16    x x x  }
+  //-
+  //- aliases
+  //-
+  {x29               fp      0       8    - - - }
+  {x30               lr      0       8    - - - }
+  {w0                x0      0       4    - - - }
+  {w1                x1      0       4    - - - }
+  {w2                x2      0       4    - - - }
+  {w3                x3      0       4    - - - }
+  {w4                x4      0       4    - - - }
+  {w5                x5      0       4    - - - }
+  {w6                x6      0       4    - - - }
+  {w7                x7      0       4    - - - }
+  {w8                x8      0       4    - - - }
+  {w9                x9      0       4    - - - }
+  {w10               x10     0       4    - - - }
+  {w11               x11     0       4    - - - }
+  {w12               x12     0       4    - - - }
+  {w13               x13     0       4    - - - }
+  {w14               x14     0       4    - - - }
+  {w15               x15     0       4    - - - }
+  {w16               x16     0       4    - - - }
+  {w17               x17     0       4    - - - }
+  {w18               x18     0       4    - - - }
+  {w19               x19     0       4    - - - }
+  {w20               x20     0       4    - - - }
+  {w21               x21     0       4    - - - }
+  {w22               x22     0       4    - - - }
+  {w23               x23     0       4    - - - }
+  {w24               x24     0       4    - - - }
+  {w25               x25     0       4    - - - }
+  {w26               x26     0       4    - - - }
+  {w27               x27     0       4    - - - }
+  {w28               x28     0       4    - - - }
+  {w29               fp      0       4    - - - }
+  {w30               lr      0       4    - - - }
+}
+
+@enum ARM64_RegCode:
+{
+  @expand(ARM64_RegTable a) `$(a.name)`,
+  COUNT,
+}
+
+@struct ARM64_RegBlock:
+{
+  @expand(ARM64_RegTable a) `$(a.name != 'nil' && a.base == '-' -> 'U' .. a.size*8 .. ' ' .. a.name)`,
+}
+
+@data(B8) arm64_reg_code_is_vector_table:
+{
+  @expand(ARM64_RegTable a) `$(a.is_vector == 'x' -> '1')$(a.is_vector != 'x' -> '0')`;
+}
+
+@data(String8) arm64_reg_code_name_table:
+{
+  @expand(ARM64_RegTable a) `str8_lit_comp("$(a.name)")`;
+}
+
+@data(U8) arm64_reg_code_base_table:
+{
+  @expand(ARM64_RegTable a) `$(a.base != '-' -> "ARM64_RegCode_" .. a.base)$(a.base == '-' -> 0)`;
+}
+
+@data(Rng1U16) arm64_reg_code_rng_table:
+{
+  `{0}`,
+  @expand(ARM64_RegTable a) `$(a.name != 'nil' && a.base == '-'-> ("{(U16)OffsetOf(ARM64_RegBlock, " .. a.name .. "), (U16)OffsetOf(ARM64_RegBlock, " .. a.name .. ") + " .. a.size .. "}"))$(a.name != 'nil' && a.base != '-' -> ("{(U16)OffsetOf(ARM64_RegBlock, " .. a.base .. ") + " .. a.off .. ", (U16)OffsetOf(ARM64_RegBlock, " .. a.base .. ") + " .. a.off .. " + " .. a.size .. "}"))`,
+}
