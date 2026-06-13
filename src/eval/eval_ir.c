@@ -1898,10 +1898,18 @@ e_push_irtree_and_type_from_expr(Arena *arena, E_IRTreeAndType *root_parent, E_I
                 }
                 
                 // rjf: find match
-                DI_Match match = di_match_from_string(string, match_disambiguating_idx, e_base_ctx->primary_dbg_info->dbgi_key, 0);
+                DI_Match match = e_match_from_rdi_name_maps(scratch.arena, e_base_ctx->primary_dbg_info->rdi, e_base_ctx->primary_dbg_info->dbgi_key, string, match_disambiguating_idx);
+                if(match.idx == 0)
+                {
+                  match = di_match_from_string(string, match_disambiguating_idx, e_base_ctx->primary_dbg_info->dbgi_key, 0);
+                }
                 
                 // rjf: match -> RDI
                 RDI_Parsed *rdi = di_rdi_from_key(access, match.key, 0, 0);
+                if(di_key_match(match.key, e_base_ctx->primary_dbg_info->dbgi_key))
+                {
+                  rdi = e_base_ctx->primary_dbg_info->rdi;
+                }
                 
                 // rjf: ambiguous global/thread variable in primary debug info -> try fully qualifying the name implicitly.
                 if((match.section_kind == RDI_SectionKind_GlobalVariables ||
@@ -1964,16 +1972,11 @@ e_push_irtree_and_type_from_expr(Arena *arena, E_IRTreeAndType *root_parent, E_I
 #endif
                 
                 // rjf: find dbg info from rdi
+                U32 dbg_info_num = e_dbg_info_num_from_rdi_prefer_primary(rdi);
                 E_DbgInfo *dbg_info = &e_dbg_info_nil;
-                U32 dbg_info_num = 0;
-                for EachIndex(idx, e_base_ctx->dbg_infos_count)
+                if(1 <= dbg_info_num && dbg_info_num <= e_base_ctx->dbg_infos_count)
                 {
-                  if(e_base_ctx->dbg_infos[idx].rdi == rdi)
-                  {
-                    dbg_info = &e_base_ctx->dbg_infos[idx];
-                    dbg_info_num = idx+1;
-                    break;
-                  }
+                  dbg_info = &e_base_ctx->dbg_infos[dbg_info_num-1];
                 }
                 
                 // rjf: find module from dbgi key
