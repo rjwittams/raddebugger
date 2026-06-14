@@ -1,6 +1,25 @@
 // Copyright (c) Epic Games Tools
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
+Test(d2r_high_pc_voff)
+{
+  DW2_ParseCtx unit_parse_ctx = {0};
+  unit_parse_ctx.version = DW_Version_5;
+
+  U64 base_vaddr = 0x10000000;
+  U64 voff_base = 0x120;
+
+  DW2_FormVal high_pc_addr = {0};
+  high_pc_addr.kind = DW_FormKind_Addr;
+  high_pc_addr.addr = base_vaddr + 0x180;
+  TestCheck(d2r_voff_opl_from_high_pc(&unit_parse_ctx, base_vaddr, voff_base, &high_pc_addr) == 0x180);
+
+  DW2_FormVal high_pc_size = {0};
+  high_pc_size.kind = DW_FormKind_Data4;
+  high_pc_size.u128.u64[0] = 0x60;
+  TestCheck(d2r_voff_opl_from_high_pc(&unit_parse_ctx, base_vaddr, voff_base, &high_pc_size) == 0x180);
+}
+
 SkippedTest(d2r_regressions)
 {
   String8 radbin_path = test_build_exe_path(arena, s("radbin"));
