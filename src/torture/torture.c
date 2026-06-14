@@ -276,7 +276,7 @@ t_radbin_path(void)
 #if OS_WINDOWS
     g_radbin_path = full_path_from_path(arena, str8_lit("radbin.exe"));
 #else
-    g_radbin_path = full_path_from_path(arena, str8_lit("radbin"));
+    g_radbin_path = push_str8f(arena, "%S/radbin", get_process_info()->binary_path);
 #endif
   }
   AssertAlways(g_radbin_path.size);
