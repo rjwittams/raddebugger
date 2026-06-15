@@ -2463,7 +2463,7 @@ d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 
       }
     }
   }
-  
+
   if(!is_good && !is_stale)
   {
     D_UnwindStepResult fallback_result = d_unwind_step__frame_pointer_arm64(process_handle, regs, endt_us);
