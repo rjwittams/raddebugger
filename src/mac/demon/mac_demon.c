@@ -2508,7 +2508,7 @@ mac_dmn_push_event_exception(Arena *arena, DMN_EventList *events, MAC_DMN_Entity
   e->kind = DMN_EventKind_Exception;
   e->process = mac_dmn_handle_from_entity(process_entity);
   e->arch = process->arch;
-  e->signo = signo;
+  e->code = signo;
   e->exception_repeated = 1;
   if(thread_entity != 0)
   {
