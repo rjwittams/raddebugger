@@ -465,6 +465,27 @@ byte_size_from_arch(Arch arch)
   return bit_size_from_arch(arch) / 8;
 }
 
+internal ArchCallReturnAddressStorageKind
+arch_call_return_address_storage_kind(Arch arch)
+{
+  ArchCallReturnAddressStorageKind result = ArchCallReturnAddressStorageKind_Null;
+  switch(arch)
+  {
+    case Arch_x64:
+    case Arch_x86:
+    {
+      result = ArchCallReturnAddressStorageKind_Stack;
+    }break;
+    case Arch_arm64:
+    case Arch_arm32:
+    {
+      result = ArchCallReturnAddressStorageKind_LinkRegister;
+    }break;
+    default: break;
+  }
+  return result;
+}
+
 internal U64
 max_ops_per_instruction_from_arch(Arch arch)
 {
@@ -473,9 +494,9 @@ max_ops_per_instruction_from_arch(Arch arch)
   {
     case Arch_Null: break;
     case Arch_x64: max_ops = 1; break;
+    case Arch_arm64: max_ops = 1; break;
     case Arch_x86:
-    case Arch_arm32:
-    case Arch_arm64: NotImplemented; break;
+    case Arch_arm32: NotImplemented; break;
     default: InvalidPath;
   }
   return max_ops;
@@ -489,9 +510,9 @@ min_instruction_size_from_arch(Arch arch)
   {
     case Arch_Null: break;
     case Arch_x64: min_instruction_size = 1; break;
+    case Arch_arm64: min_instruction_size = 4; break;
     case Arch_x86:
-    case Arch_arm32:
-    case Arch_arm64: NotImplemented; break;
+    case Arch_arm32: NotImplemented; break;
     default: InvalidPath;
   }
   return min_instruction_size;
@@ -500,8 +521,17 @@ min_instruction_size_from_arch(Arch arch)
 internal U64
 max_instruction_size_from_arch(Arch arch)
 {
-  // TODO(rjf): make this real
-  return 64;
+  U64 max_instruction_size = 0;
+  switch(arch)
+  {
+    case Arch_Null: break;
+    case Arch_x64: max_instruction_size = 64; break;
+    case Arch_arm64: max_instruction_size = 4; break;
+    case Arch_x86:
+    case Arch_arm32: NotImplemented; break;
+    default: InvalidPath;
+  }
+  return max_instruction_size;
 }
 
 ////////////////////////////////
