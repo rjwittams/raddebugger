@@ -3530,6 +3530,12 @@ dmn_tls_root_vaddr_from_thread(DMN_Handle handle)
 }
 
 internal B32
+dmn_thread_get_module_tls_vaddr(DMN_Handle thread, DMN_Handle module, U64 *vaddr_out)
+{
+  return 0;
+}
+
+internal B32
 dmn_thread_read_reg_block(DMN_Handle handle, void *reg_block)
 {
   B32 result = 0;
