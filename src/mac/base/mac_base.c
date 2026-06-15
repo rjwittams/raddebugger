@@ -1592,8 +1592,8 @@ main(int argc, char **argv)
         if(got_final_result && size > 0)
         {
           String8 full_name = str8(buffer, size);
-          String8 name_chopped = str8_chop_last_slash(full_name);
-          info->binary_path = push_str8_copy(mac_state.arena, name_chopped);
+          info->binary_file_path = push_str8_copy(mac_state.arena, full_name);
+          info->binary_path = str8_chop_last_slash(info->binary_file_path);
         }
       }
 
@@ -1602,10 +1602,12 @@ main(int argc, char **argv)
         info->initial_path = get_current_path(mac_state.arena);
       }
 
-      // grab home directory
+      // grab program/user data paths
       {
         char *home = getenv("HOME");
-        info->user_program_data_path = str8_cstring(home);
+        info->user_program_config_data_path = str8f(mac_state.arena, "%s/Library/Application Support", home);
+        info->user_program_cache_data_path = str8f(mac_state.arena, "%s/Library/Caches", home);
+        info->user_program_logs_data_path = str8f(mac_state.arena, "%s/Library/Logs", home);
       }
 
       scratch_end(scratch);
