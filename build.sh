@@ -46,7 +46,11 @@ cc_link_dll="-fPIC"
 
 # --- External Libraries ------------------------------------------------------
 # sudo apt install -y pkg-config libfreetype6-dev libx11-dev libxext-dev libgl-dev libegl-dev
-if [[ -x "$(command -v pkg-config)" ]]; then
+if [[ "$host_os" == "Darwin" ]]; then
+  cc_font_provider=""
+  cc_os_gfx="-framework Cocoa"
+  cc_render=""
+elif [[ -x "$(command -v pkg-config)" ]]; then
   cc_font_provider="$(pkg-config --cflags --libs freetype2)"  
   cc_os_gfx="$(pkg-config --cflags --libs x11 xext)"
   cc_render="$(pkg-config --cflags --libs gl egl)"
@@ -54,12 +58,6 @@ else
   cc_font_provider="-I/usr/include/freetype2 -lfreetype"
   cc_os_gfx="-lX11 -lXext"
   cc_render="-lGL -lEGL"
-fi
-
-if [[ "$host_os" == "Darwin" ]]; then
-  cc_os_gfx="-framework Cocoa"
-  cc_render=""
-  cc_font_provider=""
 fi
 
 # --- Choose Compile/Link Lines -----------------------------------------------
