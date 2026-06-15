@@ -43,6 +43,38 @@ ARM64_RegCode_lr,
 ARM64_RegCode_sp,
 ARM64_RegCode_pc,
 ARM64_RegCode_cpsr,
+ARM64_RegCode_q0,
+ARM64_RegCode_q1,
+ARM64_RegCode_q2,
+ARM64_RegCode_q3,
+ARM64_RegCode_q4,
+ARM64_RegCode_q5,
+ARM64_RegCode_q6,
+ARM64_RegCode_q7,
+ARM64_RegCode_q8,
+ARM64_RegCode_q9,
+ARM64_RegCode_q10,
+ARM64_RegCode_q11,
+ARM64_RegCode_q12,
+ARM64_RegCode_q13,
+ARM64_RegCode_q14,
+ARM64_RegCode_q15,
+ARM64_RegCode_q16,
+ARM64_RegCode_q17,
+ARM64_RegCode_q18,
+ARM64_RegCode_q19,
+ARM64_RegCode_q20,
+ARM64_RegCode_q21,
+ARM64_RegCode_q22,
+ARM64_RegCode_q23,
+ARM64_RegCode_q24,
+ARM64_RegCode_q25,
+ARM64_RegCode_q26,
+ARM64_RegCode_q27,
+ARM64_RegCode_q28,
+ARM64_RegCode_q29,
+ARM64_RegCode_q30,
+ARM64_RegCode_q31,
 ARM64_RegCode_x29,
 ARM64_RegCode_x30,
 ARM64_RegCode_w0,
@@ -116,13 +148,45 @@ U64 lr;
 U64 sp;
 U64 pc;
 U32 cpsr;
+U128 q0;
+U128 q1;
+U128 q2;
+U128 q3;
+U128 q4;
+U128 q5;
+U128 q6;
+U128 q7;
+U128 q8;
+U128 q9;
+U128 q10;
+U128 q11;
+U128 q12;
+U128 q13;
+U128 q14;
+U128 q15;
+U128 q16;
+U128 q17;
+U128 q18;
+U128 q19;
+U128 q20;
+U128 q21;
+U128 q22;
+U128 q23;
+U128 q24;
+U128 q25;
+U128 q26;
+U128 q27;
+U128 q28;
+U128 q29;
+U128 q30;
+U128 q31;
 };
 
 C_LINKAGE_BEGIN
-extern B8 arm64_reg_code_is_vector_table[68];
-extern String8 arm64_reg_code_name_table[68];
-extern U8 arm64_reg_code_base_table[68];
-extern Rng1U16 arm64_reg_code_rng_table[68];
+extern B8 arm64_reg_code_is_vector_table[100];
+extern String8 arm64_reg_code_name_table[100];
+extern U8 arm64_reg_code_base_table[100];
+extern Rng1U16 arm64_reg_code_rng_table[100];
 
 C_LINKAGE_END
 
