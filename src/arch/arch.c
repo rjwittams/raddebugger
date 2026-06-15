@@ -68,6 +68,74 @@ arch_reg_code_from_name(ARCH_Info *arch_info, String8 name)
   return result;
 }
 
+internal U64
+arch_trap_instruction_size_from_code(Arch arch, String8 code)
+{
+  U64 result = 0;
+  switch(arch)
+  {
+    case Arch_x64:
+    case Arch_x86:
+    {
+      if(code.size >= 1 && code.str[0] == 0xcc)
+      {
+        result = 1;
+      }
+    }break;
+    case Arch_arm64:
+    {
+      if(code.size >= 4)
+      {
+        U32 inst = ((U32)code.str[0] <<  0 |
+                    (U32)code.str[1] <<  8 |
+                    (U32)code.str[2] << 16 |
+                    (U32)code.str[3] << 24);
+        if((inst & 0xffe0001fu) == 0xd4200000u)
+        {
+          result = 4;
+        }
+      }
+    }break;
+    default:{}break;
+  }
+  return result;
+}
+
+internal U64
+arch_software_breakpoint_pc_offset(OperatingSystem os, Arch arch)
+{
+  ARCH_Info *arch_info = arch_info_from_arch(arch);
+  U64 result = 0;
+  switch(arch)
+  {
+    case Arch_x64:
+    case Arch_x86:
+    {
+      result = arch_info->trap_instruction.size;
+    }break;
+    case Arch_arm64:
+    case Arch_arm32:
+    {
+      switch(os)
+      {
+        case OperatingSystem_Windows:
+        {
+          result = arch_info->trap_instruction.size;
+        }break;
+        case OperatingSystem_Linux:
+        case OperatingSystem_Mac:
+        case OperatingSystem_Null:
+        default:
+        {
+          result = 0;
+        }break;
+      }
+    }break;
+    default: break;
+  }
+  return result;
+}
+
 internal ARCH_RegCode
 arch_reg_code_from_rdi(Arch arch, RDI_RegCode code)
 {
