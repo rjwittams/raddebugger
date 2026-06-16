@@ -10932,6 +10932,7 @@ rd_init(CmdLine *cmdln)
   rd_state->quit_after_success = (cmd_line_has_flag(cmdln, str8_lit("quit_after_success")) ||
                                   cmd_line_has_flag(cmdln, str8_lit("q")));
   rd_state->override_focus_on_stop = (cmd_line_has_flag(cmdln, s("no_focus_on_stop")));
+  rd_state->mac_window_decorations = 1;
   rd_state->user_path_arena = arena_alloc();
   rd_state->project_path_arena = arena_alloc();
   rd_state->theme_path_arena = arena_alloc();
@@ -11870,8 +11871,8 @@ rd_frame(void)
     local_persist B32 initialized = 0;
     local_persist B32 last_mac_window_decorations = 0;
     local_persist B32 last_mac_native_menu_bar = 0;
-    B32 mac_window_decorations = rd_setting_b32_from_name(str8_lit("mac_window_decorations"));
-    B32 mac_native_menu_bar = rd_setting_b32_from_name(str8_lit("mac_native_menu_bar"));
+    B32 mac_window_decorations = rd_state->mac_window_decorations;
+    B32 mac_native_menu_bar = rd_state->mac_native_menu_bar;
     if(!initialized || last_mac_window_decorations != mac_window_decorations)
     {
       wm_set_preferred_window_decorations(mac_window_decorations);
@@ -13105,6 +13106,8 @@ rd_frame(void)
     // but cannot evaluate before this point, so we need to prep for next frame
     //
     rd_state->alt_menu_bar_enabled = rd_setting_b32_from_name(s("focus_menu_bar_with_alt"));
+    rd_state->mac_window_decorations = rd_setting_b32_from_name(s("mac_window_decorations"));
+    rd_state->mac_native_menu_bar = rd_setting_b32_from_name(s("mac_native_menu_bar"));
     rd_state->use_default_stl_type_views = rd_setting_b32_from_name(s("use_default_stl_type_views"));
     rd_state->use_default_ue_type_views = rd_setting_b32_from_name(s("use_default_ue_type_views"));
     rd_state->auto_download_debug_info = rd_setting_b32_from_name(s("auto_download_debug_info"));

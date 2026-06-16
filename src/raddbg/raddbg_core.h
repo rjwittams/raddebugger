@@ -409,6 +409,8 @@ struct RD_State
   // rjf: unpacked settings (cached, because they need to be used
   // earlier than setting evaluation is legal in a frame)
   B32 alt_menu_bar_enabled;
+  B32 mac_window_decorations;
+  B32 mac_native_menu_bar;
   B32 use_default_stl_type_views;
   B32 use_default_ue_type_views;
   B32 auto_download_debug_info;
