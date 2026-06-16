@@ -941,7 +941,8 @@ r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
           }break;
           case R_PassKind_Blur:
           {
-            if(r_mtl_state->blur_pipeline != 0)
+            if(r_mtl_state->blur_pipeline != 0 &&
+               mtl_window->stage_scratch_color != 0)
             {
               R_PassParams_Blur *params = render_pass->params_blur;
               R_MTL_BlurUniforms uniforms = r_mtl_blur_uniforms_from_params(params, viewport_dim);
@@ -961,6 +962,20 @@ r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
               }
               if(has_scissor)
               {
+                id<MTLBlitCommandEncoder> blit_encoder = [command_buffer blitCommandEncoder];
+                MTLOrigin blit_origin = MTLOriginMake(0, 0, 0);
+                MTLSize blit_size = MTLSizeMake([mtl_window->stage_color width], [mtl_window->stage_color height], 1);
+                [blit_encoder copyFromTexture:mtl_window->stage_color
+                                   sourceSlice:0
+                                   sourceLevel:0
+                                  sourceOrigin:blit_origin
+                                    sourceSize:blit_size
+                                     toTexture:mtl_window->stage_scratch_color
+                              destinationSlice:0
+                              destinationLevel:0
+                             destinationOrigin:blit_origin];
+                [blit_encoder endEncoding];
+
                 for(Axis2 axis = (Axis2)0; axis < Axis2_COUNT; axis = (Axis2)(axis + 1))
                 {
                   id<MTLTexture> src = (axis == Axis2_X ? mtl_window->stage_color : mtl_window->stage_scratch_color);
