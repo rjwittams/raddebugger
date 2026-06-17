@@ -163,6 +163,7 @@ str8_lit_comp(
 "  result.a *= uniforms.opacity;\n"
 "  result.a *= corner_sdf_t;\n"
 "  result.a *= border_sdf_t;\n"
+"  result.rgb *= uniforms.opacity;\n"
 "  return result;\n"
 "}\n"
 "vertex VertexOut fullscreen_vertex(uint vertex_id [[vertex_id]],\n"

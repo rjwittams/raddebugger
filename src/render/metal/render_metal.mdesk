@@ -155,6 +155,7 @@ fragment float4 rect_fragment(VertexOut in [[stage_in]],
   result.a *= uniforms.opacity;
   result.a *= corner_sdf_t;
   result.a *= border_sdf_t;
+  result.rgb *= uniforms.opacity;
   return result;
 }
 vertex VertexOut fullscreen_vertex(uint vertex_id [[vertex_id]],
