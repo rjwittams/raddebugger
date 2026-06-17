@@ -9818,14 +9818,25 @@ rd_theme_tree_from_name(Arena *arena, Access *access, String8 theme_name)
     if(theme_tree == &md_nil_node)
     {
       String8 path = str8f(scratch.arena, "%S/raddbg/themes/%S", get_process_info()->user_program_config_data_path, theme_name);
-      U64 endt_us = now_time_us()+100;
-      if(rd_state->frame_index <= 5)
+      if(properties_from_file_path(path).created != 0)
       {
-        endt_us = now_time_us()+50000;
+        U64 endt_us = now_time_us()+100;
+        if(rd_state->frame_index <= 5)
+        {
+          endt_us = now_time_us()+50000;
+        }
+        U128 hash = fs_hash_from_path_range(path, r1u64(0, max_U64), endt_us);
+        String8 data = c_data_from_hash(access, hash);
+        MD_Node *file_theme_tree = md_tree_from_string(arena, data);
+        for(MD_Node *n = file_theme_tree; !md_node_is_nil(n); n = md_node_rec_depth_first_pre(n, file_theme_tree).next)
+        {
+          if(str8_match(n->string, str8_lit("theme_color"), 0))
+          {
+            theme_tree = file_theme_tree;
+            break;
+          }
+        }
       }
-      U128 hash = fs_hash_from_path_range(path, r1u64(0, max_U64), endt_us);
-      String8 data = c_data_from_hash(access, hash);
-      theme_tree = md_tree_from_string(arena, data);
     }
   }
   scratch_end(scratch);
