@@ -384,6 +384,18 @@ r_mtl_scissor_from_clip(Rng2F32 clip, Vec2S32 drawable_size, F32 scale, MTLSciss
   return result;
 }
 
+internal MTLScissorRect
+r_mtl_scissor_expand_y(MTLScissorRect rect, Vec2S32 drawable_size, U64 pad_px)
+{
+  U64 y0 = rect.y;
+  U64 y1 = rect.y + rect.height;
+  y0 = (y0 > pad_px ? y0 - pad_px : 0);
+  y1 = Min((U64)drawable_size.y, y1 + pad_px);
+  rect.y = (NSUInteger)y0;
+  rect.height = (NSUInteger)(y1 - y0);
+  return rect;
+}
+
 internal R_MTL_BlurUniforms
 r_mtl_blur_uniforms_from_params(R_PassParams_Blur *params, Vec2F32 viewport_dim)
 {
@@ -941,7 +953,8 @@ r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
           }break;
           case R_PassKind_Blur:
           {
-            if(r_mtl_state->blur_pipeline != 0)
+            if(r_mtl_state->blur_pipeline != 0 &&
+               mtl_window->stage_scratch_color != 0)
             {
               R_PassParams_Blur *params = render_pass->params_blur;
               R_MTL_BlurUniforms uniforms = r_mtl_blur_uniforms_from_params(params, viewport_dim);
@@ -961,13 +974,27 @@ r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
               }
               if(has_scissor)
               {
+                U64 blur_pad_px = (U64)ceil_f32(params->blur_size) + 2;
+                F32 blur_pad = (F32)blur_pad_px / Max(scale, 1.f);
+                Rng2F32 x_rect = params->rect;
+                x_rect.y0 -= blur_pad;
+                x_rect.y1 += blur_pad;
+                MTLScissorRect x_scissor = r_mtl_scissor_expand_y(scissor, mtl_window->drawable_size, blur_pad_px);
                 for(Axis2 axis = (Axis2)0; axis < Axis2_COUNT; axis = (Axis2)(axis + 1))
                 {
                   id<MTLTexture> src = (axis == Axis2_X ? mtl_window->stage_color : mtl_window->stage_scratch_color);
                   id<MTLTexture> dst = (axis == Axis2_X ? mtl_window->stage_scratch_color : mtl_window->stage_color);
-                  uniforms.direction = (axis == Axis2_X ? v2f32(1.f/(F32)Max(mtl_window->drawable_size.x, 1), 0) : v2f32(0, 1.f/(F32)Max(mtl_window->drawable_size.y, 1)));
+                  R_MTL_BlurUniforms pass_uniforms = uniforms;
+                  MTLScissorRect pass_scissor = scissor;
+                  if(axis == Axis2_X)
+                  {
+                    pass_uniforms.rect = x_rect;
+                    MemoryZeroArray(pass_uniforms.corner_radii.v);
+                    pass_scissor = x_scissor;
+                  }
+                  pass_uniforms.direction = (axis == Axis2_X ? v2f32(1.f/(F32)Max(mtl_window->drawable_size.x, 1), 0) : v2f32(0, 1.f/(F32)Max(mtl_window->drawable_size.y, 1)));
                   U64 uniform_offset = 0;
-                  id<MTLBuffer> uniform_buffer = r_mtl_upload_buffer(&uniforms, sizeof(uniforms), 256, &uniform_offset);
+                  id<MTLBuffer> uniform_buffer = r_mtl_upload_buffer(&pass_uniforms, sizeof(pass_uniforms), 256, &uniform_offset);
 
                   MTLRenderPassDescriptor *blur_pass = mtl_window->blur_pass;
                   blur_pass.colorAttachments[0].texture = dst;
@@ -975,7 +1002,7 @@ r_window_submit(WM_Window window, R_Handle window_equip, R_PassList *passes)
                   blur_pass.colorAttachments[0].storeAction = MTLStoreActionStore;
                   id<MTLRenderCommandEncoder> encoder = [command_buffer renderCommandEncoderWithDescriptor:blur_pass];
                   [encoder setRenderPipelineState:r_mtl_state->blur_pipeline];
-                  [encoder setScissorRect:scissor];
+                  [encoder setScissorRect:pass_scissor];
                   [encoder setVertexBuffer:uniform_buffer offset:uniform_offset atIndex:0];
                   [encoder setFragmentBuffer:uniform_buffer offset:uniform_offset atIndex:0];
                   [encoder setFragmentTexture:src atIndex:0];
