@@ -1129,7 +1129,7 @@ file_iter_begin(Arena *arena, String8 path, FileIterFlags flags)
   base_iter->flags = flags;
   MAC_FileIter *iter = (MAC_FileIter *)base_iter->memory;
   {
-    String8 path_copy = push_str8_copy(arena, path);
+    String8 path_copy = path.size == 0 ? str8_lit("/") : push_str8_copy(arena, path);
     iter->dir = opendir((char *)path_copy.str);
     iter->path = path_copy;
   }
@@ -1192,7 +1192,10 @@ internal void
 file_iter_end(FileIter *iter)
 {
   MAC_FileIter *mac_iter = (MAC_FileIter *)iter->memory;
-  closedir(mac_iter->dir);
+  if(mac_iter->dir != 0)
+  {
+    closedir(mac_iter->dir);
+  }
 }
 
 //- rjf: directory creation
