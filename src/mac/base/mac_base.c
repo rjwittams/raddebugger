@@ -707,23 +707,26 @@ semaphore_take(Semaphore semaphore, U64 endt_us)
 }
 
 internal void
-semaphore_drop(Semaphore semaphore)
+semaphore_drop_count(Semaphore semaphore, U64 count)
 {
-  for(;;)
+  for(U64 idx = 0; idx < count; idx += 1)
   {
-    int err = sem_post((sem_t*)semaphore.u64[0]);
-    if(err == 0)
+    for(;;)
     {
+      int err = sem_post((sem_t*)semaphore.u64[0]);
+      if(err == 0)
+      {
+        break;
+      }
+      else
+      {
+        if(errno == EAGAIN)
+        {
+          continue;
+        }
+      }
       break;
     }
-    else
-    {
-      if(errno == EAGAIN)
-      {
-        continue;
-      }
-    }
-    break;
   }
 }
 
@@ -1229,9 +1232,9 @@ make_directory(String8 path)
 //~ @per_os_impl Aborting
 
 internal void
-abort_self(S32 exit_code)
+abort_self(U64 exit_code)
 {
-  exit(exit_code);
+  exit((int)exit_code);
 }
 
 ////////////////////////////////
