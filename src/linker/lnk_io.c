@@ -117,7 +117,7 @@ lnk_file_set_delete_on_close(File handle, B32 delete_file)
   FILE_DISPOSITION_INFO file_disposition = {0};
   file_disposition.DeleteFile            = (BOOL)delete_file;
   is_set = SetFileInformationByHandle((HANDLE)handle.u64[0], FileDispositionInfo, &file_disposition, sizeof(file_disposition));
-#elif OS_LINUX
+#elif OS_LINUX || OS_MAC
   // no equivalent
   is_set = 1;
 #else
@@ -144,7 +144,7 @@ lnk_file_rename(File handle, String8 new_name)
   MemoryCopy(rename_info->FileName, new_name16.str, new_name16.size * sizeof(new_name16.str[0]));
 
   is_renamed = SetFileInformationByHandle((HANDLE)handle.u64[0], FileRenameInfo, buffer, buffer_size);
-#else
+#elif OS_LINUX
   char fd_proc_path[128];
   raddbg_snprintf(fd_proc_path, sizeof(fd_proc_path), "/proc/self/fd/%d", (int)handle.u64[0]);
 
@@ -155,6 +155,13 @@ lnk_file_rename(File handle, String8 new_name)
   if (path_size > 0) {
     is_renamed = rename(path, (char *)push_cstr(scratch.arena, new_name).str) == 0;
   }
+#elif OS_MAC
+  char old_path[MAXPATHLEN] = {0};
+  String8 new_name_copy = push_cstr(scratch.arena, new_name);
+  is_renamed = (fcntl((int)handle.u64[0], F_GETPATH, old_path) != -1 &&
+                rename(old_path, (char *)new_name_copy.str) == 0);
+#else
+# error "TODO: file rename"
 #endif
   scratch_end(scratch);
   return is_renamed;
@@ -247,14 +254,18 @@ THREAD_POOL_TASK_FUNC(lnk_memory_map_file_task)
       CloseHandle(file_handle);
     }
   }
-#elif OS_LINUX
+#elif OS_LINUX || OS_MAC
   int fd = open((char *)push_cstr(scratch.arena, task->path_arr.v[task_id]).str, O_RDONLY);
   if (fd != -1) {
     struct stat st = {0};
     if (fstat(fd, &st) == 0) {
-      void *file_data = mmap(0, st.st_size, PROT_READ|PROT_WRITE, MAP_PRIVATE, fd, 0);
-      if (file_data != MAP_FAILED) {
-        task->data_arr.v[task_id] = str8(file_data, st.st_size);
+      if (st.st_size > 0) {
+        void *file_data = mmap(0, st.st_size, PROT_READ|PROT_WRITE, MAP_PRIVATE, fd, 0);
+        if (file_data != MAP_FAILED) {
+          task->data_arr.v[task_id] = str8(file_data, st.st_size);
+        }
+      } else {
+        task->data_arr.v[task_id] = str8_zero();
       }
     }
     close(fd);
@@ -343,9 +354,11 @@ lnk_write_data_list_to_file_path(String8 path, String8 temp_path, String8List da
 
   if (!file_match(file_handle, file_zero())) {
     // try to reserve up front file size
+#if !OS_MAC
     if (!file_reserve_size(file_handle, data.total_size)) {
       lnk_log(LNK_Log_IO_Write, "Failed to pre-allocate file %S with size %M", open_file_path, data.total_size);
     }
+#endif
 
     // write data nodes
     U64 bytes_written = 0;
