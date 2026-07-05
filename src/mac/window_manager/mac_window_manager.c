@@ -1574,13 +1574,17 @@ wm_graphical_message(B32 error, String8 title, String8 message)
 }
 
 internal String8
-wm_graphical_pick_file(Arena *arena, String8 initial_path)
+wm_graphical_pick_file(Arena *arena, String8 title, String8 initial_path)
 {
   Temp scratch = scratch_begin(&arena, 1);
   NSOpenPanel *panel = [NSOpenPanel openPanel];
   [panel setCanChooseFiles:YES];
   [panel setCanChooseDirectories:NO];
   [panel setAllowsMultipleSelection:NO];
+  if(title.size != 0)
+  {
+    [panel setTitle:mac_wm_ns_string_from_string8(scratch.arena, title)];
+  }
   if(initial_path.size != 0)
   {
     NSString *ns_path = mac_wm_ns_string_from_string8(scratch.arena, initial_path);
