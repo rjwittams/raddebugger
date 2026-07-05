@@ -193,6 +193,7 @@
 #include "rdi_from_dwarf/tests/rdi_from_dwarf_tests.c"
 #include "rdi_from_pdb/tests/rdi_from_pdb_tests.c"
 #include "raddbg/tests/raddbg_tests.c"
+#include "torture_text.c"
 
 internal B32 frame(void) { return 0; }
 
