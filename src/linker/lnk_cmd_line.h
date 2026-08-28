@@ -26,7 +26,7 @@ typedef enum LNK_EnvVarRule
   LNK_EnvVarRule_Bash,
 #if OS_WINDOWS
   LNK_EnvVarRule_Current,
-#elif OS_LINUX
+#elif OS_LINUX || OS_MAC
   LNK_EnvVarRule_Current,
 #else
 # error "define env var rules"

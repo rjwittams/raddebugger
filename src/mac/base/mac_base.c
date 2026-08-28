@@ -136,6 +136,20 @@ mac_thread_entry_point(void *ptr)
 }
 
 ////////////////////////////////
+//~ rjf: @per_os_impl Debugger Attachment Checking
+
+internal B32
+debugger_is_attached(void)
+{
+  int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
+  struct kinfo_proc info = {0};
+  size_t info_size = sizeof(info);
+  B32 result = (sysctl(mib, ArrayCount(mib), &info, &info_size, 0, 0) == 0 &&
+                (info.kp_proc.p_flag & P_TRACED) != 0);
+  return result;
+}
+
+////////////////////////////////
 //~ @per_os_impl Platform Time Functions
 
 internal U64
@@ -1272,6 +1286,12 @@ process_launch(ProcessLaunchParams *params)
   int file_actions_init_code = posix_spawn_file_actions_init(&file_actions);
   if(file_actions_init_code == 0)
   {
+    Temp scratch = scratch_begin(0, 0);
+    if(params->path.size != 0)
+    {
+      int chdir_code = posix_spawn_file_actions_addchdir_np(&file_actions, (char *)push_cstr(scratch.arena, params->path).str);
+      Assert(chdir_code == 0);
+    }
     int stdout_code = posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdout_file.u64[0], STDOUT_FILENO);
     int stderr_code = posix_spawn_file_actions_adddup2(&file_actions, (int)params->stderr_file.u64[0], STDERR_FILENO);
     int stdin_code = posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdin_file.u64[0], STDIN_FILENO);
@@ -1279,19 +1299,14 @@ process_launch(ProcessLaunchParams *params)
     int attr_init_code = posix_spawnattr_init(&attr);
     if(attr_init_code == 0)
     {
-      Temp scratch = scratch_begin(0, 0);
-
       // package argv
       char **argv = push_array(scratch.arena, char *, params->cmd_line.node_count + 1);
       {
-        String8List l = str8_split_path(scratch.arena, params->path);
-        str8_list_push(scratch.arena, &l, params->cmd_line.first->string);
-        String8 path_to_exe = str8_path_list_join_by_style(scratch.arena, &l, PathStyle_SystemAbsolute);
-        argv[0] = (char *)path_to_exe.str;
+        argv[0] = (char *)push_cstr(scratch.arena, params->cmd_line.first->string).str;
         U64 arg_idx = 1;
         for EachNode(n, String8Node, params->cmd_line.first->next)
         {
-          argv[arg_idx] = (char *)n->string.str;
+          argv[arg_idx] = (char *)push_cstr(scratch.arena, n->string).str;
           arg_idx += 1;
         }
       }
@@ -1306,16 +1321,16 @@ process_launch(ProcessLaunchParams *params)
       {
         envp = push_array(scratch.arena, char *, params->env.node_count + 2);
         U64 env_idx = 0;
-        for EachNode(n, String8Node, params->cmd_line.first)
+        for EachNode(n, String8Node, params->env.first)
         {
-          envp[env_idx] = (char *)n->string.str;
+          envp[env_idx] = (char *)push_cstr(scratch.arena, n->string).str;
           env_idx += 1;
         }
       }
 
       // spawn process
       pid_t pid = 0;
-      int spawn_code = posix_spawn(&pid, argv[0], &file_actions, &attr, argv, envp);
+      int spawn_code = posix_spawnp(&pid, argv[0], &file_actions, &attr, argv, envp);
       if(spawn_code == 0)
       {
         handle.u64[0] = (U64)pid;
@@ -1323,13 +1338,20 @@ process_launch(ProcessLaunchParams *params)
 
       // clean up attributes
       int attr_destroy_code = posix_spawnattr_destroy(&attr);
-      scratch_end(scratch);
     }
+    scratch_end(scratch);
 
     // clean up file actions
     int file_actions_destroy_code = posix_spawn_file_actions_destroy(&file_actions);
   }
   return handle;
+}
+
+internal U64
+pid_from_process(Process process)
+{
+  U64 result = process.u64[0];
+  return result;
 }
 
 internal B32
