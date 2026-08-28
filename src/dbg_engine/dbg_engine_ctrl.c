@@ -2233,6 +2233,14 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
     {
       U64 start_ip = arch_ip_from_reg_block(arch_info, regs_block);
       U64 start_sp = arch_sp_from_reg_block(arch_info, regs_block);
+      D_Entity *start_module = d_module_from_process_vaddr(process_entity, start_ip);
+      log_infof("unwind_probe frame=%I64u ip=0x%I64x sp=0x%I64x module=\"%S\"\n",
+                frame_node_count, start_ip, start_sp, start_module->string);
+      if(frame_node_count >= 64)
+      {
+        unwind.flags |= D_UnwindFlag_Error;
+        break;
+      }
       
       //- rjf: cancel on zero rip (except the top frame)
       if(start_ip == 0 && frame_node_count > 1)
