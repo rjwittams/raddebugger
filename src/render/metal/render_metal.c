@@ -604,7 +604,10 @@ r_tex2d_alloc(R_ResourceKind kind, Vec2S32 size, R_Tex2DFormat format, void *dat
                                                                                         height:Max(size.y, 1)
                                                                                      mipmapped:NO];
     descriptor.usage = MTLTextureUsageShaderRead;
-    descriptor.storageMode = (kind == R_ResourceKind_Static ? MTLStorageModePrivate : MTLStorageModeShared);
+    if(kind == R_ResourceKind_Static)
+    {
+      descriptor.storageMode = MTLStorageModePrivate;
+    }
     texture->texture = [r_mtl_state->device newTextureWithDescriptor:descriptor];
     if(data != 0 && texture->texture != 0)
     {
