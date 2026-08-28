@@ -3021,6 +3021,10 @@ d_ctrl_thread__append_resolved_module_user_bp_traps(Arena *arena, D_EvalScope *e
       }
       log_infof("resolve_expr_bp module=\"%S\" expr=\"%S\" mode=%i vaddr=0x%I64x\n",
                 module_path, expr, eval.irtree.mode, vaddr);
+      for(E_Msg *msg = eval.msgs.first; msg != 0; msg = msg->next)
+      {
+        log_infof("resolve_expr_bp_msg kind=%i text=\"%S\"\n", msg->kind, msg->text);
+      }
       if(vaddr != 0 || bp->flags != 0)
       {
         DMN_Trap trap = {process_dmn, vaddr, (U64)bp};
