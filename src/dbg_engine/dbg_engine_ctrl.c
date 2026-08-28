@@ -2934,8 +2934,6 @@ d_ctrl_thread__append_resolved_module_user_bp_traps(Arena *arena, D_EvalScope *e
   DI_Key dbgi_key = d_dbgi_key_from_debug_info_path(debug_info_path_entity);
   RDI_Parsed *rdi = di_rdi_from_key(access, dbgi_key, 0, 0);
   U64 base_vaddr = module_entity->vaddr_range.min;
-  log_infof("resolve_module_bps module=\"%S\" dbgi=\"%S\" base=0x%I64x rdi_nil=%i bp_count=%I64u\n",
-            module_path, dbgi_path, base_vaddr, rdi == &rdi_parsed_nil, user_bps->count);
   for(D_BreakpointNode *n = user_bps->first; n != 0; n = n->next)
   {
     D_Breakpoint *bp = &n->v;
@@ -3013,20 +3011,11 @@ d_ctrl_thread__append_resolved_module_user_bp_traps(Arena *arena, D_EvalScope *e
     else if(bp->vaddr_expr.size != 0)
     {
       String8 expr = bp->vaddr_expr;
-      DI_Match warm_match = di_match_from_string(expr, 0, 0, 1, dbgi_key, max_U64);
-      log_infof("resolve_expr_bp_warm expr=\"%S\" section=%i idx=%u count=%u\n",
-                expr, warm_match.section_kind, warm_match.idx, warm_match.count);
       E_Eval eval = e_eval_from_string(expr);
       U64 vaddr = eval.value.u64;
       if(eval.irtree.mode == E_Mode_Value)
       {
         vaddr = e_value_eval_from_eval(eval).value.u64;
-      }
-      log_infof("resolve_expr_bp module=\"%S\" expr=\"%S\" mode=%i vaddr=0x%I64x\n",
-                module_path, expr, eval.irtree.mode, vaddr);
-      for(E_Msg *msg = eval.msgs.first; msg != 0; msg = msg->next)
-      {
-        log_infof("resolve_expr_bp_msg kind=%i text=\"%S\"\n", msg->kind, msg->text);
       }
       if(vaddr != 0 || bp->flags != 0)
       {
@@ -4197,6 +4186,7 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
     ctx->dbg_infos_count  = eval_dbg_infos_count;
     ctx->primary_dbg_info = eval_dbg_infos_primary;
     ctx->dbg_info_from_name_map = eval_dbg_info_from_name_map;
+    ctx->debug_info_match_endt_us = max_U64;
     
     //- rjf: fill modules
     ctx->modules        = eval_modules;

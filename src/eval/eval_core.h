@@ -797,6 +797,7 @@ struct E_BaseCtx
   U64 dbg_infos_count;
   E_DbgInfo *primary_dbg_info;
   E_String2NumMap *dbg_info_from_name_map;
+  U64 debug_info_match_endt_us;
   
   // rjf: modules
   E_Module *modules;
