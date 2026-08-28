@@ -361,6 +361,26 @@ struct RD_SchemaIRExt
   MD_NodePtrList schemas;
 };
 
+internal B32
+rd_schema_node_matches_current_platform(MD_Node *node)
+{
+  B32 result = 1;
+  MD_Node *platform_tag = md_tag_from_string(node, str8_lit("platform"), 0);
+  if(!md_node_is_nil(platform_tag))
+  {
+    result = 0;
+    for MD_EachNode(arg, platform_tag->first)
+    {
+      if(operating_system_from_string(arg->string) == OperatingSystem_CURRENT)
+      {
+        result = 1;
+        break;
+      }
+    }
+  }
+  return result;
+}
+
 E_TYPE_IREXT_FUNCTION_DEF(schema)
 {
   RD_SchemaIRExt *ext = push_array(arena, RD_SchemaIRExt, 1);
@@ -391,7 +411,8 @@ E_TYPE_ACCESS_FUNCTION_DEF(schema)
     {
       for MD_EachNode(child, n->v->first)
       {
-        if(str8_match(child->string, expr->first->next->string, 0))
+        if(str8_match(child->string, expr->first->next->string, 0) &&
+           rd_schema_node_matches_current_platform(child))
         {
           child_schema = child;
           break;
@@ -666,7 +687,8 @@ E_TYPE_EXPAND_INFO_FUNCTION_DEF(schema)
       MD_Node *schema = n->v;
       for MD_EachNode(child, schema->first)
       {
-        if(!md_node_has_tag(child, str8_lit("no_expand"), 0))
+        if(!md_node_has_tag(child, str8_lit("no_expand"), 0) &&
+           rd_schema_node_matches_current_platform(child))
         {
           MD_Node *expand_check = md_tag_from_string(child, str8_lit("expand_if"), 0);
           B32 expand_this_child = 1;

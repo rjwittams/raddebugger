@@ -11323,8 +11323,6 @@ rd_wm_set_main_menu(void)
     RD_MenuCmd(RD_CmdKind_TabBarBottom),
     RD_MenuSep(),
     RD_MenuCmd(RD_CmdKind_ResetToDefaultPanels),
-    RD_MenuCmd(RD_CmdKind_ResetToCompactPanels),
-    RD_MenuCmd(RD_CmdKind_ResetToSimplePanels),
   };
   RD_AppMenuItemSpec tab_items[] =
   {
@@ -12389,7 +12387,7 @@ rd_frame(void)
         }
         rd_request_frame();
       }
-      
+
       //- rjf: try menu bar operations
       if(rd_state->alt_menu_bar_enabled && wm_window_is_focused(ws->os) && !wm_application_menu_bar_is_native())
       {
@@ -13570,13 +13568,17 @@ rd_frame(void)
     ////////////////////////////
     //- rjf: do installation/uninstallation of app
     //
-    B32 installed = rd_setting_b32_from_name(s("install_to_system"));
-    B32 last_installed = rd_state->installed;
-    if(installed != last_installed)
+#if !OS_MAC
     {
-      sh_install_or_uninstall_self(1, installed);
-      rd_state->installed = installed;
+      B32 installed = rd_setting_b32_from_name(s("install_to_system"));
+      B32 last_installed = rd_state->installed;
+      if(installed != last_installed)
+      {
+        sh_install_or_uninstall_self(1, installed);
+        rd_state->installed = installed;
+      }
     }
+#endif
     
     ////////////////////////////
     //- rjf: send update check if needed

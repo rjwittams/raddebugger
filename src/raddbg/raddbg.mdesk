@@ -304,9 +304,9 @@ RD_VocabTable:
         'rounded_corner_amount': @range[0, 1] f32,
       
       //- mac window settings
-      @default(1) @display_name('Native Window Decorations') @description("Shows native traffic lights in custom window title bars.")
+      @platform('mac') @default(1) @display_name('Native Window Decorations') @description("Shows native traffic lights in custom window title bars.")
         'mac_window_decorations': bool,
-      @default(0) @display_name('Native Menu Bar') @description("Uses the macOS menu bar instead of RAD's per-window menu.")
+      @platform('mac') @default(0) @display_name('Native Menu Bar') @description("Uses the macOS menu bar instead of RAD's per-window menu.")
         'mac_native_menu_bar': bool,
 
       //- rjf: code formatting settings
@@ -337,7 +337,7 @@ RD_VocabTable:
         'check_for_updates': bool,
       
       //- rjf: system installation
-      @display_name('Install To System') @description("Controls whether or not associated installation files are created on the system, for tighter integration with the operating system shell.") 'install_to_system': bool,
+      @platform('windows', 'linux') @display_name('Install To System') @description("Controls whether or not associated installation files are created on the system, for tighter integration with the operating system shell.") 'install_to_system': bool,
     }
     ```
   }
