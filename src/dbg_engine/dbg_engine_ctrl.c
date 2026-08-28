@@ -3013,6 +3013,9 @@ d_ctrl_thread__append_resolved_module_user_bp_traps(Arena *arena, D_EvalScope *e
     else if(bp->vaddr_expr.size != 0)
     {
       String8 expr = bp->vaddr_expr;
+      DI_Match warm_match = di_match_from_string(expr, 0, 0, 1, dbgi_key, max_U64);
+      log_infof("resolve_expr_bp_warm expr=\"%S\" section=%i idx=%u count=%u\n",
+                expr, warm_match.section_kind, warm_match.idx, warm_match.count);
       E_Eval eval = e_eval_from_string(expr);
       U64 vaddr = eval.value.u64;
       if(eval.irtree.mode == E_Mode_Value)
