@@ -2934,6 +2934,8 @@ d_ctrl_thread__append_resolved_module_user_bp_traps(Arena *arena, D_EvalScope *e
   DI_Key dbgi_key = d_dbgi_key_from_debug_info_path(debug_info_path_entity);
   RDI_Parsed *rdi = di_rdi_from_key(access, dbgi_key, 0, 0);
   U64 base_vaddr = module_entity->vaddr_range.min;
+  log_infof("resolve_module_bps module=\"%S\" dbgi=\"%S\" base=0x%I64x rdi_nil=%i bp_count=%I64u\n",
+            module_path, dbgi_path, base_vaddr, rdi == &rdi_parsed_nil, user_bps->count);
   for(D_BreakpointNode *n = user_bps->first; n != 0; n = n->next)
   {
     D_Breakpoint *bp = &n->v;
@@ -3017,6 +3019,8 @@ d_ctrl_thread__append_resolved_module_user_bp_traps(Arena *arena, D_EvalScope *e
       {
         vaddr = e_value_eval_from_eval(eval).value.u64;
       }
+      log_infof("resolve_expr_bp module=\"%S\" expr=\"%S\" mode=%i vaddr=0x%I64x\n",
+                module_path, expr, eval.irtree.mode, vaddr);
       if(vaddr != 0 || bp->flags != 0)
       {
         DMN_Trap trap = {process_dmn, vaddr, (U64)bp};
