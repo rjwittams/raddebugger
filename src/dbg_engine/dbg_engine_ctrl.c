@@ -4186,6 +4186,7 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
     ctx->dbg_infos_count  = eval_dbg_infos_count;
     ctx->primary_dbg_info = eval_dbg_infos_primary;
     ctx->dbg_info_from_name_map = eval_dbg_info_from_name_map;
+    ctx->debug_info_match_endt_us = max_U64;
     
     //- rjf: fill modules
     ctx->modules        = eval_modules;
