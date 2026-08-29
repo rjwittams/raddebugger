@@ -4099,7 +4099,7 @@ d_ctrl_thread__open_crash_dump(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
           }break;
         }
 
-        // rjf: reject dumps with unsupported or incomplete target information
+        // Reject dumps with unsupported or incomplete target information
         if(process_arch == Arch_Null || process_os == OperatingSystem_Null || threads_count == 0)
         {
           stored = 0;
