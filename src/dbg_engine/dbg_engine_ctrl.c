@@ -5004,10 +5004,22 @@ d_ctrl_thread__open_crash_dump(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
             process_os = OperatingSystem_Windows;
           }break;
         }
+
+        // Reject dumps with unsupported or incomplete target information
+        if(process_arch == Arch_Null || process_os == OperatingSystem_Null || threads_count == 0)
+        {
+          stored = 0;
+          threads_count = 0;
+          thread_names_count = 0;
+          modules_count = 0;
+        }
         
         // rjf: create process handle
-        d_ctrl_state->ctrl_thread_dump_handle_id_gen += 1;
-        process = d_dump_handle_make(D_MachineID_Local, d_ctrl_state->ctrl_thread_dump_handle_id_gen);
+        if(stored)
+        {
+          d_ctrl_state->ctrl_thread_dump_handle_id_gen += 1;
+          process = d_dump_handle_make(D_MachineID_Local, d_ctrl_state->ctrl_thread_dump_handle_id_gen);
+        }
         
         // rjf: gather threads
         dump_threads_count = threads_count;
@@ -5144,6 +5156,7 @@ d_ctrl_thread__open_crash_dump(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   //////////////////////////////
   //- rjf: record process creation
   //
+  if(stored)
   {
     D_Event *evt = d_event_list_push(scratch.arena, &evts);
     evt->kind      = D_EventKind_NewProc;
@@ -5152,6 +5165,10 @@ d_ctrl_thread__open_crash_dump(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
     evt->arch      = process_arch;
     evt->os        = process_os;
     evt->string    = path;
+  }
+  else
+  {
+    log_user_errorf("Could not open crash dump \"%S\": expected an x86 or x64 Windows Minidump.", path);
   }
   
   //////////////////////////////
@@ -5328,9 +5345,9 @@ d_ctrl_thread__open_crash_dump(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   {
     D_Event *event = d_event_list_push(scratch.arena, &evts);
     event->kind   = D_EventKind_Stopped;
-    event->cause  = D_EventCause_Finished;
+    event->cause  = stored ? D_EventCause_Finished : D_EventCause_Error;
     event->msg_id = msg->msg_id;
-    if(exception_thread_id != 0)
+    if(stored && exception_thread_id != 0)
     {
       D_Handle thread = {0};
       for EachIndex(idx, dump_threads_count)
