@@ -14,6 +14,7 @@ Environment:
   RADDBG_RELEASE_CODESIGN_IDENTITY  Developer ID Application identity.
   RADDBG_RELEASE_ADHOC=1            Permit an ad-hoc test build instead.
   RADDBG_MACOS_DEPLOYMENT_TARGET    Minimum macOS version (default: 14.0).
+  RADDBG_RELEASE_BUNDLE_IDENTIFIER  Bundle ID (default: org.changedirection.raddbg).
   RADDBG_RELEASE_ENTITLEMENTS       Release entitlement plist override.
 
 The script builds but does not submit the resulting archive for notarization.
@@ -63,6 +64,8 @@ repo_root=$(git rev-parse --show-toplevel)
 
 deployment_target=${RADDBG_MACOS_DEPLOYMENT_TARGET:-14.0}
 [[ "$deployment_target" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || fail "invalid deployment target: $deployment_target"
+bundle_identifier=${RADDBG_RELEASE_BUNDLE_IDENTIFIER:-org.changedirection.raddbg}
+[[ "$bundle_identifier" =~ ^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$ ]] || fail "invalid bundle identifier: $bundle_identifier"
 
 release_identity=${RADDBG_RELEASE_CODESIGN_IDENTITY:-}
 allow_adhoc=${RADDBG_RELEASE_ADHOC:-0}
@@ -147,6 +150,7 @@ build_slice "$other_arch" 0
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp src/mac/raddbg_Info.plist "$app/Contents/Info.plist"
 cp src/mac/raddbg.icns "$app/Contents/Resources/raddbg.icns"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $bundle_identifier" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string $deployment_target" "$app/Contents/Info.plist"
 lipo -create \
   "$stage_root/arm64/raddbg" \
@@ -190,6 +194,7 @@ ditto -c -k --keepParent "$universal_dsym" "$dsym_archive"
 require_tracked_files_clean "release build changed tracked files"
 
 echo "[release] commit: $release_commit ($release_version)"
+echo "[release] bundle identifier: $bundle_identifier"
 echo "[release] app: $app"
 echo "[release] dSYM: $universal_dsym"
 echo "[release] archive: $app_archive"
