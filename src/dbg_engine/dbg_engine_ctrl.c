@@ -62,7 +62,7 @@ d_string_from_event_kind(D_EventKind kind)
     case D_EventKind_ModuleDebugInfoPathChange:         { result = str8_lit("ModuleDebugInfoPathChange");}break;
     case D_EventKind_DebugString:                       { result = str8_lit("DebugString");}break;
     case D_EventKind_ThreadName:                        { result = str8_lit("ThreadName");}break;
-    case D_EventKind_PlatformTLSResolved:               { result = str8_lit("PlatformTLSResolved");}break;
+    case D_EventKind_PlatformTLSResolution:             { result = str8_lit("PlatformTLSResolution");}break;
     case D_EventKind_MemReserve:                        { result = str8_lit("MemReserve");}break;
     case D_EventKind_MemCommit:                         { result = str8_lit("MemCommit");}break;
     case D_EventKind_MemDecommit:                       { result = str8_lit("MemDecommit");}break;
@@ -628,6 +628,7 @@ d_serialized_string_from_event(Arena *arena, D_Event *event, U64 max)
     str8_serial_push_struct(scratch.arena, &srl, &event->parent);
     str8_serial_push_struct(scratch.arena, &srl, &event->arch);
     str8_serial_push_struct(scratch.arena, &srl, &event->u64_code);
+    str8_serial_push_struct(scratch.arena, &srl, &event->platform_tls_status);
     str8_serial_push_struct(scratch.arena, &srl, &event->entity_id);
     str8_serial_push_struct(scratch.arena, &srl, &event->vaddr_rng);
     str8_serial_push_struct(scratch.arena, &srl, &event->rip_vaddr);
@@ -664,6 +665,7 @@ d_event_from_serialized_string(Arena *arena, String8 string)
     read_off += str8_deserial_read_struct(string, read_off, &event.parent);
     read_off += str8_deserial_read_struct(string, read_off, &event.arch);
     read_off += str8_deserial_read_struct(string, read_off, &event.u64_code);
+    read_off += str8_deserial_read_struct(string, read_off, &event.platform_tls_status);
     read_off += str8_deserial_read_struct(string, read_off, &event.entity_id);
     read_off += str8_deserial_read_struct(string, read_off, &event.vaddr_rng);
     read_off += str8_deserial_read_struct(string, read_off, &event.rip_vaddr);
@@ -6848,27 +6850,41 @@ d_ctrl_thread__resolve_platform_tls(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   Temp scratch = scratch_begin(0, 0);
   D_Entity *thread = d_entity_from_handle(msg->entity);
   U64 platform_tls_vaddr = msg->vaddr;
+  D_PlatformTLSResolutionStatus status = D_PlatformTLSResolutionStatus_Failed;
   U64 resolved_vaddr = 0;
-  B32 success = 0;
+  String8 error = {0};
   if(thread != &d_entity_nil && thread->kind == D_EntityKind_Thread && platform_tls_vaddr != 0)
   {
     DMN_TLSAddressResult tls_address = dmn_tls_vaddr_from_thread(scratch.arena, ctrl_ctx, d_dmn_from_handle(thread->handle), platform_tls_vaddr);
     ins_atomic_u64_inc_eval(&d_ctrl_state->mem_gen);
     ins_atomic_u64_inc_eval(&d_ctrl_state->reg_gen);
     ins_atomic_u64_inc_eval(&d_ctrl_state->run_gen);
-    if(tls_address.success)
+    if(tls_address.success && tls_address.vaddr != 0)
     {
-      success = 1;
+      status = D_PlatformTLSResolutionStatus_Resolved;
       resolved_vaddr = tls_address.vaddr;
     }
+    else
+    {
+      error = tls_address.error.size != 0 ? tls_address.error : str8_lit("platform TLS resolution failed");
+    }
+  }
+  else if(platform_tls_vaddr == 0)
+  {
+    error = str8_lit("platform TLS descriptor address is zero");
+  }
+  else
+  {
+    error = str8_lit("platform TLS resolution requires a valid thread");
   }
   D_EventList evts = {0};
   D_Event *evt = d_event_list_push(scratch.arena, &evts);
-  evt->kind = D_EventKind_PlatformTLSResolved;
+  evt->kind = D_EventKind_PlatformTLSResolution;
   evt->msg_id = msg->msg_id;
   evt->entity = msg->entity;
-  evt->u64_code = success;
+  evt->platform_tls_status = status;
   evt->vaddr_rng = r1u64(platform_tls_vaddr, resolved_vaddr);
+  evt->string = error;
   d_c2u_push_events(&evts);
   scratch_end(scratch);
   ProfEnd();
