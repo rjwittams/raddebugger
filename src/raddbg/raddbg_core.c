@@ -5914,7 +5914,7 @@ rd_window_frame(void)
       cfg_node_release(rd_state->cfg, cfg_node_child_from_string(window, str8_lit("maximized")));
     }
     
-    //- rjf: scale changes -> xform layout font size and refresh raster caches
+    //- Scale changes -> xform layout font size and refresh raster caches
     F32 layout_scale = wm_layout_scale_from_window(ws->os);
     F32 backing_scale = wm_backing_scale_from_window(ws->os);
     if(layout_scale != ws->last_layout_scale)
