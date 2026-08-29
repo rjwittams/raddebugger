@@ -104,12 +104,17 @@ TEST(mac_exception_is_software_breakpoint)
   exception.exception = EXC_BREAKPOINT;
   exception.code_count = 1;
 
+#if ARCH_ARM64
   exception.code[0] = EXC_ARM_BREAKPOINT;
   T_Ok(mac_dmn_exception_is_software_breakpoint(Arch_arm64, &exception));
 
   exception.code[0] = EXC_ARM_DA_DEBUG;
   T_Ok(!mac_dmn_exception_is_software_breakpoint(Arch_arm64, &exception));
 
+  exception.is_valid = 0;
+  exception.code[0] = EXC_ARM_BREAKPOINT;
+  T_Ok(!mac_dmn_exception_is_software_breakpoint(Arch_arm64, &exception));
+#elif ARCH_X64
   exception.code[0] = EXC_I386_BPT;
   T_Ok(mac_dmn_exception_is_software_breakpoint(Arch_x64, &exception));
 
@@ -117,8 +122,9 @@ TEST(mac_exception_is_software_breakpoint)
   T_Ok(!mac_dmn_exception_is_software_breakpoint(Arch_x64, &exception));
 
   exception.is_valid = 0;
-  exception.code[0] = EXC_ARM_BREAKPOINT;
-  T_Ok(!mac_dmn_exception_is_software_breakpoint(Arch_arm64, &exception));
+  exception.code[0] = EXC_I386_BPT;
+  T_Ok(!mac_dmn_exception_is_software_breakpoint(Arch_x64, &exception));
+#endif
 }
 #endif
 
