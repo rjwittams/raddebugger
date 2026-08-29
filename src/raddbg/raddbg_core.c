@@ -11340,6 +11340,7 @@ rd_wm_set_main_menu(void)
   {
     RD_MenuCmd(RD_CmdKind_Open),
     RD_MenuCmd(RD_CmdKind_OpenSourceFileFromDebugInfo),
+    RD_MenuCmd(RD_CmdKind_OpenCrashDump),
     RD_MenuSep(),
     RD_MenuCmd(RD_CmdKind_NewProject),
     RD_MenuCmd(RD_CmdKind_OpenProject),
