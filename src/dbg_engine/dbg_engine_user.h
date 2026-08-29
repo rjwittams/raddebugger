@@ -211,6 +211,7 @@ typedef enum D_MsgKind
   D_MsgKind_Detach,
   D_MsgKind_Run,
   D_MsgKind_SingleStep,
+  D_MsgKind_TargetCallU64,
   D_MsgKind_ResolvePlatformTLS,
   D_MsgKind_SetUserEntryPoints,
   D_MsgKind_SetModuleDebugInfoPath,

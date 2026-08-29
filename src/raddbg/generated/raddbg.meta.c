@@ -62,7 +62,7 @@ str8_lit_comp(""),
 str8_lit_comp(""),
 };
 
-RD_VocabInfo rd_vocab_info_table[370] =
+RD_VocabInfo rd_vocab_info_table[371] =
 {
 {str8_lit_comp("type_view"), str8_lit_comp("type_views"), str8_lit_comp("Type View"), str8_lit_comp("Type Views"), RD_IconKind_Binoculars},
 {str8_lit_comp("file_path_map"), str8_lit_comp("file_path_maps"), str8_lit_comp("File Path Map"), str8_lit_comp("File Path Maps"), RD_IconKind_FileOutline},
@@ -193,6 +193,7 @@ RD_VocabInfo rd_vocab_info_table[370] =
 {str8_lit_comp("halt"), str8_lit_comp(""), str8_lit_comp("Halt"), str8_lit_comp(""), RD_IconKind_Pause},
 {str8_lit_comp("soft_halt_refresh"), str8_lit_comp(""), str8_lit_comp("Soft Halt Refresh"), str8_lit_comp(""), RD_IconKind_Refresh},
 {str8_lit_comp("set_thread_ip"), str8_lit_comp(""), str8_lit_comp("Set Thread IP"), str8_lit_comp(""), RD_IconKind_Null},
+{str8_lit_comp("target_call_u64"), str8_lit_comp(""), str8_lit_comp("Target Call U64"), str8_lit_comp(""), RD_IconKind_Null},
 {str8_lit_comp("run_to_line"), str8_lit_comp(""), str8_lit_comp("Run To Line"), str8_lit_comp(""), RD_IconKind_Play},
 {str8_lit_comp("run_to_name"), str8_lit_comp(""), str8_lit_comp("Run To Name"), str8_lit_comp(""), RD_IconKind_Play},
 {str8_lit_comp("run"), str8_lit_comp(""), str8_lit_comp("Run"), str8_lit_comp(""), RD_IconKind_Play},
@@ -599,7 +600,7 @@ Rng1U64 rd_reg_slot_range_table[56] =
 {OffsetOf(RD_Regs, wm_event), OffsetOf(RD_Regs, wm_event) + sizeof(WM_Event *)},
 };
 
-RD_CmdKindInfo rd_cmd_kind_info_table[257] =
+RD_CmdKindInfo rd_cmd_kind_info_table[258] =
 {
 {0},
 { str8_lit_comp("launch_and_run"), str8_lit_comp("Starts debugging a new instance of a target, then runs."), str8_lit_comp("launch,start,run,target"), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*1)|(RD_CmdKindFlag_ListInIPCDocs*1), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*1)|(RD_QueryFlag_Required*1), RD_RegSlot_Cfg, str8_lit_comp("query:targets")}},
@@ -617,6 +618,7 @@ RD_CmdKindInfo rd_cmd_kind_info_table[257] =
 { str8_lit_comp("halt"), str8_lit_comp("Halts all attached processes."), str8_lit_comp("pause"), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*1)|(RD_CmdKindFlag_ListInIPCDocs*1), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*0)|(RD_QueryFlag_Required*0), RD_RegSlot_Null, str8_lit_comp("")}},
 { str8_lit_comp("soft_halt_refresh"), str8_lit_comp("Interrupts all attached processes to collect data, and then resumes them."), str8_lit_comp(""), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*0)|(RD_CmdKindFlag_ListInIPCDocs*0), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*0)|(RD_QueryFlag_Required*0), RD_RegSlot_Null, str8_lit_comp("")}},
 { str8_lit_comp("set_thread_ip"), str8_lit_comp("Sets the specified thread's instruction pointer at the specified address."), str8_lit_comp(""), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*0)|(RD_CmdKindFlag_ListInIPCDocs*1), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*1)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*1)|(RD_QueryFlag_Required*1), RD_RegSlot_Vaddr, str8_lit_comp("")}},
+{ str8_lit_comp("target_call_u64"), str8_lit_comp("Calls a function in a stopped target thread and reports a 64-bit return value."), str8_lit_comp(""), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*0)|(RD_CmdKindFlag_ListInIPCDocs*1), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*1)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*1)|(RD_QueryFlag_Required*1), RD_RegSlot_Vaddr, str8_lit_comp("")}},
 { str8_lit_comp("run_to_line"), str8_lit_comp("Runs until a particular source line is hit."), str8_lit_comp(""), str8_lit_comp("{text_pt_commands}{disasm_pt_commands}"), (RD_CmdKindFlag_ListInUI*1)|(RD_CmdKindFlag_ListInIPCDocs*1), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*0)|(RD_QueryFlag_Required*0), RD_RegSlot_Null, str8_lit_comp("")}},
 { str8_lit_comp("run_to_name"), str8_lit_comp("Runs until a particular symbol name is hit."), str8_lit_comp(""), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*1)|(RD_CmdKindFlag_ListInIPCDocs*1), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*1)|(RD_QueryFlag_Required*1), RD_RegSlot_String, str8_lit_comp("query:procedures")}},
 { str8_lit_comp("run"), str8_lit_comp("Runs all targets after starting them if they have not been started yet."), str8_lit_comp("play"), str8_lit_comp(""), (RD_CmdKindFlag_ListInUI*1)|(RD_CmdKindFlag_ListInIPCDocs*1), {(RD_QueryFlag_AllowFiles*0)|(RD_QueryFlag_AllowFolders*0)|(RD_QueryFlag_CodeInput*0)|(RD_QueryFlag_KeepOldInput*0)|(RD_QueryFlag_SelectOldInput*0)|(RD_QueryFlag_Floating*0)|(RD_QueryFlag_Required*0), RD_RegSlot_Null, str8_lit_comp("")}},

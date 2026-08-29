@@ -86,6 +86,7 @@ d_string_from_msg_kind(D_MsgKind kind)
     case D_MsgKind_Detach:                    {result = str8_lit("Detach");}break;
     case D_MsgKind_Run:                       {result = str8_lit("Run");}break;
     case D_MsgKind_SingleStep:                {result = str8_lit("SingleStep");}break;
+    case D_MsgKind_TargetCallU64:             {result = str8_lit("TargetCallU64");}break;
     case D_MsgKind_ResolvePlatformTLS:        {result = str8_lit("ResolvePlatformTLS");}break;
     case D_MsgKind_SetUserEntryPoints:        {result = str8_lit("SetUserEntryPoints");}break;
     case D_MsgKind_SetModuleDebugInfoPath:    {result = str8_lit("SetModuleDebugInfoPath");}break;
@@ -3238,6 +3239,7 @@ d_ctrl_thread__entry_point(void *p)
           case D_MsgKind_Detach:            {d_ctrl_thread__detach              (ctrl_ctx, msg);}break;
           case D_MsgKind_Run:               {d_ctrl_thread__run                 (ctrl_ctx, msg);}break;
           case D_MsgKind_SingleStep:        {d_ctrl_thread__single_step         (ctrl_ctx, msg);}break;
+          case D_MsgKind_TargetCallU64:     {d_ctrl_thread__target_call_u64     (ctrl_ctx, msg);}break;
           case D_MsgKind_ResolvePlatformTLS:{d_ctrl_thread__resolve_platform_tls(ctrl_ctx, msg);}break;
           
           //- rjf: configuration
@@ -6839,6 +6841,64 @@ d_ctrl_thread__single_step(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
     d_c2u_push_events(&evts);
   }
   
+  scratch_end(scratch);
+  ProfEnd();
+}
+
+internal void
+d_ctrl_thread__target_call_u64(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
+{
+  ProfBeginFunction();
+  Temp scratch = scratch_begin(0, 0);
+  D_Entity *thread = d_entity_from_handle(msg->entity);
+  D_Entity *process = d_entity_ancestor_from_kind(thread, D_EntityKind_Process);
+  String8 output = {0};
+  if(thread == &d_entity_nil || thread->kind != D_EntityKind_Thread)
+  {
+    output = str8_lit("[target_call_u64] error: thread not found\n");
+  }
+  else if(process == &d_entity_nil || process->kind != D_EntityKind_Process)
+  {
+    output = str8_lit("[target_call_u64] error: process not found\n");
+  }
+  else if(msg->vaddr == 0)
+  {
+    output = str8_lit("[target_call_u64] error: function address is zero\n");
+  }
+  else
+  {
+    DMN_ThreadCallParams params = {0};
+    params.function_vaddr = msg->vaddr;
+    params.return_value_kind = DMN_ThreadCallValueKind_U64;
+    DMN_ThreadCallResult call = dmn_thread_call(scratch.arena, ctrl_ctx, d_dmn_from_handle(thread->handle), &params);
+    ins_atomic_u64_inc_eval(&d_ctrl_state->mem_gen);
+    ins_atomic_u64_inc_eval(&d_ctrl_state->reg_gen);
+    ins_atomic_u64_inc_eval(&d_ctrl_state->run_gen);
+    if(call.success)
+    {
+      output = push_str8f(scratch.arena, "[target_call_u64] ok result:0x%I64x scratch_return_vaddr:0x%I64x\n",
+                          call.return_value.u64, call.stop_vaddr);
+    }
+    else if(call.error.size != 0)
+    {
+      output = push_str8f(scratch.arena, "[target_call_u64] error: %S\n", call.error);
+    }
+    else
+    {
+      output = str8_lit("[target_call_u64] error: target call failed\n");
+    }
+  }
+  if(output.size != 0)
+  {
+    log_infof("%S", output);
+    D_EventList evts = {0};
+    D_Event *evt = d_event_list_push(scratch.arena, &evts);
+    evt->kind = D_EventKind_DebugString;
+    evt->entity = msg->entity;
+    evt->parent = msg->parent;
+    evt->string = output;
+    d_c2u_push_events(&evts);
+  }
   scratch_end(scratch);
   ProfEnd();
 }
