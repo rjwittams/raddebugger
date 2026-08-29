@@ -1445,10 +1445,10 @@ rd_file_path_from_eval_string(Arena *arena, String8 string)
   return result;
 }
 
-internal B32
-rd_tls_vaddr_from_platform_vaddr(E_Space space, U64 platform_tls_vaddr, U64 *vaddr_out)
+internal E_TLSVAddrResolution
+rd_tls_vaddr_from_platform_vaddr(E_Space space, U64 platform_tls_vaddr)
 {
-  B32 result = 0;
+  E_TLSVAddrResolution result = {0};
   D_Entity *process = rd_ctrl_entity_from_eval_space(space);
   D_Entity *thread = rd_ctrl_entity_from_eval_space(e_base_ctx->thread_reg_space);
   if(process != &d_entity_nil &&
@@ -1457,11 +1457,26 @@ rd_tls_vaddr_from_platform_vaddr(E_Space space, U64 platform_tls_vaddr, U64 *vad
      thread != &d_entity_nil &&
      thread->kind == D_EntityKind_Thread)
   {
-    U64 vaddr = d_query_cached_platform_tls_vaddr_from_thread_vaddr(thread, platform_tls_vaddr);
-    result = 1;
-    if(vaddr != 0)
+    D_PlatformTLSResolution resolution = d_query_cached_platform_tls_vaddr_from_thread_vaddr(thread, platform_tls_vaddr);
+    switch(resolution.status)
     {
-      *vaddr_out = vaddr;
+      case D_PlatformTLSResolutionStatus_Pending:
+      {
+        result.status = E_TLSVAddrResolutionStatus_Pending;
+      }break;
+      case D_PlatformTLSResolutionStatus_Resolved:
+      {
+        result.status = E_TLSVAddrResolutionStatus_Resolved;
+        result.vaddr = resolution.vaddr;
+      }break;
+      case D_PlatformTLSResolutionStatus_Failed:
+      {
+        result.status = E_TLSVAddrResolutionStatus_Failed;
+      }break;
+      default:
+      {
+        result.status = E_TLSVAddrResolutionStatus_Failed;
+      }break;
     }
   }
   return result;

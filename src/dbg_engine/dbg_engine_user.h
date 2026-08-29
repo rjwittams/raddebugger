@@ -130,15 +130,30 @@ struct D_RunTLSBaseCache
 
 //- per-run platform tls-vaddr cache
 
+typedef enum D_PlatformTLSResolutionStatus
+{
+  D_PlatformTLSResolutionStatus_Null,
+  D_PlatformTLSResolutionStatus_Pending,
+  D_PlatformTLSResolutionStatus_Resolved,
+  D_PlatformTLSResolutionStatus_Failed,
+}
+D_PlatformTLSResolutionStatus;
+
+typedef struct D_PlatformTLSResolution D_PlatformTLSResolution;
+struct D_PlatformTLSResolution
+{
+  D_PlatformTLSResolutionStatus status;
+  U64 vaddr;
+  String8 error;
+};
+
 typedef struct D_RunPlatformTLSCacheNode D_RunPlatformTLSCacheNode;
 struct D_RunPlatformTLSCacheNode
 {
   D_RunPlatformTLSCacheNode *hash_next;
   D_Handle thread;
   U64 platform_tls_vaddr;
-  U64 resolved_vaddr;
-  B32 resolved;
-  B32 requested;
+  D_PlatformTLSResolution resolution;
 };
 
 typedef struct D_RunPlatformTLSCacheSlot D_RunPlatformTLSCacheSlot;
@@ -286,7 +301,7 @@ typedef enum D_EventKind
   D_EventKind_SetBreakpoint,
   D_EventKind_UnsetBreakpoint,
   D_EventKind_SetVAddrRangeNote,
-  D_EventKind_PlatformTLSResolved,
+  D_EventKind_PlatformTLSResolution,
   
   //- rjf: memory
   D_EventKind_MemReserve,
@@ -334,6 +349,7 @@ struct D_Event
   D_Handle parent;
   Arch arch;
   U64 u64_code;
+  D_PlatformTLSResolutionStatus platform_tls_status;
   U32 entity_id;
   Rng1U64 vaddr_rng;
   U64 rip_vaddr;
@@ -503,7 +519,7 @@ internal DI_KeyList d_push_active_dbgi_key_list(Arena *arena);
 internal U64 d_query_cached_rip_from_thread(D_Entity *thread);
 internal U64 d_query_cached_rip_from_thread_unwind(D_Entity *thread, U64 unwind_count);
 internal U64 d_query_cached_cfa_from_thread_unwind(D_Entity *thread, U64 unwind_count);
-internal U64 d_query_cached_platform_tls_vaddr_from_thread_vaddr(D_Entity *thread, U64 platform_tls_vaddr);
+internal D_PlatformTLSResolution d_query_cached_platform_tls_vaddr_from_thread_vaddr(D_Entity *thread, U64 platform_tls_vaddr);
 internal E_String2NumMap *d_query_cached_locals_map_from_dbgi_key_voff(DI_Key dbgi_key, U64 voff);
 internal E_String2NumMap *d_query_cached_member_map_from_dbgi_key_voff(DI_Key dbgi_key, U64 voff);
 

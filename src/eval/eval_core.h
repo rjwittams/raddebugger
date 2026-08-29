@@ -779,7 +779,24 @@ struct E_SpaceRangeInfo
 typedef U64 E_SpaceGenFunction(E_Space space);
 typedef B32 E_SpaceReadFunction(E_Space space, void *out, E_SpaceRangeInfo *out_range_info, Rng1U64 offset_range);
 typedef B32 E_SpaceWriteFunction(E_Space space, void *out, Rng1U64 offset_range);
-typedef B32 E_TLSVAddrFromPlatformVAddrFunction(E_Space space, U64 platform_tls_vaddr, U64 *vaddr_out);
+
+typedef enum E_TLSVAddrResolutionStatus
+{
+  E_TLSVAddrResolutionStatus_Unhandled,
+  E_TLSVAddrResolutionStatus_Pending,
+  E_TLSVAddrResolutionStatus_Resolved,
+  E_TLSVAddrResolutionStatus_Failed,
+}
+E_TLSVAddrResolutionStatus;
+
+typedef struct E_TLSVAddrResolution E_TLSVAddrResolution;
+struct E_TLSVAddrResolution
+{
+  E_TLSVAddrResolutionStatus status;
+  U64 vaddr;
+};
+
+typedef E_TLSVAddrResolution E_TLSVAddrFromPlatformVAddrFunction(E_Space space, U64 platform_tls_vaddr);
 
 //- rjf: base context
 

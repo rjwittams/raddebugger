@@ -1492,10 +1492,18 @@ d_query_cached_cfa_from_thread_unwind(D_Entity *thread, U64 unwind_count)
   return cfa;
 }
 
-internal U64
+internal B32
+d_platform_tls_resolution_needs_request(B32 node_is_present, U64 node_cache_idx, D_PlatformTLSResolutionStatus status)
+{
+  B32 result = (!node_is_present ||
+                (node_cache_idx != 0 && status != D_PlatformTLSResolutionStatus_Resolved));
+  return result;
+}
+
+internal D_PlatformTLSResolution
 d_query_cached_platform_tls_vaddr_from_thread_vaddr(D_Entity *thread, U64 platform_tls_vaddr)
 {
-  U64 result = 0;
+  D_PlatformTLSResolution result = {0};
   if(thread != &d_entity_nil && platform_tls_vaddr != 0 && !d_ctrl_targets_running())
   {
     U64 current_cache_idx = d_user_state->platform_tls_cache_gen%ArrayCount(d_user_state->platform_tls_caches);
@@ -1531,7 +1539,8 @@ d_query_cached_platform_tls_vaddr_from_thread_vaddr(D_Entity *thread, U64 platfo
         break;
       }
     }
-    if(node == 0 || (!node->resolved && node_cache_idx != 0))
+    D_PlatformTLSResolutionStatus status = node != 0 ? node->resolution.status : D_PlatformTLSResolutionStatus_Null;
+    if(d_platform_tls_resolution_needs_request(node != 0, node_cache_idx, status))
     {
       D_RunPlatformTLSCache *cache = &d_user_state->platform_tls_caches[current_cache_idx];
       if(cache->slots_count == 0)
@@ -1547,15 +1556,15 @@ d_query_cached_platform_tls_vaddr_from_thread_vaddr(D_Entity *thread, U64 platfo
       SLLQueuePush_N(slot->first, slot->last, node, hash_next);
       node->thread = handle;
       node->platform_tls_vaddr = platform_tls_vaddr;
-      node->requested = 1;
+      node->resolution.status = D_PlatformTLSResolutionStatus_Pending;
       D_Msg *msg = d_msg_list_push(d_user_state->ctrl_msg_arena, &d_user_state->ctrl_msgs);
       msg->kind = D_MsgKind_ResolvePlatformTLS;
       msg->entity = handle;
       msg->vaddr = platform_tls_vaddr;
     }
-    if(node->resolved)
+    if(node != 0)
     {
-      result = node->resolved_vaddr;
+      result = node->resolution;
     }
   }
   return result;
@@ -1764,7 +1773,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
           }
         }break;
 
-        case D_EventKind_PlatformTLSResolved:
+        case D_EventKind_PlatformTLSResolution:
         {
           D_RunPlatformTLSCache *cache = &d_user_state->platform_tls_caches[d_user_state->platform_tls_cache_gen%ArrayCount(d_user_state->platform_tls_caches)];
           if(cache->slots_count == 0)
@@ -1793,9 +1802,18 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
             node->thread = handle;
             node->platform_tls_vaddr = platform_tls_vaddr;
           }
-          node->requested = 1;
-          node->resolved = !!event->u64_code;
-          node->resolved_vaddr = event->vaddr_rng.max;
+          node->resolution.status = event->platform_tls_status;
+          if(node->resolution.status != D_PlatformTLSResolutionStatus_Resolved &&
+             node->resolution.status != D_PlatformTLSResolutionStatus_Failed)
+          {
+            node->resolution.status = D_PlatformTLSResolutionStatus_Failed;
+          }
+          node->resolution.vaddr = event->vaddr_rng.max;
+          node->resolution.error = push_str8_copy(cache->arena, event->string);
+          if(node->resolution.status == D_PlatformTLSResolutionStatus_Failed && event->string.size != 0)
+          {
+            log_user_error(event->string);
+          }
           d_user_state->platform_tls_cache_reggen_idx = new_reg_gen;
           d_user_state->platform_tls_cache_memgen_idx = new_mem_gen;
         }break;

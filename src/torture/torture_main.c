@@ -192,6 +192,7 @@
 #include "torture.c"
 
 #include "torture_arch.c"
+#include "torture_target_call.c"
 #include "base/tests/base_tests.c"
 #include "mdesk/tests/mdesk_tests.c"
 #include "linker/tests/linker_tests.c"
