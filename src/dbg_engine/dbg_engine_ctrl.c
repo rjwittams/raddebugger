@@ -2260,7 +2260,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
         // rjf: remember registers pre-step
         MemoryCopy(regs_block_restore, regs_block, arch_reg_block_size);
         
-        // rjf: try Mach-O compact unwind first on macOS x64, then fall back to
+        // Try Mach-O compact unwind first on macOS x64, then fall back to
         // the generic unwinder path.
         U64 cfa = 0;
         UWND_Unwinder step_unwinder = unwinder;
@@ -2315,7 +2315,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
         }
         if(!unwind.flags && !step_is_good)
         {
-          // rjf: try generic unwind step
+          // rjf: try step
           UWND_StepResult step = uwnd_step(step_unwinder, arch, &memory_map, &step_unwinder_module_info, tls_vaddr, regs_block, &cfa);
           // rjf: if the step failed -> restore original register values
           if(step.status != UWND_StepStatus_Good)
@@ -2325,7 +2325,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
           
           // rjf: if we failed to read memory, try to read that memory, equip to memory map.
           // if it is stale and we run out of time, we will need to mark the whole unwind as
-          // stale. if it can not be read, the unwind fails.
+          // stale. if it can't be read, the unwind fails.
           if(step.status == UWND_StepStatus_FailedMemoryRead)
           {
             D_ProcessMemorySlice slice = d_process_memory_slice_from_vaddr_range(scratch.arena, process_entity->handle, step.missed_read_vaddr_range, 1, 0);
@@ -2350,7 +2350,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
             unwind.flags |= D_UnwindFlag_Error;
           }
           
-          // rjf: if the step worked, we are good. equip this step CFA to the previously added frame,
+          // rjf: if the step worked, we're good. equip this step's CFA to the previously added frame,
           // then exit the step loop.
           else if(step.status == UWND_StepStatus_Good)
           {
