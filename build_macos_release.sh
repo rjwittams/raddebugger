@@ -168,7 +168,6 @@ codesign_args=(--force --options runtime --sign "$release_identity" --entitlemen
 if [[ "$release_identity" != "-" ]]; then
   codesign_args+=(--timestamp)
 fi
-codesign "${codesign_args[@]}" "$app_executable"
 codesign "${codesign_args[@]}" "$app"
 
 lipo "$app_executable" -verify_arch arm64 x86_64
