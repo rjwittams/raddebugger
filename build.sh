@@ -23,8 +23,9 @@ git_hash_full=$(git rev-parse HEAD)
 # --- Compile/Link Line Definitions -------------------------------------------
 host_os=$(uname -s)
 host_arch=$(uname -m)
+target_arch=${RADDBG_TARGET_ARCH:-$host_arch}
 cc_host_flags=""
-if [[ "$host_arch" == "x86_64" || "$host_arch" == "amd64" ]]; then
+if [[ "$target_arch" == "x86_64" || "$target_arch" == "amd64" ]]; then
   cc_host_flags="-mcx16 -msse2"
 fi
 cc_cflags_gcc=""
