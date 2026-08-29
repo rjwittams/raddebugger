@@ -8,7 +8,8 @@ usage()
 usage: ./build_macos_release.sh
 
 Builds both arm64 and x86_64 slices on one Mac, combines them into a
-Universal 2 RAD Debugger app, and creates an accompanying universal dSYM.
+Universal 2 RAD Debugger app, and packages it in a signed disk image.
+An accompanying universal dSYM archive is retained for crash diagnosis.
 
 Environment:
   RADDBG_RELEASE_CODESIGN_IDENTITY  Developer ID Application identity.
@@ -17,7 +18,8 @@ Environment:
   RADDBG_RELEASE_BUNDLE_IDENTIFIER  Bundle ID (default: org.changedirection.raddbg).
   RADDBG_RELEASE_ENTITLEMENTS       Release entitlement plist override.
 
-The script builds but does not submit the resulting archive for notarization.
+The script builds but does not submit the resulting disk image for notarization.
+Run ./notarize_macos_release.sh after inspecting the signed disk image.
 EOF
 }
 
@@ -54,7 +56,7 @@ fi
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "the macOS release build requires Darwin"
 
-for command_name in clang codesign ditto dwarfdump git lipo plutil; do
+for command_name in clang codesign ditto dwarfdump git hdiutil lipo plutil; do
   require_command "$command_name"
 done
 [[ -x /usr/libexec/PlistBuddy ]] || fail "required command not found: /usr/libexec/PlistBuddy"
@@ -106,6 +108,7 @@ stage_root="$release_root/stage"
 app="$release_root/RAD Debugger.app"
 app_executable="$app/Contents/MacOS/raddbg"
 universal_dsym="$release_root/raddbg.dSYM"
+dmg_root="$release_root/dmg-root"
 
 [[ "$release_root" == "$repo_root/build/release" ]] || fail "refusing unexpected release output path: $release_root"
 rm -rf "$release_root"
@@ -186,9 +189,29 @@ for arch in arm64 x86_64; do
   [[ -n "$app_uuid" && "$app_uuid" == "$dsym_uuid" ]] || fail "$arch executable and dSYM UUIDs do not match"
 done
 
-app_archive="$release_root/RAD-Debugger-macOS-universal.zip"
+release_product_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
+[[ "$release_product_version" =~ ^[0-9]+(\.[0-9]+)*$ ]] || fail "invalid app product version: $release_product_version"
+dmg="$release_root/RAD-Debugger-${release_product_version}-macOS-universal.dmg"
 dsym_archive="$release_root/RAD-Debugger-macOS-universal-dSYM.zip"
-ditto -c -k --sequesterRsrc --keepParent "$app" "$app_archive"
+
+mkdir -p "$dmg_root"
+ditto "$app" "$dmg_root/RAD Debugger.app"
+ln -s /Applications "$dmg_root/Applications"
+hdiutil create \
+  -volname "RAD Debugger" \
+  -srcfolder "$dmg_root" \
+  -format UDZO \
+  -ov \
+  "$dmg"
+
+dmg_codesign_args=(--force --sign "$release_identity")
+if [[ "$release_identity" != "-" ]]; then
+  dmg_codesign_args+=(--timestamp)
+fi
+codesign "${dmg_codesign_args[@]}" "$dmg"
+hdiutil verify "$dmg"
+codesign --verify --strict --verbose=2 "$dmg"
+
 ditto -c -k --keepParent "$universal_dsym" "$dsym_archive"
 
 require_tracked_files_clean "release build changed tracked files"
@@ -197,10 +220,11 @@ echo "[release] commit: $release_commit ($release_version)"
 echo "[release] bundle identifier: $bundle_identifier"
 echo "[release] app: $app"
 echo "[release] dSYM: $universal_dsym"
-echo "[release] archive: $app_archive"
+echo "[release] disk image: $dmg"
+echo "[release] support symbols: $dsym_archive"
 if [[ "$release_identity" == "-" ]]; then
   echo "[release] signature: ad hoc (not distributable or notarization-ready)"
 else
   echo "[release] signature: $release_identity"
-  echo "[release] notarization has not been submitted"
+  echo "[release] notarization has not been submitted; run ./notarize_macos_release.sh"
 fi
