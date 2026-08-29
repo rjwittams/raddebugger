@@ -131,8 +131,8 @@ build_slice()
   [[ "$(git rev-parse HEAD)" == "$release_commit" ]] || fail "HEAD changed during the release build"
   [[ -x "$repo_root/build/raddbg" ]] || fail "$arch executable was not produced"
   [[ -d "$repo_root/build/raddbg.dSYM" ]] || fail "$arch dSYM was not produced"
-  lipo -verify_arch "$arch" "$repo_root/build/raddbg"
-  lipo -verify_arch "$arch" "$repo_root/build/raddbg.dSYM/Contents/Resources/DWARF/raddbg"
+  lipo "$repo_root/build/raddbg" -verify_arch "$arch"
+  lipo "$repo_root/build/raddbg.dSYM/Contents/Resources/DWARF/raddbg" -verify_arch "$arch"
 
   local arch_stage="$stage_root/$arch"
   mkdir -p "$arch_stage"
@@ -171,8 +171,8 @@ fi
 codesign "${codesign_args[@]}" "$app_executable"
 codesign "${codesign_args[@]}" "$app"
 
-lipo -verify_arch arm64 x86_64 "$app_executable"
-lipo -verify_arch arm64 x86_64 "$universal_dsym/Contents/Resources/DWARF/raddbg"
+lipo "$app_executable" -verify_arch arm64 x86_64
+lipo "$universal_dsym/Contents/Resources/DWARF/raddbg" -verify_arch arm64 x86_64
 codesign --verify --strict --verbose=2 "$app"
 
 app_uuids=$(dwarfdump --uuid "$app_executable")
