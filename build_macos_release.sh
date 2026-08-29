@@ -125,7 +125,7 @@ build_slice()
   RADDBG_CODESIGN_IDENTITY="-" \
   RADDBG_CODESIGN_ENTITLEMENTS="$release_entitlements" \
   CC="clang -target $target -Wunguarded-availability -Werror=unguarded-availability" \
-    ./build.sh "${build_args[@]}"
+    "$BASH" ./build.sh "${build_args[@]}"
 
   require_tracked_files_clean "metagen or compilation changed tracked files; refusing mismatched release slices"
   [[ "$(git rev-parse HEAD)" == "$release_commit" ]] || fail "HEAD changed during the release build"
