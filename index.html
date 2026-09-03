@@ -1,0 +1,41 @@
+<!DOCTYPE html><html lang="en"> <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>The RAD Debugger on macOS</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400..600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="/raddebugger/_astro/branches.DeDYTOBV.css"></head> <body> <header class="mast"> <h1 class="mast-name"><a href="/raddebugger/">The RAD Debugger on macOS</a></h1> <p class="mast-line">generation mac8 · upstream base <code>7a5a649b</code> · september 2026</p> <nav class="mast-nav" aria-label="Primary"> <ul> <li><a href="/raddebugger/" aria-current="page">The Port</a></li><li><a href="/raddebugger/branches">Branches</a></li><li><a href="/raddebugger/dag">DAG</a></li> <li><a href="https://robert.wittams.com/posts/porting-the-rad-debugger-to-macos/">Method ↗</a></li> <li><a href="https://github.com/rjwittams/raddebugger">Source ↗</a></li> </ul> </nav> <hr class="mast-rule" aria-hidden="true"> </header>  <main class="doc"> <p>The RAD Debugger is a native, user-mode, graphical debugger developed by
+Epic Games Tools for Windows and Linux. This is a working port of it to
+macOS: an AppKit shell, a CoreText font provider, a Metal renderer, and
+a Darwin debugging backend for Apple Silicon and Intel Macs.</p>
+<p>The port is a long-running fork. Nothing here has been merged
+upstream, and it may never be. Instead it is rebased, in generations,
+onto pinned upstream commits. Each branch is intended to be a
+functional, reviewable change.</p>
+<figure> <a class="shot" href="/raddebugger/raddbg-macos-full.png"> <img src="/raddebugger/raddbg-macos.png" width="2048" height="1326" alt="The RAD Debugger on macOS, stopped at a source breakpoint, with source, ARM64 disassembly, breakpoints, and types panels open, under the native macOS menu bar."> </a> <figcaption><p>Stopped at a breakpoint in an example target, ARM64 disassembly open,
+native menu bar. Click to zoom.</p></figcaption> </figure> <dialog class="lightbox" id="shot-lightbox"> <img src="/raddebugger/raddbg-macos-full.png" alt="" loading="lazy"> </dialog> <script type="module">const t=document.querySelector("a.shot"),e=document.getElementById("shot-lightbox");t&&e&&(t.addEventListener("click",o=>{o.preventDefault(),e.showModal()}),e.addEventListener("click",()=>e.close()));</script>
+<h2 id="try-it">Try it</h2>
+<p>Download the macOS alpha:
+<a href="https://github.com/rjwittams/raddebugger/releases/download/v0.9.29-rjw-macos-alpha.1/RAD-Debugger-0.9.29-RJW-macOS-universal.dmg">RAD-Debugger-0.9.29-RJW-macOS-universal.dmg</a>
+— a universal build, 5.4 MB, from the
+<a href="https://github.com/rjwittams/raddebugger/releases/tag/v0.9.29-rjw-macos-alpha.1">0.9.29 macOS alpha release</a>.
+It is Developer ID signed and notarized, so macOS opens it normally.
+First launch asks for macOS’s debugger authorization.</p>
+<p>Or build from source: clone
+<a href="https://github.com/rjwittams/raddebugger">the fork</a> and check out
+<code>mac8/rjw-mac-integration</code>. <code>./build.sh bundle</code>, run under a modern Bash
+(macOS ships 3.2; the script wants 4.2 or newer — Homebrew’s works),
+produces <code>RAD Debugger.app</code>, ad-hoc codesigned with debugger
+entitlements.</p>
+<p>Small debug targets to point it at are in
+<a href="https://github.com/rjwittams/raddebugger_examples">rjwittams/raddebugger_examples</a>.</p>
+<h2 id="what-works">What works</h2>
+<div class="table-scroll"><table class="spec"><tbody><tr><td>Languages</td><td>C, C++, Objective-C, Rust, Zig, and Odin debug.</td></tr><tr><td>Shell</td><td>Native AppKit application and bundle — menus, file dialogs,
+window behaviour, key handling.</td></tr><tr><td>Rendering</td><td>CoreText font provider and a Metal renderer, including
+backing-scale handling, Geo3D, and blur.</td></tr><tr><td>Symbols</td><td>DWARF-to-RDI conversion, with Mach-O and dSYM discovery and
+section extraction.</td></tr><tr><td>Process control</td><td>A Darwin backend on x64 and ARM64 — Mach exceptions, dyld
+tracking, compact unwind, data breakpoints.</td></tr><tr><td>Target calls</td><td>Target-thread call machinery and platform TLS resolution on
+Darwin.</td></tr><tr><td>Disassembly</td><td>ARM64 disassembly via Binary Ninja’s vendored disassembler.</td></tr></tbody></table></div>
+<h2 id="not-yet">Not yet</h2>
+<div class="table-scroll"><table class="spec"><tbody><tr><td>Swift</td><td>Not handled properly — its calling conventions and linking are
+their own problem.</td></tr><tr><td>iOS simulator</td><td>Half works — the simulator runs targets as Mac processes.</td></tr><tr><td>Rosetta</td><td>No cross-architecture debugging.</td></tr><tr><td>Remote</td><td>No remote debugging.</td></tr><tr><td>Crash dumps</td><td>No reader for macOS crash dumps.</td></tr><tr><td>Target calls</td><td>The expression evaluator does not yet make arbitrary calls
+into the target.</td></tr></tbody></table></div> </main>   <footer class="colophon"> <p>The RAD Debugger is © Epic Games Tools, MIT-licensed. This port is an
+  independent fork by Robert Wittams and is not affiliated with or endorsed
+  by Epic Games Tools. Fork:
+<a href="https://github.com/rjwittams/raddebugger">github.com/rjwittams/raddebugger</a> ·
+  upstream:
+<a href="https://github.com/EpicGamesExt/raddebugger">github.com/EpicGamesExt/raddebugger</a>. Updated 2026-09-03.</p> </footer> </body></html>

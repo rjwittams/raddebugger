@@ -1,0 +1,190 @@
+<!DOCTYPE html><html lang="en"> <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Branches · The RAD Debugger on macOS</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400..600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="/raddebugger/_astro/branches.DeDYTOBV.css"></head> <body> <header class="mast"> <p class="mast-name"><a href="/raddebugger/">The RAD Debugger on macOS</a></p> <p class="mast-line">generation mac8 · upstream base <code>7a5a649b</code> · september 2026</p> <nav class="mast-nav" aria-label="Primary"> <ul> <li><a href="/raddebugger/">The Port</a></li><li><a href="/raddebugger/branches" aria-current="page">Branches</a></li><li><a href="/raddebugger/dag">DAG</a></li> <li><a href="https://robert.wittams.com/posts/porting-the-rad-debugger-to-macos/">Method ↗</a></li> <li><a href="https://github.com/rjwittams/raddebugger">Source ↗</a></li> </ul> </nav> <hr class="mast-rule" aria-hidden="true"> </header>  <main class="doc"> <h1 id="what-had-to-change">What had to change</h1>
+<p>The port is a stack of branches on one pinned upstream commit. Each
+branch owns one concern. The sections follow the branches;
+each compare link shows that branch’s changes only.</p>
+<h2 id="portable-footing">Portable footing</h2>
+<p class="branchref">mac8/portable-host-footing
+  · <a href="https://github.com/rjwittams/raddebugger/compare/mac8%2Fbase-7a5a649b...mac8%2Fportable-host-footing">compare ↗</a><br>
+  mac8/x64-cpuid-host-cleanup
+  · <a href="https://github.com/rjwittams/raddebugger/compare/mac8%2Fportable-host-footing...mac8%2Fx64-cpuid-host-cleanup">compare ↗</a></p>
+<p>Upstream assumes an x64 host.</p>
+<ul>
+<li><code>-mcx16 -msse2</code> moved from common build flags to x64-host-only flags.</li>
+<li>x86 intrinsic headers guarded behind <code>ARCH_X64</code>; <code>ARCH_64BIT</code> widened
+to include ARM64.</li>
+<li><code>build.sh</code> gained an env-bash shebang and a Bash ≥ 4.2 check — macOS
+ships 3.2.</li>
+<li>Host CPUID compiles and executes only on x64.</li>
+</ul>
+<h2 id="posix-parity">POSIX parity</h2>
+<p class="branchref">mac8/portable/posix-base-parity
+  · <a href="https://github.com/rjwittams/raddebugger/compare/mac8%2Fbase-7a5a649b...mac8%2Fportable%2Fposix-base-parity">compare ↗</a><br>
+  mac8/portable/posix-linker-helper-parity
+  · <a href="https://github.com/rjwittams/raddebugger/compare/mac8%2Fportable%2Fposix-base-parity...mac8%2Fportable%2Fposix-linker-helper-parity">compare ↗</a></p>
+<p>Brings the POSIX base layer up to parity with the Win32 one.</p>
+<ul>
+<li>File-read EOF guards, directory-iteration hardening, write-open
+truncation.</li>
+<li>Linker and helper parity so the portable linker torture tests run.</li>
+</ul>
+<h2 id="dwarf-rdi-and-mach-o">DWARF, RDI, and Mach-O</h2>
+<p class="branchref">mac8/portable/dwarf-rdi-correctness
+  · <a href="https://github.com/rjwittams/raddebugger/compare/mac8%2Fbase-7a5a649b...mac8%2Fportable%2Fdwarf-rdi-correctness">compare ↗</a><br>
+  mac8/portable/macho-dwarf-tools
+  · <a href="https://github.com/rjwittams/raddebugger/compare/mac8%2Fportable%2Fdwarf-rdi-correctness...mac8%2Fportable%2Fmacho-dwarf-tools">compare ↗</a></p>
+<p>The debugger consumes symbols in its own RDI format; on macOS the
+platform format is DWARF in Mach-O binaries and dSYM bundles.</p>
+<ul>
+<li><code>DW_OP_breg0–31</code> read the wrong operand (<code>operand_s64s[1]</code> for <code>[0]</code>),
+so two distinct ARM64 locals reported the same wrong stack address.
+The fix was masked at first by a stale RDI cache — the cache key does
+not include converter identity.</li>
+<li>Line-table paths were built as <code>dir + "/" + file</code>; DWARF 5 makes
+directory entry zero the compilation directory and resolves other
+relative directories against it.</li>
+<li><code>DW_AT_high_pc</code> address-versus-size handling was swapped —
+differently — in two places; now one helper.</li>
+<li>Reference forms: <code>DW_FormKind_RefAddr</code> resolves section-relative,
+<code>RefUData</code> unit-relative; both were previously unresolved TODOs.</li>
+<li>vaddr→voff rebasing no longer underflows, and inlinee and
+lexical-block ranges are now rebased at all.</li>
+<li>Line sequences split only on emitting rows; line-zero rows are kept;
+empty parent frame-base location lists fall back instead of iterating
+zero times.</li>
+</ul>
+<p>New: Mach-O DWARF section extraction, <code>radbin</code> Mach-O and dSYM
+discovery, and <code>MACHO32</code>/<code>MACHO64</code> as radbin input formats.</p>
+<h2 id="the-appkit-shell">The AppKit shell</h2>
+<p class="branchref">mac8/mac/appkit-shell
+  · <a href="https://github.com/rjwittams/raddebugger/compare/mac8%2Fx64-cpuid-host-cleanup...mac8%2Fmac%2Fappkit-shell">compare ↗</a></p>
+<p>A native AppKit application: bundle, windows, menus, file dialogs,
+input.</p>
+<ul>
+<li>The native menu bar (off by default) is generated from the debugger’s
+command metadata; picks return as ordinary command events. Recorded as
+a compromise: a second representation of the menu structure, not a
+shared schema with RAD’s drawn menus - this is to aid fork maintenance.</li>
+<li>Chrome ownership is explicit — native decorations or RAD’s custom
+titlebar — switched as one operation covering style mask, traffic
+lights, drag regions, and renderer inputs. Traffic-light spacing is
+measured from AppKit at runtime.</li>
+<li>The red traffic light closes the window while others are open and
+exits on the last; the mapping stays in the macOS layer instead of
+changing core close semantics.</li>
+<li>No system install: the <code>.app</code> bundle is the installation unit.</li>
+<li>RAD’s base layer claims <code>internal</code>, <code>global</code>, and <code>FileInfo</code>; AppKit
+imports are wrapped in push/pop macro guards, and the unity build
+compiles the whole tree as Objective-C.</li>
+<li>⌘ is folded into Ctrl, so the Windows-derived keybind table works
+unchanged — at the cost of ⌘ and ⌃ being indistinguishable. Another compromise for fork maintenance.</li>
+</ul>
+<h2 id="coretext-and-metal">CoreText and Metal</h2>
+<p class="branchref">mac8/mac/coretext-metal
+  · <a href="https://github.com/rjwittams/raddebugger/compare/mac8%2Fmac%2Fappkit-shell...mac8%2Fmac%2Fcoretext-metal">compare ↗</a></p>
+<ul>
+<li>Windows and Linux lay out in physical pixels, scaled by DPI, backing
+scale 1. macOS lays out in Cocoa points, layout scale 1, backing
+scale = <code>backingScaleFactor</code>.</li>
+<li>Glyphs rasterize at backing-scale resolution, keyed so 1× and 2×
+atlases cannot collide. Two rejected alternatives are on record:
+linear texture filtering (blurs the symptom, supplies no sharper
+glyphs) and multiplying font size by backing scale (changes layout).</li>
+<li>CoreText emits premultiplied, LCD-smoothed RGB; the renderer expects a
+coverage mask in alpha, as DWrite and FreeType provide. The provider
+forces grayscale AA and stores coverage in alpha — this fixed text
+smearing on non-Retina displays.</li>
+<li>D3D11 blends through an sRGB view on a UNORM swapchain; the first
+Metal backend was plain <code>BGRA8Unorm</code> end to end, darkening every
+background. The shader linearizes by hand.</li>
+<li>Redraw is now triggered using <code>CADisplayLink</code> to enable live resize.</li>
+</ul>
+<h2 id="arm64-core-and-disassembly">ARM64 core and disassembly</h2>
+<p class="branchref">mac8/portable/arm64-core
+  · <a href="https://github.com/rjwittams/raddebugger/compare/mac8%2Fbase-7a5a649b...mac8%2Fportable%2Farm64-core">compare ↗</a><br>
+  mac8/portable/arm64-disasm
+  · <a href="https://github.com/rjwittams/raddebugger/compare/mac8%2Fportable%2Farm64-core...mac8%2Fportable%2Farm64-disasm">compare ↗</a></p>
+<p>Upstream understands x64 and, partially, x86; the port adds ARM64 as a
+first-class architecture.</p>
+<ul>
+<li>Trap and control-flow support, RDI and DWARF register mappings,
+vector-register metadata.</li>
+<li>Disassembly vendors Binary Ninja’s ARM64 disassembler at a pinned stable
+tag under <code>src/third_party/bn_arm64_disasm</code>: decode and format files
+only, MIT license alongside, upstream symbols mechanically prefixed, a
+small bridge on top. Chosen as the smallest self-contained disassembler
+covering the required instructions; swappable behind the bridge. By
+volume this vendoring is most of the port’s total diff: of the
+branch’s 104,968 added lines, about 100,000 are unmodified upstream
+decoder source, 4,000 a generated symbol-prefix header, and about 900
+the bridge, integration, and tests.</li>
+<li>An undecodable instruction no longer truncates the listing: on a
+fixed-width ISA the view resyncs to the next word and emits
+<code>&#x3C;invalid></code>.</li>
+<li>Auto-disassembly no longer hard-codes <code>rip</code>; the IP register comes
+from the process architecture, and the range is clamped to the
+containing module.</li>
+</ul>
+<h2 id="darwin-process-control">Darwin process control</h2>
+<p class="branchref">mac8/darwin/process-control-x64
+  · <a href="https://github.com/rjwittams/raddebugger/compare/mac8%2Fintegrate%2Fdarwin-process-control-base...mac8%2Fdarwin%2Fprocess-control-x64">compare ↗</a></p>
+<p>The debugger’s low-level backend exists
+upstream for Windows and Linux. The Darwin implementation:</p>
+<ul>
+<li>Mach exceptions alongside ptrace: launch is <code>PT_TRACE_ME</code> plus a task
+exception port, attach is <code>PT_ATTACHEXC</code>. Signals arrive as
+soft-signal exceptions that must be answered before the stopped thread
+can move. The target’s own exception ports are saved and restored on
+detach.</li>
+<li>Trap writes that fail walk the region map, unprotect, and retry with
+<code>VM_PROT_COPY</code> to break copy-on-write pages; ARM64 flushes the
+instruction cache and reads back to verify.</li>
+<li>dyld gets two hidden traps: the notification hook — its address
+arrives PAC-signed and must be stripped — and a bootstrap trap on the
+entry point for the window before dyld has published anything.</li>
+<li>Data breakpoints: DR0–DR3 on x64; WVR/WCR on ARM64 with the slot
+count probed at runtime. New threads inherit watchpoints.</li>
+<li>Task ports need debugger entitlements plus an authorization requested
+before launching the target.</li>
+</ul>
+<h2 id="the-arm64-runtime-target-calls-and-tls">The ARM64 runtime, target calls, and TLS</h2>
+<p class="branchref">mac8/darwin/arm64-runtime
+  · <a href="https://github.com/rjwittams/raddebugger/compare/mac8%2Fintegrate%2Fdarwin-arm64-runtime-base...mac8%2Fdarwin%2Farm64-runtime">compare ↗</a><br>
+  mac8/darwin/target-call-tls
+  · <a href="https://github.com/rjwittams/raddebugger/compare/mac8%2Fdarwin%2Farm64-runtime...mac8%2Fdarwin%2Ftarget-call-tls">compare ↗</a></p>
+<p>On top of process control: ARM64 registers, traps, dyld fixups, compact
+unwind with fallback, function-start reads, continuation traps, and
+runtime tests. Then target calls and TLS:</p>
+<ul>
+<li>Darwin C/C++ thread-locals are Mach-O TLV descriptors, and reading
+memory is not enough to locate one. The debugger has to run code
+inside the debugged process: call the descriptor’s thunk on the target
+thread, then read back the per-thread address it returns. Emulating
+the thunk instead was rejected — it means decoding instruction streams
+and second-guessing dyld.</li>
+<li>The call machinery reserves three pages in the target, with the middle
+page as the return trap. Saved registers are always restored, and
+“returned” is reported separately from “registers restored”.</li>
+<li>Target calls are used only for TLS resolution so far. The expression
+evaluator does not yet make arbitrary calls into the target; that is a
+possible extension.</li>
+<li>Compact unwind entries are encoding ranges, not function ranges.
+Function boundaries come from <code>LC_FUNCTION_STARTS</code>, and an encoding
+that defers to DWARF carries the offset of its exact FDE.</li>
+</ul>
+<h2 id="fork-policy">Fork policy</h2>
+<p class="branchref">mac8/portable/metagen-preserve-line-endings
+  · <a href="https://github.com/rjwittams/raddebugger/compare/mac8%2Fbase-7a5a649b...mac8%2Fportable%2Fmetagen-preserve-line-endings">compare ↗</a><br>
+  mac8/portable/crash-dump-format-guards
+  · <a href="https://github.com/rjwittams/raddebugger/compare/mac8%2Fbase-7a5a649b...mac8%2Fportable%2Fcrash-dump-format-guards">compare ↗</a></p>
+<ul>
+<li>The code generator preserves each generated file’s existing
+line-ending convention, so cross-platform regeneration produces no
+diff churn.</li>
+<li>Unsupported or incomplete crash-dump formats are rejected before the
+debugger creates a process entity for them.</li>
+</ul> </main>   <footer class="colophon"> <p>The RAD Debugger is © Epic Games Tools, MIT-licensed. This port is an
+  independent fork by Robert Wittams and is not affiliated with or endorsed
+  by Epic Games Tools. Fork:
+<a href="https://github.com/rjwittams/raddebugger">github.com/rjwittams/raddebugger</a> ·
+  upstream:
+<a href="https://github.com/EpicGamesExt/raddebugger">github.com/EpicGamesExt/raddebugger</a>. Updated 2026-09-03.</p> </footer> </body></html>
