@@ -419,6 +419,7 @@ struct D_UserState
   D_CmdKind ctrl_source_step_kind;
   D_Line ctrl_source_step_origin;
   U64 ctrl_source_step_sp;
+  B32 ctrl_source_step_continuing;
   U64 ctrl_last_run_frame_idx;
   D_Handle ctrl_last_run_thread_handle;
   D_RunFlags ctrl_last_run_flags;

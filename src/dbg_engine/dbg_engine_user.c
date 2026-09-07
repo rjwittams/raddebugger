@@ -1797,7 +1797,8 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
                line->voff_range.min <= d_voff_from_vaddr(module, event->rip_vaddr) &&
                d_voff_from_vaddr(module, event->rip_vaddr) < line->voff_range.max &&
                (d_line_kind_from_num(line->pt.line) != D_LineKind_Source ||
-                (d_line_has_source(line) && line->pt.line == d_user_state->ctrl_source_step_origin.pt.line &&
+                (d_user_state->ctrl_source_step_continuing && d_line_has_source(line) &&
+                 line->pt.line == d_user_state->ctrl_source_step_origin.pt.line &&
                  str8_match(line->file_path, d_user_state->ctrl_source_step_origin.file_path, 0) &&
                  d_sp_from_thread(event->entity) == d_user_state->ctrl_source_step_sp)))
             {
@@ -2575,6 +2576,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         d_user_state->ctrl_is_running                 = 1;
         if(cmd_kind != D_CmdKind_SoftHaltRefresh)
         {
+          d_user_state->ctrl_source_step_continuing = (source_step_stop != 0);
           d_user_state->ctrl_source_step_kind =
             (cmd_kind == D_CmdKind_StepIntoLine || cmd_kind == D_CmdKind_StepOverLine) ? cmd_kind : D_CmdKind_Null;
         }

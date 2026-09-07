@@ -19,6 +19,7 @@ def main():
     parser.add_argument("--instruction-size", type=int, choices=(1, 4), default=4)
     parser.add_argument("--case", choices=("over", "into", "instruction", "breakpoint", "halt"), default="over")
     parser.add_argument("--exception", action="store_true", help="fixture built with HIDDEN_EXCEPTION")
+    parser.add_argument("--same-line-callee", action="store_true", help="fixture built with LEAF_SAME_LINE")
     args = parser.parse_args()
 
     def ipc(command):
@@ -82,6 +83,10 @@ def main():
         for line in (20, 30):
             expect_line(stopped(step), line)
         if args.case == "into":
+            if args.same_line_callee:
+                current = stopped(step)
+                expect_line(current, 30)
+                assert re.search(r'ip_voff_symbol:\s*"leaf"', current["raw"]), current["raw"]
             expect_line(stopped(step), 40)
         expect_line(stopped(step), 50)
         current = stopped(step)
