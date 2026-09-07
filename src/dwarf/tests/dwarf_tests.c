@@ -1,6 +1,47 @@
 // Copyright (c) Epic Games Tools
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
+Test(dw2_line_table_v2_header)
+{
+  // DWARF versions 2 and 3 do not encode maximum_operations_per_instruction.
+  // Keep this fixture literal so a newer-version writer cannot hide a parser
+  // regression by emitting the same incorrect field.
+  U8 line_data[] =
+  {
+    0x26, 0x00, 0x00, 0x00, // unit_length
+    0x02, 0x00,             // version
+    0x20, 0x00, 0x00, 0x00, // header_length
+    0x01,                   // minimum_instruction_length
+    0x01,                   // default_is_stmt
+    0xfb,                   // line_base (-5)
+    0x0e,                   // line_range
+    0x0d,                   // opcode_base
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x00,
+    0x00, 0x00, 0x01, 0x00, 0x00, 0x01, // standard_opcode_lengths
+    0x00,                               // include_directories terminator
+    'm', 'a', 'i', 'n', '.', 'o', 'd', 'i', 'n', 0x00,
+    0x00, 0x00, 0x00,                   // directory, timestamp, size
+    0x00,                               // file_names terminator
+  };
+  DW_Raw raw = {0};
+  DW2_ParseCtx parse_ctx = {0};
+  parse_ctx.addr_size = 8;
+  parse_ctx.unit_dir = str8_lit("/src");
+  parse_ctx.unit_file = str8_lit("main.odin");
+  DW2_LineTableHeader header = {0};
+  dw2_read_line_table_header(arena, &raw, &parse_ctx, str8_array(line_data, ArrayCount(line_data)), 0, &header);
+
+  TestCheck(header.version == DW_Version_2);
+  TestCheck(header.min_inst_length == 1);
+  TestCheck(header.max_ops_per_inst == 1);
+  TestCheck(header.default_is_stmt == 1);
+  TestCheck(header.line_base == -5);
+  TestCheck(header.line_range == 14);
+  TestCheck(header.opcode_base == 13);
+  TestCheck(header.files.count == 2);
+  TestCheck(str8_match(header.files.v[1].file_name, str8_lit("main.odin"), 0));
+}
+
 #if 0 // TODO(rjf): this uses concepts from the old parser
 
 internal U64
