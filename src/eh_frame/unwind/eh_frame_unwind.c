@@ -191,6 +191,11 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
     U64 reg_count = dw_reg_count_from_arch(arch);
     DW_CFIRow cfi_row = {0};
     cfi_row.reg_rules = push_array(scratch.arena, DW_UnwindRule, reg_count);
+    if(!done && (!contains_1u64(fde.pc_range, pc) || cie.ret_addr_reg >= reg_count))
+    {
+      done = 1;
+      result.status = UWND_StepStatus_Error;
+    }
     if(!done && contains_1u64(fde.pc_range, pc))
     {
       U64 code_align_factor = cie.code_align_factor;
@@ -673,6 +678,25 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
       }
     }
     
+    // The return-address column is not necessarily the instruction pointer:
+    // on ARM64 it restores x30, which must become the caller's PC.
+    if(!done)
+    {
+      U64 caller_pc = 0;
+      ARCH_RegCode return_reg = arch_reg_code_from_dw(arch, cie.ret_addr_reg);
+      Rng1U16 return_rng = arch_info->reg_code_rng_table[return_reg];
+      if(dim_1u16(return_rng) == 0 || dim_1u16(return_rng) > sizeof(caller_pc) ||
+         !arch_reg_block_read_range(arch_info, regs, return_rng, &caller_pc))
+      {
+        done = 1;
+        result.status = UWND_StepStatus_Error;
+      }
+      else
+      {
+        arch_reg_block_write_ip(arch_info, regs, caller_pc);
+      }
+    }
+
     //- TODO(rjf): old code was replacing the stack pointer with the CFA.
     // this is surely incorrect, no? isn't the entire point of the CFA
     // to be *not* necessarily the stack pointer? and wouldn't the stack
@@ -687,6 +711,10 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
     //- rjf: commit new register values, if we succeeded
     if(!done)
     {
+      if(cfa_out != 0)
+      {
+        *cfa_out = cfa;
+      }
       result.status = UWND_StepStatus_Good;
     }
   }

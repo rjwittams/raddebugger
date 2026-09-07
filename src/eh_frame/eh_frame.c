@@ -185,7 +185,7 @@ eh_read_aug_data(String8 data, U64 off, String8 string, U64 pc, EH_PtrCtx *ptr_c
   {
     aug_out->handler_ip       = handler_ip;
     aug_out->handler_encoding = handler_encoding;
-    aug_out->lsda_encoding    = handler_encoding;
+    aug_out->lsda_encoding    = lsda_encoding;
     aug_out->addr_encoding    = addr_encoding;
     aug_out->flags            = aug_flags;
     aug_out->size             = aug_data_size;
@@ -273,7 +273,8 @@ eh_read_cie(String8 data, U64 off, DW_Format fmt, Arch arch, U64 pc, EH_PtrCtx *
     // rjf: parse augmentation
     aug_data_off_first = off;
     U64 aug_data_size = eh_read_aug_data(data, off, aug_string, pc + (off - start_off), ptr_ctx, &aug);
-    aug_data_off_opl = off + aug.size;
+    // Include the encoded length, so even a zero-byte 'z' augmentation is present.
+    aug_data_off_opl = off + aug_data_size;
     off += aug_data_size;
   }
   
@@ -327,7 +328,13 @@ eh_read_fde(String8 data, U64 off, DW_Format fmt, Arch arch, U64 pc, EH_PtrCtx *
   }
   
   // rjf: skip aug data
-  off += dim_1u64(cie->aug_data_range);
+  // The CIE says whether a length is present; the FDE supplies its own length.
+  if(dim_1u64(cie->aug_data_range) != 0)
+  {
+    U64 aug_size = 0;
+    off += str8_deserial_read_uleb128(data, off, &aug_size);
+    off += aug_size;
+  }
   
   // rjf: fill output
   fde_out->pc_range = r1u64(pc_begin, pc_begin + pc_delta);
