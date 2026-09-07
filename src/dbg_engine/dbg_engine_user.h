@@ -416,6 +416,9 @@ struct D_UserState
   // rjf: user -> ctrl driving state
   Arena *ctrl_last_run_arena;
   D_RunKind ctrl_last_run_kind;
+  D_CmdKind ctrl_source_step_kind;
+  D_Line ctrl_source_step_origin;
+  U64 ctrl_source_step_sp;
   U64 ctrl_last_run_frame_idx;
   D_Handle ctrl_last_run_thread_handle;
   D_RunFlags ctrl_last_run_flags;
@@ -461,6 +464,18 @@ internal String8List d_possible_path_overrides_from_maps_path(Arena *arena, D_Pa
 //~ rjf: Debug Info Extraction Type Pure Functions
 
 internal D_LineList d_line_list_copy(Arena *arena, D_LineList *list);
+
+// Keep the producer annotations distinct without changing the RDI encoding.
+typedef enum D_LineKind
+{
+  D_LineKind_Source,
+  D_LineKind_Unattributed,
+  D_LineKind_AlwaysStepInto,
+  D_LineKind_NeverStepInto,
+} D_LineKind;
+internal D_LineKind d_line_kind_from_num(S64 line_num);
+internal B32 d_line_has_source(D_Line *line);
+internal B32 d_line_list_has_source(D_LineList *lines);
 
 ////////////////////////////////
 //~ rjf: Command Type Functions

@@ -15784,7 +15784,7 @@ rd_frame(void)
                   DI_Key dbgi_key = d_dbgi_key_from_debug_info_path(debug_info_path);
                   String8 dbgi_path = debug_info_path->string;
                   D_LineList lines = d_lines_from_dbgi_key_path_voff(scratch.arena, dbgi_key, dbgi_path, ip_voff);
-                  if(lines.count != 0)
+                  if(d_line_list_has_source(&lines))
                   {
                     rip_vaddr = ip_vaddr;
                     unwind_index = frame_idx;
@@ -15819,7 +15819,7 @@ rd_frame(void)
             B32 missing_rip   = (rip_vaddr == 0);
             B32 dbgi_missing  = (di_key_match(di_key_zero(), dbgi_key));
             B32 dbgi_pending  = !dbgi_missing && rdi == &rdi_parsed_nil;
-            B32 has_line_info = (line.voff_range.max != 0);
+            B32 has_line_info = d_line_has_source(&line);
             B32 has_module    = (module != &d_entity_nil);
             B32 has_dbg_info  = has_module && !dbgi_missing;
             
@@ -15836,8 +15836,8 @@ rd_frame(void)
               if(!dbgi_pending && (has_line_info || has_module))
               {
                 rd_cmd(RD_CmdKind_FindCodeLocation,
-                       .file_path    = line.file_path,
-                       .line_num     = (U64)line.pt.line,
+                       .file_path    = has_line_info ? line.file_path : str8_zero(),
+                       .line_num     = has_line_info ? (U64)line.pt.line : 0,
                        .column_num   = (U64)line.pt.column,
                        .process      = process->handle,
                        .voff         = rip_voff,

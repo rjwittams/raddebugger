@@ -142,6 +142,56 @@ d_line_list_copy(Arena *arena, D_LineList *list)
   return dst;
 }
 
+internal D_LineKind
+d_line_kind_from_num(S64 line_num)
+{
+  D_LineKind result = D_LineKind_Source;
+  if(line_num <= 0)          {result = D_LineKind_Unattributed;}
+  else if(line_num == 0xfeefee) {result = D_LineKind_AlwaysStepInto;}
+  else if(line_num == 0xf00f00) {result = D_LineKind_NeverStepInto;}
+  return result;
+}
+
+internal B32
+d_line_has_source(D_Line *line)
+{
+  return line->file_path.size != 0 && line->voff_range.min < line->voff_range.max &&
+         d_line_kind_from_num(line->pt.line) == D_LineKind_Source;
+}
+
+internal B32
+d_line_list_has_source(D_LineList *lines)
+{
+  B32 result = 0;
+  for EachNode(n, D_LineNode, lines->first)
+  {
+    result |= d_line_has_source(&n->v);
+  }
+  return result;
+}
+
+// Expand only known line-table ranges, never a gap in debug information.
+// Keep the raw mappings unchanged for instruction stepping and inspection.
+internal Rng1U64
+d_source_step_voff_range(Arena *arena, DI_Key key, String8 dbgi_path, D_Line *line)
+{
+  Rng1U64 result = line->voff_range;
+  for(;;)
+  {
+    D_LineList next = d_lines_from_dbgi_key_path_voff(arena, key, dbgi_path, result.max);
+    D_Line *n = next.first ? &next.first->v : 0;
+    if(n == 0 || n->file_path.size == 0 || n->voff_range.min > result.max ||
+       n->voff_range.max <= result.max ||
+       (d_line_kind_from_num(n->pt.line) == D_LineKind_Source &&
+        (n->pt.line != line->pt.line || !str8_match(n->file_path, line->file_path, 0))))
+    {
+      break;
+    }
+    result.max = n->voff_range.max;
+  }
+  return result;
+}
+
 ////////////////////////////////
 //~ rjf: Command Type Functions
 
@@ -413,7 +463,7 @@ d_trap_net_from_thread__step_over_line(Arena *arena, D_Entity *thread)
     Rng1U64 line_voff_rng = {0};
     if(lines.first != 0)
     {
-      line_voff_rng = lines.first->v.voff_range;
+      line_voff_rng = d_source_step_voff_range(scratch.arena, dbgi_key, dbgi_path, &lines.first->v);
       file_path = lines.first->v.file_path;
       line_num = lines.first->v.pt.line;
       line_vaddr_rng = d_vaddr_range_from_voff_range(module, line_voff_rng);
@@ -429,7 +479,7 @@ d_trap_net_from_thread__step_over_line(Arena *arena, D_Entity *thread)
     D_LineList lines = d_lines_from_dbgi_key_file_path_line_num(scratch.arena, dbgi_key, file_path, line_num, max_U64);
     for EachNode(n, D_LineNode, lines.first)
     {
-      Rng1U64 voff_range = n->v.voff_range;
+      Rng1U64 voff_range = d_source_step_voff_range(scratch.arena, dbgi_key, dbgi_path, &n->v);
       Rng1U64 vaddr_range = d_vaddr_range_from_voff_range(module, voff_range);
       rng1u64_list_push(scratch.arena, &all_vaddr_ranges_on_same_line, vaddr_range);
     }
@@ -449,19 +499,6 @@ d_trap_net_from_thread__step_over_line(Arena *arena, D_Entity *thread)
         line_vaddr_rng.max = n->v.max;
         changed = 1;
       }
-    }
-  }
-  
-  // rjf: opl line_vaddr_rng -> 0xf00f00 or 0xfeefee? => include in line vaddr range
-  //
-  // MSVC exports line info at these line numbers when /JMC (Just My Code) debugging
-  // is enabled. This is enabled by default normally.
-  {
-    U64 opl_line_voff_rng = d_voff_from_vaddr(module, line_vaddr_rng.max);
-    D_LineList lines = d_lines_from_dbgi_key_path_voff(scratch.arena, dbgi_key, dbgi_path, opl_line_voff_rng);
-    if(lines.first != 0 && (lines.first->v.pt.line == 0xf00f00 || lines.first->v.pt.line == 0xfeefee))
-    {
-      line_vaddr_rng.max = d_vaddr_from_voff(module, lines.first->v.voff_range.max);
     }
   }
   
@@ -645,7 +682,7 @@ d_trap_net_from_thread__step_into_line(Arena *arena, D_Entity *thread)
     Rng1U64 line_voff_rng = {0};
     if(lines.first != 0)
     {
-      line_voff_rng = lines.first->v.voff_range;
+      line_voff_rng = d_source_step_voff_range(scratch.arena, dbgi_key, dbgi_path, &lines.first->v);
       file_path = lines.first->v.file_path;
       line_num = lines.first->v.pt.line;
       line_vaddr_rng = d_vaddr_range_from_voff_range(module, line_voff_rng);
@@ -661,22 +698,9 @@ d_trap_net_from_thread__step_into_line(Arena *arena, D_Entity *thread)
     D_LineList lines = d_lines_from_dbgi_key_file_path_line_num(scratch.arena, dbgi_key, file_path, line_num, max_U64);
     for EachNode(n, D_LineNode, lines.first)
     {
-      Rng1U64 voff_range = n->v.voff_range;
+      Rng1U64 voff_range = d_source_step_voff_range(scratch.arena, dbgi_key, dbgi_path, &n->v);
       Rng1U64 vaddr_range = d_vaddr_range_from_voff_range(module, voff_range);
       rng1u64_list_push(scratch.arena, &all_vaddr_ranges_on_same_line, vaddr_range);
-    }
-  }
-  
-  // rjf: opl line_vaddr_rng -> 0xf00f00 or 0xfeefee? => include in line vaddr range
-  //
-  // MSVC exports line info at these line numbers when /JMC (Just My Code) debugging
-  // is enabled. This is enabled by default normally.
-  {
-    U64 opl_line_voff_rng = d_voff_from_vaddr(module, line_vaddr_rng.max);
-    D_LineList lines = d_lines_from_dbgi_key_path_voff(scratch.arena, dbgi_key, dbgi_path, opl_line_voff_rng);
-    if(lines.first != 0 && (lines.first->v.pt.line == 0xf00f00 || lines.first->v.pt.line == 0xfeefee))
-    {
-      line_vaddr_rng.max = d_vaddr_from_voff(module, lines.first->v.voff_range.max);
     }
   }
   
@@ -740,7 +764,7 @@ d_trap_net_from_thread__step_into_line(Arena *arena, D_Entity *thread)
       String8 jump_dest_dbgi_path = jump_dest_dbg_path->string;
       DI_Key jump_dest_dbgi_key = d_dbgi_key_from_debug_info_path(jump_dest_dbg_path);
       D_LineList lines = d_lines_from_dbgi_key_path_voff(scratch.arena, jump_dest_dbgi_key, jump_dest_dbgi_path, jump_dest_voff);
-      if(lines.count == 0)
+      if(!d_line_list_has_source(&lines))
       {
         add = 0;
       }
@@ -1719,6 +1743,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
   //- rjf: sync with ctrl thread
   //
   D_EventList events = {0};
+  D_Event *source_step_stop = 0;
   ProfScope("sync with ctrl thread")
   {
     //- rjf: grab next reggen/memgen
@@ -1753,6 +1778,36 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         
         case D_EventKind_Stopped:
         {
+          // A source step may leave its trap net via an indirect branch or
+          // return. Continue through an explicitly unattributed range, but
+          // never consume a user breakpoint, target trap, exception, or halt.
+          if(event->cause == D_EventCause_Finished &&
+             d_user_state->ctrl_source_step_kind != D_CmdKind_Null &&
+             d_handle_match(event->entity, d_user_state->ctrl_last_run_thread_handle) &&
+             d_user_state->cmds.count == 0)
+          {
+            D_Entity *thread = d_entity_from_handle(event->entity);
+            D_Entity *process = d_entity_ancestor_from_kind(thread, D_EntityKind_Process);
+            D_Entity *module = d_module_from_process_vaddr(process, event->rip_vaddr);
+            D_Entity *dbg_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
+            D_LineList lines = d_lines_from_dbgi_key_path_voff(scratch.arena, d_dbgi_key_from_debug_info_path(dbg_path),
+                                                             dbg_path->string, d_voff_from_vaddr(module, event->rip_vaddr));
+            D_Line *line = lines.first ? &lines.first->v : 0;
+            if(line != 0 && line->file_path.size != 0 &&
+               line->voff_range.min <= d_voff_from_vaddr(module, event->rip_vaddr) &&
+               d_voff_from_vaddr(module, event->rip_vaddr) < line->voff_range.max &&
+               (d_line_kind_from_num(line->pt.line) != D_LineKind_Source ||
+                (d_line_has_source(line) && line->pt.line == d_user_state->ctrl_source_step_origin.pt.line &&
+                 str8_match(line->file_path, d_user_state->ctrl_source_step_origin.file_path, 0) &&
+                 d_sp_from_thread(event->entity) == d_user_state->ctrl_source_step_sp)))
+            {
+              source_step_stop = event;
+              // If constructing the continuation fails, report this stop.
+              // Do not defer a retry after exposing it to the user.
+              d_cmd(d_user_state->ctrl_source_step_kind, .thread = event->entity, .retry_idx = 100);
+            }
+          }
+          d_user_state->ctrl_source_step_kind = D_CmdKind_Null;
           d_user_state->stop_count += 1;
           d_user_state->ctrl_is_running = 0;
           d_user_state->ctrl_thread_run_state = 0;
@@ -2488,8 +2543,29 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         D_TrapList run_traps_copy = d_trap_list_copy(scratch.arena, &run_traps);
         D_BreakpointArray run_extra_bps_copy = d_breakpoint_array_copy(scratch.arena, &run_extra_bps);
         
+        // Keep the original source location across automatic continuations.
+        D_Line source_step_origin = d_user_state->ctrl_source_step_origin;
+        if(cmd_kind == D_CmdKind_StepIntoLine || cmd_kind == D_CmdKind_StepOverLine)
+        {
+          if(source_step_stop == 0)
+          {
+            U64 ip = d_cached_ip_from_thread(run_thread->handle);
+            D_Entity *process = d_entity_ancestor_from_kind(run_thread, D_EntityKind_Process);
+            D_Entity *module = d_module_from_process_vaddr(process, ip);
+            D_Entity *dbg_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
+            D_LineList lines = d_lines_from_dbgi_key_path_voff(scratch.arena, d_dbgi_key_from_debug_info_path(dbg_path),
+                                                             dbg_path->string, d_voff_from_vaddr(module, ip));
+            MemoryZeroStruct(&source_step_origin);
+            if(lines.first != 0) {source_step_origin = lines.first->v;}
+            d_user_state->ctrl_source_step_sp = d_sp_from_thread(run_thread->handle);
+          }
+        }
+        source_step_origin.file_path = str8_copy(scratch.arena, source_step_origin.file_path);
+
         // rjf: store last run info
         arena_clear(d_user_state->ctrl_last_run_arena);
+        d_user_state->ctrl_source_step_origin = source_step_origin;
+        d_user_state->ctrl_source_step_origin.file_path = str8_copy(d_user_state->ctrl_last_run_arena, source_step_origin.file_path);
         d_user_state->ctrl_last_run_kind              = run_kind;
         d_user_state->ctrl_last_run_frame_idx         = d_frame_index();
         d_user_state->ctrl_last_run_thread_handle     = run_thread->handle;
@@ -2497,6 +2573,18 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         d_user_state->ctrl_last_run_traps             = d_trap_list_copy(d_user_state->ctrl_last_run_arena, &run_traps_copy);
         d_user_state->ctrl_last_run_extra_bps         = d_breakpoint_array_copy(d_user_state->ctrl_last_run_arena, &run_extra_bps_copy);
         d_user_state->ctrl_is_running                 = 1;
+        if(cmd_kind != D_CmdKind_SoftHaltRefresh)
+        {
+          d_user_state->ctrl_source_step_kind =
+            (cmd_kind == D_CmdKind_StepIntoLine || cmd_kind == D_CmdKind_StepOverLine) ? cmd_kind : D_CmdKind_Null;
+        }
+        if(source_step_stop != 0 && d_user_state->ctrl_source_step_kind != D_CmdKind_Null &&
+           d_handle_match(source_step_stop->entity, run_thread->handle))
+        {
+          source_step_stop->kind = D_EventKind_Null;
+          d_user_state->stop_count -= 1;
+          source_step_stop = 0;
+        }
       }
     }
   }
