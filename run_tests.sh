@@ -52,7 +52,7 @@ if [[ "$run_torture" == "1" ]]; then
   if [[ ! -f "$test_data_version_current" ]] || ! cmp -s "$test_data_version_latest" "$test_data_version_current"; then
     echo "Downloading test data..."
     curl -fsSL -o "$test_data_archive" https://data.raddbg.com/public/raddbg_test_data.zip
-    tar -xf "$test_data_archive" -C "$test_data_dir"
+    unzip -q -o "$test_data_archive" -d "$test_data_dir"
     rm -f "$test_data_archive"
     cp "$test_data_version_latest" "$test_data_version_current"
   fi
