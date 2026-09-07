@@ -197,6 +197,7 @@
 #include "mdesk/tests/mdesk_tests.c"
 #include "linker/tests/linker_tests.c"
 #include "dwarf/tests/dwarf_tests.c"
+#include "dbg_info/tests/dbg_info_tests.c"
 #include "rdi_from_dwarf/tests/rdi_from_dwarf_tests.c"
 #include "rdi_from_pdb/tests/rdi_from_pdb_tests.c"
 #include "raddbg/tests/raddbg_tests.c"

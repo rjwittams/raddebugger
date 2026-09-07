@@ -42,6 +42,34 @@ di_key_array_from_list(Arena *arena, DI_KeyList *list)
   return array;
 }
 
+internal String8
+di_rdi_path_from_original_path(Arena *arena, String8 path)
+{
+  String8 result = {0};
+  String8 dsym_marker = str8_lit(".dSYM/");
+  U64 dsym_pos = path.size;
+  for(U64 scan_pos = 0; scan_pos < path.size;)
+  {
+    U64 match_pos = str8_find_needle(path, scan_pos, dsym_marker,
+                                     StringMatchFlag_CaseInsensitive|StringMatchFlag_SlashInsensitive);
+    if(match_pos == path.size)
+    {
+      break;
+    }
+    dsym_pos = match_pos;
+    scan_pos = match_pos + dsym_marker.size;
+  }
+  if(dsym_pos < path.size)
+  {
+    result = str8f(arena, "%S.rdi", str8_prefix(path, dsym_pos));
+  }
+  else
+  {
+    result = str8f(arena, "%S.rdi", path);
+  }
+  return result;
+}
+
 ////////////////////////////////
 //~ rjf: Main Layer Initialization
 
@@ -752,7 +780,7 @@ di_async_tick(void)
           }
           else
           {
-            rdi_path = str8f(scratch.arena, "%S.rdi", og_path);
+            rdi_path = di_rdi_path_from_original_path(scratch.arena, og_path);
           }
         }
         
