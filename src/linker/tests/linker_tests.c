@@ -9192,9 +9192,9 @@ TEST(icf_llvm_addrsig)
 {
   char *main_c = "int foo() { return 123; }\n"
                  "int bar() { return 123; }\n"
+                 "int (*addresses[])() = {&foo, &bar};\n"
                  "int main() {\n"
-                 "int (*fn)() = &foo;\n"
-                 "return fn != bar;\n"
+                 "return addresses[0] != addresses[1];\n"
                  "}\n";
   String8 main_path = t_make_file_path(arena, str8_lit("main.c"));
   T_Ok(write_data_to_file_path(main_path, str8_cstring(main_c)));
@@ -9203,17 +9203,39 @@ TEST(icf_llvm_addrsig)
   t_invoke(t_clang_path(), str8f(arena, "%S -o %S -c -ffunction-sections -target x86_64-pc-windows-msvc", main_path, main_obj_path), max_U64);
   T_Ok(g_last_exit_code == 0);
 
+#if OS_WINDOWS
+  String8 linker_input = main_obj_path;
+  String8 linker_runtime = str8_lit("libcmt.lib");
   String8 a_path = t_make_file_path(arena, str8_lit("a.exe"));
-
-  t_invoke_linkerf("%S /opt:icf /out:a.exe libcmt.lib", main_obj_path);
+#else
+  String8 linker_input = str8_lit("main.obj");
+  String8 linker_runtime = str8_lit("/subsystem:console /entry:main /nodefaultlib");
+#endif
+  t_invoke_linkerf("%S /opt:icf /out:a.exe %S", linker_input, linker_runtime);
   T_Ok(g_last_exit_code == 0);
+#if OS_WINDOWS
   t_invoke(a_path, str8_zero(), max_U64);
   T_Ok(g_last_exit_code == 1);
+#else
+  U64 vaddrs[2] = {0};
+  T_Ok(t_read_exe_data_vaddrs(arena, str8_lit("a.exe"), vaddrs, ArrayCount(vaddrs)));
+  T_Ok(vaddrs[0] != 0);
+  T_Ok(vaddrs[1] != 0);
+  T_Ok(vaddrs[0] != vaddrs[1]);
+#endif
 
-  t_invoke_linkerf("%S /opt:icf /out:a.exe libcmt.lib /llvm_addrsig:no", main_obj_path);
+  t_invoke_linkerf("%S /opt:icf /out:a.exe %S /llvm_addrsig:no", linker_input, linker_runtime);
   T_Ok(g_last_exit_code == 0);
+#if OS_WINDOWS
   t_invoke(a_path, str8_zero(), max_U64);
   T_Ok(g_last_exit_code == 0);
+#else
+  MemoryZeroArray(vaddrs);
+  T_Ok(t_read_exe_data_vaddrs(arena, str8_lit("a.exe"), vaddrs, ArrayCount(vaddrs)));
+  T_Ok(vaddrs[0] != 0);
+  T_Ok(vaddrs[1] != 0);
+  T_Ok(vaddrs[0] == vaddrs[1]);
+#endif
 }
 
 // .llvm_addrsig can name an undefined external whose definition is in another
