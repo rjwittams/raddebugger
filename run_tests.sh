@@ -42,6 +42,22 @@ if [[ "${#torture_args[@]}" == "0" ]]; then
   torture_args=("*")
 fi
 
+if [[ "$run_torture" == "1" ]]; then
+  test_data_dir="local/test_data"
+  test_data_version_latest="local/test_data_version_latest.txt"
+  test_data_version_current="local/test_data_version_current.txt"
+  test_data_archive="local/test_data.zip"
+  mkdir -p "$test_data_dir"
+  curl -fsSL -o "$test_data_version_latest" https://data.raddbg.com/public/raddbg_test_data_version.txt
+  if [[ ! -f "$test_data_version_current" ]] || ! cmp -s "$test_data_version_latest" "$test_data_version_current"; then
+    echo "Downloading test data..."
+    curl -fsSL -o "$test_data_archive" https://data.raddbg.com/public/raddbg_test_data.zip
+    tar -xf "$test_data_archive" -C "$test_data_dir"
+    rm -f "$test_data_archive"
+    cp "$test_data_version_latest" "$test_data_version_current"
+  fi
+fi
+
 for m in "${mode_values[@]}"; do
   for c in "${cc_values[@]}"; do
     # nuke artifacts from last run
