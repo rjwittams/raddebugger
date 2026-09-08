@@ -4006,6 +4006,8 @@ mac_dmn_thread_call_lower(Arena *arena, Arch arch, DMN_Handle process_handle,
       }
       regs->lr = return_vaddr;
       regs->pc = params->function_vaddr;
+      // Use the allocated scratch stack, preserving the paused leaf's red zone.
+      regs->sp = stack_top_vaddr & ~0xfull;
       result = 1;
     }break;
 #if ARCH_X64
