@@ -270,24 +270,6 @@ TEST(arm64_macho_compact_frame_saved_reg_slots)
   T_Ok(regs.q8.u64[1] == 0x1122334455667788ull);
 }
 
-TEST(arm64_macho_entry_lr_preference)
-{
-  MachO_UnwindInfoLookupResult frame_lookup = {0};
-  frame_lookup.voff_range = r1u64(0x840, 0x870);
-  frame_lookup.encoding = MACHO_UNWIND_ARM64_MODE_FRAME;
-  Rng1U64 function_range = r1u64(0x85c, 0x870);
-
-  T_Ok(d_unwind_arm64_should_prefer_entry_lr(0x85c, function_range, 1, &frame_lookup));
-  T_Ok(d_unwind_arm64_should_prefer_entry_lr(0x860, function_range, 1, &frame_lookup));
-  T_Ok(!d_unwind_arm64_should_prefer_entry_lr(0x864, function_range, 1, &frame_lookup));
-  T_Ok(!d_unwind_arm64_should_prefer_entry_lr(0x868, function_range, 1, &frame_lookup));
-
-  MachO_UnwindInfoLookupResult frameless_lookup = {0};
-  frameless_lookup.voff_range = r1u64(0x1000, 0x1030);
-  frameless_lookup.encoding = MACHO_UNWIND_ARM64_MODE_FRAMELESS;
-  T_Ok(d_unwind_arm64_should_prefer_entry_lr(0x100c, r1u64(0, 0), 1, &frameless_lookup));
-}
-
 TEST(macho_function_starts_from_lc_function_starts)
 {
   U64 data_size = 0x300;

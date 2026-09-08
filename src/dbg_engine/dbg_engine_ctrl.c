@@ -2314,18 +2314,204 @@ d_unwind_arm64_cfa_from_link_register(ARM64_RegBlock *regs, U64 *cfa_out)
   return result;
 }
 
-internal B32
-d_unwind_arm64_should_prefer_entry_lr(U64 rip_voff, Rng1U64 function_voff_range, B32 compact_lookup_good, MachO_UnwindInfoLookupResult *lookup)
+typedef struct D_ARM64StackInst D_ARM64StackInst;
+struct D_ARM64StackInst
 {
-  B32 function_start_good = (function_voff_range.max > function_voff_range.min);
-  U64 function_start_voff = function_start_good ? function_voff_range.min : (compact_lookup_good ? lookup->voff_range.min : rip_voff);
-  U64 entry_lr_window_size = 16;
-  if(compact_lookup_good && (lookup->encoding & MACHO_UNWIND_ARM64_MODE_MASK) == MACHO_UNWIND_ARM64_MODE_FRAME)
+  B32 adjust, pair, load, vector;
+  U32 dst, base, reg[2], mode;
+  S64 offset;
+};
+
+internal D_ARM64StackInst
+d_arm64_stack_inst(U32 word)
+{
+  D_ARM64StackInst result = {0};
+  result.dst = word & 31;
+  result.base = (word >> 5) & 31;
+  if((word & 0xbf800000) == 0x91000000 &&
+     (result.dst == 31 || result.dst == 29) && (result.base == 31 || result.base == 29))
   {
-    entry_lr_window_size = 8;
+    result.adjust = 1;
+    result.offset = (S64)((word >> 10) & 0xfff) << ((word & (1u << 22)) ? 12 : 0);
+    if(word & (1u << 30)) {result.offset = -result.offset;}
   }
-  B32 result = (rip_voff >= function_start_voff && rip_voff - function_start_voff < entry_lr_window_size);
+  // 64-bit integer or D-register pairs, with an SP/FP base.
+  else if(((word & 0xfe000000) == 0xa8000000 || (word & 0xfe000000) == 0x6c000000) &&
+          (result.base == 31 || result.base == 29))
+  {
+    result.pair = 1;
+    result.vector = !!(word & (1u << 26));
+    result.load = !!(word & (1u << 22));
+    result.mode = (word >> 23) & 3;
+    result.reg[0] = word & 31;
+    result.reg[1] = (word >> 10) & 31;
+    result.offset = (S64)((word >> 15) & 0x7f);
+    if(result.offset & 0x40) {result.offset -= 0x80;}
+    result.offset *= 8;
+  }
   return result;
+}
+
+// Execute only a recognized, straight-line restore sequence on a register
+// copy. No target registers or memory are written. The scan budget is a work
+// limit, not an assumption about prologue/epilogue length.
+internal B32
+d_unwind_arm64_epilogue(D_Handle process, Rng1U64 function, ARM64_RegBlock *regs, U64 endt_us, B32 *stale_out, U64 *cfa_out)
+{
+  ARM64_RegBlock caller = *regs;
+  for(U64 pc = regs->pc; pc < function.max && pc-regs->pc < 256; pc += 4)
+  {
+    U32 word = 0;
+    if(!d_process_memory_read_struct(process, pc, stale_out, &word, endt_us) || *stale_out) {return 0;}
+    if(word == 0xd65f03c0) // RET LR
+    {
+      if(caller.lr == 0) {return 0;}
+      *cfa_out = caller.sp;
+      caller.pc = caller.lr >= 4 ? caller.lr-4 : caller.lr;
+      caller.lr = 0;
+      *regs = caller;
+      return 1;
+    }
+    if(word == 0xd503201f) {continue;} // NOP
+    D_ARM64StackInst inst = d_arm64_stack_inst(word);
+    if(inst.adjust && inst.dst == 31 && inst.offset >= 0)
+    {
+      caller.sp = (inst.base == 31 ? caller.sp : caller.fp) + inst.offset;
+    }
+    else if(inst.pair && inst.load && inst.mode != 0 &&
+            (inst.mode == 2 || (inst.base == 31 && inst.offset >= 0)))
+    {
+      U64 base = (inst.base == 31 ? caller.sp : caller.fp);
+      U64 addr = base + (inst.mode == 1 ? 0 : inst.offset);
+      U64 values[2] = {0};
+      if(!d_process_memory_read(process, r1u64(addr, addr+16), stale_out, values, endt_us) || *stale_out) {return 0;}
+      for(U32 i = 0; i < 2; i += 1)
+      {
+        if(inst.vector) {(&caller.q0)[inst.reg[i]].u64[0] = values[i];}
+        else if(inst.reg[i] != 31) {(&caller.x0)[inst.reg[i]] = values[i];}
+      }
+      if(inst.mode != 2) {caller.sp = base + inst.offset;}
+    }
+    else {return 0;}
+  }
+  return 0;
+}
+
+// Derive a stopped-PC row from the executed straight-line prefix. At a branch
+// we may use the compact body row only if the prefix has established that row.
+internal B32
+d_unwind_arm64_prefix(D_Handle process, U64 function_start, MachO_UnwindInfoLookupResult *lookup,
+                      ARM64_RegBlock *regs, U64 endt_us, B32 *stale_out, B32 *body_out, U64 *cfa_out)
+{
+  Temp scratch = scratch_begin(0, 0);
+  B32 good = regs->pc >= function_start && (regs->pc-function_start)%4 == 0;
+  U64 size = good ? Min(regs->pc-function_start, KB(4)) : 0;
+  U32 *code = push_array_no_zero(scratch.arena, U32, size/4);
+  if(size != 0) {good = d_process_memory_read(process, r1u64(function_start, function_start+size), stale_out, code, endt_us);}
+  S64 sp = 0, fp = 0, slots[64] = {0};
+  B32 fp_known = 0;
+  U64 saved = 0, modified = 0;
+  U64 preserved = (0xfffull << 19) | (0xffull << 40); // x19-LR, d8-d15
+  U32 mode = lookup->encoding & MACHO_UNWIND_ARM64_MODE_MASK;
+  for(U64 off = 0; good && !*stale_out && off < size; off += 4)
+  {
+    U32 word = code[off/4];
+    D_ARM64StackInst inst = d_arm64_stack_inst(word);
+    if(inst.adjust)
+    {
+      if(inst.base == 29 && !fp_known) {good = 0; break;}
+      S64 value = (inst.base == 31 ? sp : fp) + inst.offset;
+      if(inst.dst == 31) {sp = value;}
+      else {fp = value; fp_known = 1; modified |= 1ull << 29;}
+      if(sp > 0) {good = 0;}
+    }
+    else if(inst.pair && inst.mode != 0)
+    {
+      if((inst.base == 29 && !fp_known) || (inst.base != 31 && inst.mode != 2)) {good = 0; break;}
+      S64 addr = (inst.base == 31 ? sp : fp) + (inst.mode == 1 ? 0 : inst.offset);
+      for(U32 i = 0; i < 2; i += 1)
+      {
+        U32 reg = inst.reg[i] + (inst.vector ? 32 : 0);
+        U64 bit = 1ull << reg;
+        S64 location = addr + i*8;
+        if(preserved & bit)
+        {
+          if(!inst.load && !(modified & bit)) {slots[reg] = location; saved |= bit;}
+          else if(inst.load && (saved & bit) && slots[reg] == location)
+          {
+            saved &= ~bit;
+            modified &= ~bit;
+            if(reg == 29) {fp_known = 0;}
+          }
+          else if(inst.load) {modified |= bit;}
+        }
+      }
+      if(inst.mode != 2) {sp += inst.offset;}
+    }
+    else
+    {
+      DASM_Inst decoded = dasm_inst_from_code(scratch.arena, Arch_arm64, function_start+off, str8((U8 *)&code[off/4], 4), DASM_Syntax_Intel);
+      if(decoded.flags & DASM_InstFlag_Call) {modified |= 1ull << 30;}
+      else if(decoded.flags & (DASM_InstFlag_Branch|DASM_InstFlag_UnconditionalJump|DASM_InstFlag_Return))
+      {
+        if(mode == MACHO_UNWIND_ARM64_MODE_FRAMELESS)
+        {
+          *body_out = (sp == -(S64)(((lookup->encoding & MACHO_UNWIND_ARM64_FRAMELESS_STACK_SIZE_MASK) >> 12)*16) &&
+                       !(modified & (1ull << 30)));
+        }
+        else if(fp_known && (saved & (3ull << 29)) == (3ull << 29) && slots[29] == fp && slots[30] == fp+8 && fp == -16)
+        {
+          D_MachOCompactArm64FrameRegSlot expected[18] = {0};
+          U64 count = d_macho_compact_unwind_arm64_frame_saved_reg_slots_from_encoding(lookup->encoding, expected, ArrayCount(expected));
+          *body_out = 1;
+          for(U64 i = 0; i < count; i += 1)
+          {
+            U32 reg = (expected[i].reg_code >= ARM64_RegCode_q8 ? 40 + expected[i].reg_code-ARM64_RegCode_q8 : 19 + expected[i].reg_code-ARM64_RegCode_x19);
+            if(!(saved & (1ull << reg)) || slots[reg] != expected[i].cfa_off) {*body_out = 0;}
+          }
+        }
+        good = 0;
+      }
+      else if(decoded.size != 4 || (decoded.flags & (DASM_InstFlag_ChangesStackPointer|DASM_InstFlag_ChangesStackPointerVariably))) {good = 0;}
+      else
+      {
+        // An unsaved write makes that caller register unavailable. Saved
+        // originals remain recoverable from their stack locations.
+        U32 reg = 64;
+        if(decoded.dst_reg_code >= ARM64_RegCode_x0 && decoded.dst_reg_code <= ARM64_RegCode_x30) {reg = decoded.dst_reg_code-ARM64_RegCode_x0;}
+        else if(decoded.dst_reg_code >= ARM64_RegCode_w0 && decoded.dst_reg_code <= ARM64_RegCode_w30) {reg = decoded.dst_reg_code-ARM64_RegCode_w0;}
+        if(reg < 31) {modified |= (1ull << reg) & preserved;}
+        if(reg == 29) {fp_known = 0;}
+      }
+    }
+  }
+  if(size != regs->pc-function_start || (modified & ~saved & preserved)) {good = 0;}
+  if(good && !*stale_out)
+  {
+    ARM64_RegBlock caller = *regs;
+    U64 cfa = regs->sp - sp;
+    for(U32 reg = 19; good && reg < 48; reg += 1)
+    {
+      if(saved & (1ull << reg))
+      {
+        U64 value = 0;
+        good = d_process_memory_read_struct(process, cfa+slots[reg], stale_out, &value, endt_us);
+        if(reg < 31) {(&caller.x0)[reg] = value;}
+        else {(&caller.q0)[reg-32].u64[0] = value;}
+      }
+    }
+    if(good && !*stale_out && caller.lr != 0)
+    {
+      *cfa_out = cfa;
+      caller.sp = cfa;
+      caller.pc = caller.lr >= 4 ? caller.lr-4 : caller.lr;
+      caller.lr = 0;
+      *regs = caller;
+    }
+    else {good = 0;}
+  }
+  scratch_end(scratch);
+  return good && !*stale_out;
 }
 
 internal D_UnwindStepResult
@@ -2650,35 +2836,31 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
           U64 pc_voff = start_ip - module_entity->vaddr_range.min;
           B32 compact_lookup_good = macho_unwind_info_lookup(module_info->macho_unwind_info_data, pc_voff, &lookup);
           Rng1U64 function_voff_range = d_macho_function_start_voff_range_from_module_voff(module_entity->handle, pc_voff);
-          U64 lr_vaddr = regs_arm64->lr >= 4 ? regs_arm64->lr - 4 : regs_arm64->lr;
-          B32 lr_module_good = (d_module_from_process_vaddr(process_entity, lr_vaddr) != &d_entity_nil);
-          B32 prefer_entry_lr = (frame_node_count == 1 &&
-                                 regs_arm64->lr != 0 &&
-                                 lr_module_good &&
-                                 d_unwind_arm64_should_prefer_entry_lr(pc_voff, function_voff_range, compact_lookup_good, &lookup));
           B32 compact_dwarf = (compact_lookup_good &&
                                (lookup.encoding & MACHO_UNWIND_ARM64_MODE_MASK) == MACHO_UNWIND_ARM64_MODE_DWARF);
           B32 compact_supported = compact_lookup_good && d_macho_compact_unwind_arm64_mode_is_supported(lookup.encoding);
           B32 compact_cfa_good = compact_supported && d_macho_compact_unwind_arm64_cfa_from_encoding(&lookup, regs_arm64, &cfa);
-          if(prefer_entry_lr && d_unwind_arm64_cfa_from_link_register(regs_arm64, &cfa))
+          B32 compact_body = frame_node_count != 1;
+          B32 instruction_row = 0, instruction_stale = 0;
+          if(frame_node_count == 1 && compact_supported &&
+             function_voff_range.max > function_voff_range.min)
           {
-            D_UnwindStepResult step = d_unwind_step__macho_arm64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, regs_arm64, 1, endt_us);
-            if(step.flags == 0)
+            Rng1U64 function = r1u64(module_entity->vaddr_range.min + function_voff_range.min,
+                                    module_entity->vaddr_range.min + Min(function_voff_range.max, lookup.voff_range.max));
+            instruction_row = d_unwind_arm64_epilogue(process_entity->handle, function, regs_arm64, endt_us, &instruction_stale, &cfa);
+            if(!instruction_row && !instruction_stale)
             {
-              last_frame_node->v.cfa = cfa;
-              step_is_good = 1;
-              U64 new_ip = arch_ip_from_reg_block(arch_info, regs_block);
-              D_Entity *new_module_entity = d_module_from_process_vaddr(process_entity, new_ip);
-              stop_after_step = (new_ip != 0 && new_module_entity != module_entity);
+              instruction_row = d_unwind_arm64_prefix(process_entity->handle, function.min, &lookup, regs_arm64, endt_us, &instruction_stale, &compact_body, &cfa);
             }
-            else if(step.flags & D_UnwindFlag_Stale)
-            {
-              unwind.flags |= D_UnwindFlag_Stale;
-            }
-            else
-            {
-              MemoryCopy(regs_block, regs_block_restore, arch_reg_block_size);
-            }
+          }
+          if(instruction_stale)
+          {
+            unwind.flags |= D_UnwindFlag_Stale;
+          }
+          else if(instruction_row)
+          {
+            last_frame_node->v.cfa = cfa;
+            step_is_good = 1;
           }
           else if(compact_dwarf)
           {
@@ -2691,10 +2873,10 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
               step_unwinder_module_info.unwind_info = &compact_dwarf_unwind_info;
             }
           }
-          else if((compact_lookup_good &&
+          else if(compact_body && ((compact_lookup_good &&
                    compact_supported &&
                    compact_cfa_good) ||
-                  d_unwind_arm64_cfa_from_frame_pointer(regs_arm64, &cfa))
+                  d_unwind_arm64_cfa_from_frame_pointer(regs_arm64, &cfa)))
           {
             D_UnwindStepResult step = d_unwind_step__macho_arm64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, regs_arm64, 0, endt_us);
             if(step.flags == 0)
