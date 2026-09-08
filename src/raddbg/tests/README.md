@@ -10,7 +10,10 @@ The runner needs Python 3, Git, and cleat with `launch --tag` support. On
 macOS it needs Clang, `xcrun dsymutil` and `xcrun llvm-nm`. RAD must have
 permission to debug its own test children. On Windows, run in the MSVC x64
 developer environment and pass `--debugger build/raddbg.exe`; fixture builds
-use MSVC, `/Zi /Od`, and `/INCREMENTAL:NO`. Linux fixture builds use Clang.
+use MSVC, `/Zi /Od`, and `/INCREMENTAL:NO` (the inline case uses `/O2`).
+Windows also needs PowerShell/CIM to identify RAD beneath cleat's shell;
+the lookup only considers the owned session leader and its direct children.
+Linux fixture builds use Clang.
 A headless build can be supplied as `--sender build/raddbg_non_graphical`.
 The sender and debugger must use compatible IPC transports.
 
@@ -18,15 +21,18 @@ Each case builds in a new directory, with one target, its own user/project
 configuration, and its own cleat session. It never attaches to an existing
 debugger. Cleanup kills attached test targets, verifies their removal from
 RAD, then closes that cleat session. Detached C targets run to completion.
-Cleat recordings and all build artifacts remain available after cleanup.
+The runner captures cleat's screen before closing the session and retains
+build artifacts. Recording availability after closure depends on cleat.
 This does not isolate RAD's shared symbol cache or user-wide OS permissions.
 
 `--output-root DIRECTORY` retains runs under an existing directory of your
 choice; the default is the OS temporary directory. Each result records host,
 source revision/status/patch, source and script hashes, compiler commands,
 target/debug-info and debugger hashes, and a raw `ipc.jsonl` transcript.
-`commands.log` contains compiler and scenario output; `result.json` includes
-failure and cleanup details. A dirty source tree is recorded, not silently
+`commands.log` contains compiler and scenario output, with separate
+`command-NN.stdout`/`.stderr` files so a daemon inheriting output handles
+cannot hold a pipe open indefinitely. `result.json` includes failure and
+cleanup details, plus a best-effort `state` query on failure. A dirty source tree is recorded, not silently
 identified as its HEAD commit. Binary hashes identify the executable tested;
 the runner does not prove that a supplied binary matches the current source.
 
@@ -44,8 +50,17 @@ explicit pending/error result with no apparently valid frames. It does not
 require the existing memory cache to settle an unreadable stack as an error.
 
 These are small C/assembly checks, not the planned five-language regression
-matrix. Incremental Windows linking, optimized/inlined targets, missing debug
-info, and other GUI workflows need separate coverage. `eval` still uses the
+matrix. `c-inline` builds an optimized, forced-inline wrapper around a
+non-inlined leaf. It requires `leaf`, `wrapper`, `main` in stack order, source
+locations, distinct logical frame IDs and shared physical PC/SP for the
+inline wrapper and main. It passes with MSVC/PDB after correcting the
+converter's compilation-unit index for inline source tables. On macOS and
+Linux it currently fails because DWARF inline-subroutine conversion is
+unimplemented. This is a failing regression in `all`, not an expected-pass
+exception or an uncovered host.
+
+Incremental Windows linking, broader optimized/inlined behavior, missing
+debug info, and other GUI workflows need separate coverage. `eval` still uses the
 selected GUI frame and rendered value text. Register availability and
 frame-explicit evaluation remain follow-up work.
 

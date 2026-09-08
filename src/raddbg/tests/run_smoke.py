@@ -37,12 +37,12 @@ def main():
     p.add_argument('--debugger', required=True, type=Path)
     p.add_argument('--sender', type=Path, help='Default: same binary as debugger')
     p.add_argument('--compiler', default='cl' if os.name == 'nt' else 'clang')
-    p.add_argument('--case', choices=['all', 'c', 'c-exit-37', 'c-detach', *ARM_CASES], default='c')
+    p.add_argument('--case', choices=['all', 'c', 'c-exit-37', 'c-detach', 'c-inline', *ARM_CASES], default='c')
     p.add_argument('--output-root', type=Path, help='Existing directory for retained, unique run directories')
     a = p.parse_args()
     a.debugger = a.debugger.resolve()
     a.sender = (a.sender or a.debugger).resolve()
-    cases = ['c', 'c-exit-37', 'c-detach', *ARM_CASES] if a.case == 'all' else [a.case]
+    cases = ['c', 'c-exit-37', 'c-detach', 'c-inline', *ARM_CASES] if a.case == 'all' else [a.case]
     statuses = [run_case(a, case)['status'] for case in cases]
     # An explicitly requested unsupported case is not a passing test.
     return 1 if 'fail' in statuses else 2 if 'uncovered' in statuses else 0
@@ -58,7 +58,15 @@ def run_case(a, case):
     client = None
     def run(command, **kwargs):
         record['commands'].append([str(x) for x in command])
-        result = subprocess.run(command, cwd=output, capture_output=True, text=True, **kwargs)
+        # A newly spawned cleat daemon can inherit its launcher's output handles.
+        # Files let launch finish without waiting for that daemon to close a pipe.
+        prefix = f'command-{len(record["commands"]):02}'
+        with (output/(prefix+'.stdout')).open('w+', encoding='utf-8', errors='replace') as stdout, \
+             (output/(prefix+'.stderr')).open('w+', encoding='utf-8', errors='replace') as stderr:
+            result = subprocess.run(command, cwd=output, stdout=stdout, stderr=stderr, **kwargs)
+            stdout.seek(0)
+            stderr.seek(0)
+            result.stdout, result.stderr = stdout.read(), stderr.read()
         with (output/'commands.log').open('a', encoding='utf-8') as stream:
             stream.write(repr(command)+'\n'+result.stdout+result.stderr+'\n')
         result.check_returncode()
@@ -80,6 +88,8 @@ def run_case(a, case):
         help_text = run(['cleat', 'launch', '--help'], timeout=10)
         assert '--tag' in help_text, 'cleat is too old: launch must support --tag'
         stem = 'arm64_red_zone' if case == 'tls-red-zone' else 'arm64_unwind' if case in ARM_CASES else 'session'
+        if case == 'c-inline':
+            stem = 'inline'
         source = HERE/(stem+'.c')
         defines = ARM_CASES.get(case, []) + (['EXIT_CODE=37'] if case == 'c-exit-37' else [])
         sources = [source] + ([HERE/(stem+'.S')] if case in ARM_CASES else [])
@@ -88,13 +98,13 @@ def run_case(a, case):
         record['fixture_hashes'] = {f.name: sha(f) for f in sources}
         target = output/('session.exe' if os.name == 'nt' else 'session')
         if os.name == 'nt':
-            run([a.compiler, '/Zi', '/Od', *['/D'+d for d in defines], str(source), '/Fe:'+str(target), '/link', '/debug', '/incremental:no'], timeout=60)
+            run([a.compiler, '/Zi', '/O2' if case == 'c-inline' else '/Od', *['/D'+d for d in defines], str(source), '/Fe:'+str(target), '/link', '/debug', '/incremental:no'], timeout=60)
         else:
             record['compiler_version'] = run([a.compiler, '--version'], timeout=10)
             objects = []
             for index, src in enumerate(sources):
                 obj = f'fixture-{index}.o'
-                run([a.compiler, '-g', '-O0', *['-D'+d for d in defines], '-c', str(src), '-o', obj], timeout=60)
+                run([a.compiler, '-g', '-O1' if case == 'c-inline' else '-O0', *['-D'+d for d in defines], '-c', str(src), '-o', obj], timeout=60)
                 objects.append(obj)
             run([a.compiler, '-g', *objects, '-o', str(target)], timeout=60)
             if platform.system() == 'Darwin':
@@ -104,6 +114,8 @@ def run_case(a, case):
                                        if f.is_file() and ('.dSYM/' in str(f) or f.suffix.lower() == '.pdb')}
         project = output/'test.project'
         stop_line = 6 if case in ARM_CASES else next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'volatile int seed = 20' in line)
+        if case == 'c-inline':
+            stop_line = next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'SNAPSHOT_STOP' in line)
         project.write_text('// raddbg 0.9.29 project file\n\ntarget:\n{\n'
                            f' executable: {json.dumps(str(target))}\n working_directory: {json.dumps(str(output))}\n enabled: 1\n}}\n'
                            f'breakpoint:\n{{\n source_location: {json.dumps(str(source)+f":{stop_line}:1")}\n enabled: 1\n}}\n', encoding='utf-8')
@@ -112,10 +124,25 @@ def run_case(a, case):
         run(['cleat', 'launch', session, '--tag', 'project=raddbg', '--tag', 'purpose=test',
              '--cwd', str(output), '--cmd', command], timeout=20)
         launched = True
-        # Cleat's leader PID identifies the directly launched RAD.
+        # Unix cleat launches RAD directly; Windows cleat may use a shell.
         info = run(['cleat', 'inspect', session, '--json'], timeout=10)
         record['cleat_inspect'] = json.loads(info)
         pid = record['cleat_inspect']['process']['leader_pid']
+        if os.name == 'nt':
+            deadline = time.monotonic()+5
+            while time.monotonic() < deadline:
+                query = (f'Get-CimInstance Win32_Process -Filter "ProcessId = {pid} OR ParentProcessId = {pid}" | '
+                         'Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress')
+                rows = json.loads(run(['powershell', '-NoProfile', '-Command', query], timeout=10) or '[]')
+                rows = rows if isinstance(rows, list) else [rows]
+                matches = [r for r in rows if r.get('ExecutablePath') and Path(r['ExecutablePath']) == a.debugger]
+                if len(matches) == 1:
+                    pid = matches[0]['ProcessId']
+                    break
+                time.sleep(.05)
+            else:
+                raise AssertionError(f'Cannot identify RAD in owned cleat process tree: {rows}')
+        record['debugger_pid'] = pid
         client = Client(a.sender, pid, output/'ipc.jsonl')
         deadline = time.monotonic()+15
         while time.monotonic() < deadline:
@@ -128,6 +155,20 @@ def run_case(a, case):
         else:
             raise AssertionError('Debugger did not become ready; see ipc.jsonl')
         record['debugger_build'] = initial['build']
+        if case == 'c-inline':
+            stopped = client.stopped('restart')
+            frames = stopped['stack']['frames']
+            assert [f['function'] for f in frames[:3]] == ['leaf', 'wrapper', 'main'], stopped
+            assert frames[1]['inline_depth'] == 1 and frames[2]['inline_depth'] == 0, stopped
+            assert frames[1]['unwind_index'] == frames[2]['unwind_index'], stopped
+            assert frames[1]['pc'] == frames[2]['pc'] and frames[1]['sp'] == frames[2]['sp'], stopped
+            assert len({f['id'] for f in frames}) == len(frames), stopped
+            for frame in frames[:3]:
+                assert frame['source']['is_source'] and Path(frame['source']['path']) == source, stopped
+            ended = client.stopped('run')
+            assert ended['process_count'] == 0 and ended['last_process_end']['exit_code'] == 0, ended
+            record['status'] = 'pass'
+            return record
         if case in ARM_CASES:
             script = 'arm64_red_zone_ipc.py' if case == 'tls-red-zone' else 'arm64_unwind_ipc.py'
             options = ['--frame-record'] if 'FRAME_RECORD' in defines else []
@@ -144,7 +185,8 @@ def run_case(a, case):
         assert int(stopped['stop']['breakpoint_id'], 16) != 0, stopped
         target_pid = stopped['process_id']
         end_sequence = stopped['last_process_end']['sequence']
-        assert stopped['stack']['frames'][0]['source']['path'] == str(source), stopped
+        observed_source = Path(stopped['stack']['frames'][0]['source']['path'])
+        assert observed_source.is_absolute() and observed_source == source, stopped
         assert stopped['stack']['frames'][0]['source']['line'] == stop_line, stopped
         client.stopped('step_over_line')
         assert client.value('seed') == '20'
@@ -186,6 +228,11 @@ def run_case(a, case):
         record['status'] = 'fail'
         record['error'] = repr(error)
         record['traceback'] = traceback.format_exc()
+        if client:
+            try:
+                record['failure_state_text'] = client.command('state')
+            except Exception as observation_error:
+                record['failure_state_error'] = repr(observation_error)
     finally:
         if client:
             try:
@@ -201,6 +248,10 @@ def run_case(a, case):
                 record['cleanup_error'] = repr(error)
                 record['status'] = 'fail'
         if launched:
+            try:
+                run(['cleat', 'capture', session], timeout=10)
+            except Exception as error:
+                record['capture_error'] = repr(error)
             try:
                 run(['cleat', 'kill', session], timeout=15)
             except Exception as error:
