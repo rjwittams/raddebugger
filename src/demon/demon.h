@@ -117,6 +117,7 @@ struct DMN_Event
   U64 stack_pointer;
   U64 user_data;
   B32 exception_repeated;
+  B32 process_detached; // ExitProcess is synthetic removal, not an observed exit.
   
   // rjf: module info
   DMN_ModuleInfo *module_info;

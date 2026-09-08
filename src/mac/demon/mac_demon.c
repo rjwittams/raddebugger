@@ -2883,6 +2883,7 @@ mac_dmn_push_detach_events(Arena *arena, DMN_EventList *events)
       mac_dmn_process_clear_thread_entities(arena, events, process_entity);
       mac_dmn_process_clear_module_entities(arena, events, process_entity);
       mac_dmn_push_event_exit_process(arena, events, process_entity, 0);
+      events->last->v.process_detached = 1;
       mac_dmn_process_entity_release(process_entity);
     }
   }

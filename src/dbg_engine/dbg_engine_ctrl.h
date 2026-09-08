@@ -68,6 +68,8 @@ struct D_CallStack
   U64 frames_count;
   D_CallStackFrame **concrete_frames;
   U64 concrete_frames_count;
+  D_UnwindFlags unwind_flags;
+  U64 unwind_frame_count;
 };
 
 ////////////////////////////////

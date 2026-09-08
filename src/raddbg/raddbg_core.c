@@ -8,6 +8,7 @@
 //~ rjf: Generated Code
 
 #include "generated/raddbg.meta.c"
+#include "raddbg_debug_snapshot.c"
 
 ////////////////////////////////
 //~ rjf: Registers Type Functions
@@ -12555,6 +12556,7 @@ rd_frame(void)
   //
   D_Handle find_thread_retry = {0};
   RD_Cmd *cmd = 0;
+  String8Node *debug_snapshot_output = 0;
   ProfScope("loop - consume events in core, tick engine, and repeat") for(U64 cmd_process_loop_idx = 0; cmd_process_loop_idx < 3; cmd_process_loop_idx += 1)
   {
     ////////////////////////////
@@ -14135,6 +14137,20 @@ rd_frame(void)
               str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, " }\n");
             }
             str8_list_pushf(rd_state->cmd_output_arena, &rd_state->cmd_outputs, "}\n");
+          }break;
+          case RD_CmdKind_DebugSnapshot:
+          {
+            String8 snapshot = rd_debug_snapshot(rd_state->cmd_output_arena);
+            // The engine-settling loop can revisit this query. Keep one reply,
+            // replacing its contents with the latest observation on each pass.
+            if(debug_snapshot_output == 0)
+            {
+              str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, str8_zero());
+              debug_snapshot_output = rd_state->cmd_outputs.last;
+            }
+            rd_state->cmd_outputs.total_size -= debug_snapshot_output->string.size;
+            debug_snapshot_output->string = snapshot;
+            rd_state->cmd_outputs.total_size += snapshot.size;
           }break;
           case RD_CmdKind_Eval:
           {
@@ -18469,6 +18485,10 @@ rd_frame(void)
           }
         }break;
         case D_EventKind_EndProc:
+        rd_state->ipc_process_end_sequence += 1;
+        rd_state->ipc_process_end_id = evt->entity_id;
+        rd_state->ipc_process_end_code = evt->u64_code;
+        rd_state->ipc_process_end_has_exit_code = (evt->cause == D_EventCause_Finished);
         if(rd_state->quit_after_success)
         {
           D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);

@@ -8,7 +8,9 @@ assembly leaf, not the expected unwind results. This restarts the target.
 import argparse
 import re
 import subprocess
+import sys
 import time
+from ipc_client import Client
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('sender')
@@ -16,36 +18,25 @@ p.add_argument('pid', type=int)
 p.add_argument('--target', required=True)
 p.add_argument('--frame-record', action='store_true')
 p.add_argument('--branch-body', action='store_true')
+p.add_argument('--broken-frame', action='store_true')
 a = p.parse_args()
+client = Client(a.sender, a.pid)
 
 def ipc(command):
-    return subprocess.check_output([a.sender, '--ipc', f'--pid:{a.pid}',
-                                    *command.split()], text=True, timeout=15)
+    return client.command(command)
 
-def state():
-    raw = ipc('state')
-    def number(key):
-        m = re.search(rf'^\s*{key}:\s*(0x[\da-f]+|\d+)', raw, re.M)
-        return int(m[1], 0) if m else None
-    return dict(raw=raw, stop=number('stop_count'), running=number('running'),
-                ip=number('ip'), voff=number('ip_voff'))
+def state(snapshot=None):
+    s = snapshot or client.snapshot()
+    frames = s['stack']['frames']
+    return dict(raw=s, stop=s['stop_count'], running=s['running'],
+                ip=int(s['stop']['pc'], 16),
+                voff=int(frames[0]['module_offset'], 16) if frames else 0)
 
 def stop(command):
-    before = state()['stop']
-    ipc(command)
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        s = state()
-        if not s['running'] and s['stop'] > before and (command != 'restart' or s['ip']):
-            return s
-        time.sleep(.03)
-    raise AssertionError(state()['raw'])
+    return state(client.stopped(command))
 
 def value(expr):
-    raw = ipc('eval ' + expr)
-    m = re.search(r'value:\s*"(0x[\da-f]+|-?\d+)"', raw)
-    assert m, raw
-    return int(m[1], 0)
+    return int(client.value(expr), 0)
 
 symbols = subprocess.check_output(['xcrun', 'llvm-nm', a.target], text=True)
 leaf = int(re.search(r'^([\da-fA-F]+) T _unwind_leaf$', symbols, re.M)[1], 16)
@@ -62,6 +53,27 @@ assert bp, reply
 try:
     assert stop('run')['ip'] == leaf
     ipc(f'remove_breakpoint {bp[0]}')
+    if a.broken_frame:
+        stop('step_into_inst')
+        before = client.snapshot()
+        ipc('step_into_inst')
+        deadline = time.monotonic()+5
+        while time.monotonic() < deadline:
+            broken = client.snapshot()
+            if not broken['running'] and broken['stop_count'] > before['stop_count']:
+                break
+            time.sleep(.03)
+        assert not broken['running'] and broken['stop_count'] > before['stop_count'], broken
+        assert int(broken['stop']['pc'], 16) == leaf+8, broken
+        # An unreadable stack currently may never settle in the memory cache.
+        # A bounded pending result is honest; an apparently valid stack is not.
+        for _ in range(10):
+            broken = client.snapshot()
+            assert broken['stack']['status'] in ('pending', 'error'), broken
+            assert broken['stack']['frames'] == [], broken
+            time.sleep(.05)
+        print('PASS: unreadable stack is explicitly '+broken['stack']['status'])
+        sys.exit(0)
     # Expected from the explicit assembly: allocation, body, then restoration.
     sizes = (0, 16, 16, 48, 48, 48, 48, 48, 16, 0) if a.frame_record else (0, 16, 16, 16, 16, 16, 0)
     boundaries = list(enumerate(sizes))
@@ -93,7 +105,8 @@ try:
         if a.frame_record:
             assert value('x19') == caller_x19, f'caller x19 at +{offset}'
         ipc('up_one_frame')
-    assert stop('run')['ip'] == 0
+    ended = stop('run')['raw']
+    assert ended['process_count'] == 0 and ended['last_process_end']['exit_code'] == 0, ended
     print('PASS: all leaf instruction boundaries')
 finally:
     ipc(f'remove_breakpoint {bp[0]}')

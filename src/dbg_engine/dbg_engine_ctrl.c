@@ -4407,6 +4407,9 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
       out_evt->msg_id     = msg->msg_id;
       out_evt->entity     = process_handle;
       out_evt->u64_code   = event->code;
+      // Distinguish an observed exit from synthetic removal after detach.
+      out_evt->cause      = event->process_detached ? D_EventCause_Null : D_EventCause_Finished;
+      out_evt->entity_id  = process->id;
       d_ctrl_state->process_counter -= 1;
     }break;
     
@@ -7751,13 +7754,18 @@ d_call_stack_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_
         }
         else if(unwind.flags & D_UnwindFlag_Error)
         {
-          good = 0;
+          // Keep failure diagnostics without presenting partial frames as a
+          // successful UI call stack.
+          good = 1;
           retry = 0;
+          call_stack->unwind_flags = unwind.flags;
+          call_stack->unwind_frame_count = unwind.frames.count;
         }
         else
         {
           good = 1;
           call_stack[0] = d_call_stack_from_unwind(arena, process, &unwind);
+          call_stack->unwind_frame_count = unwind.frames.count;
         }
         post_reg_gen = d_reg_gen();
         post_mem_gen = d_mem_gen();

@@ -8,47 +8,37 @@ import argparse
 import re
 import subprocess
 import time
+from ipc_client import Client
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('sender')
 p.add_argument('pid', type=int)
 p.add_argument('--target', required=True)
 a = p.parse_args()
+client = Client(a.sender, a.pid)
 
 def ipc(command):
-    return subprocess.check_output([a.sender, '--ipc', f'--pid:{a.pid}',
-                                    *command.split()], text=True, timeout=15)
+    return client.command(command)
 
 def stop(command):
-    before = int(re.search(r'stop_count: (\d+)', ipc('state'))[1])
-    ipc(command)
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        raw = ipc('state')
-        if 'running: 0' in raw and int(re.search(r'stop_count: (\d+)', raw)[1]) > before:
-            return raw
-        time.sleep(.03)
-    raise AssertionError(raw)
+    return client.stopped(command)
 
 def value(expr):
-    raw = ipc('eval ' + expr)
-    m = re.search(r'value:\s*"(0x[\da-f]+|\d+)"', raw)
-    assert m, raw
-    return int(m[1], 0)
+    return int(client.value(expr), 0)
 
 s = stop('restart')
 symbols = subprocess.check_output(['xcrun', 'llvm-nm', a.target], text=True)
 leaf = int(re.search(r'^([\da-fA-F]+) T _red_zone_leaf$', symbols, re.M)[1], 16)
 header = int(re.search(r'^([\da-fA-F]+) [A-Za-z] __mh_execute_header$', symbols, re.M)[1], 16)
-ip = int(re.search(r'ip: (0x[\da-f]+)', s)[1], 16)
-voff = int(re.search(r'ip_voff: (0x[\da-f]+)', s)[1], 16)
+ip = int(s['stop']['pc'], 16)
+voff = int(s['stack']['frames'][0]['module_offset'], 16)
 address = leaf - header + ip - voff + 36
 reply = ipc(f'add_address_breakpoint {address:#x}')
 bp = re.search(r'\$[\da-fA-F]+', reply)
 assert bp, reply
 try:
     s = stop('run')
-    assert int(re.search(r'ip: (0x[\da-f]+)', s)[1], 16) == address, s
+    assert int(s['stop']['pc'], 16) == address, s
     ipc('remove_breakpoint ' + bp[0])
     for _ in range(8):
         if value('pc') == address:
@@ -72,7 +62,8 @@ try:
     assert value('sp') == original_sp and value('pc') == address
     assert {name: value(name) for name in registers} == registers
     assert after == before, 'TLS evaluation clobbered the interrupted red zone'
-    assert 'ip: 0x0\n' in stop('run')
+    ended = stop('run')
+    assert ended['process_count'] == 0 and ended['last_process_end']['exit_code'] == 0, ended
     print('PASS: cold TLS evaluation preserves the red zone, SP, and PC')
 finally:
     ipc('remove_breakpoint ' + bp[0])
