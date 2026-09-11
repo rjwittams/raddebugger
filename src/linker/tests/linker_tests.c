@@ -9263,7 +9263,11 @@ TEST(icf_llvm_addrsig_external_symbol)
   t_invoke(t_clang_path(), str8f(arena, "%S -o %S -c -ffunction-sections -target x86_64-pc-windows-msvc", def_path, def_obj_path), max_U64);
   T_Ok(g_last_exit_code == 0);
 
+#if OS_WINDOWS
   t_invoke_linkerf("%S %S /subsystem:console /entry:entry /opt:icf /out:addrsig_ext.exe libcmt.lib", ref_obj_path, def_obj_path);
+#else
+  t_invoke_linkerf("ref.obj def.obj /subsystem:console /entry:entry /opt:icf /out:addrsig_ext.exe /nodefaultlib");
+#endif
   T_Ok(g_last_exit_code == 0);
 }
 
