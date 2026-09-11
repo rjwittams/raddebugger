@@ -9478,6 +9478,8 @@ TEST(icf_readonly_non_vftable_data_policy)
   T_Ok(vaddrs[2] == vaddrs[3]);
 }
 
+// These fixtures require MSVC-generated objects. Keep their coverage on Windows.
+#if OS_WINDOWS
 TEST(icf_cpp_identical_functions_fold)
 {
   char source[] =
@@ -9538,6 +9540,8 @@ TEST(icf_cpp_multihop_functions_do_not_fold)
   T_Ok(vaddrs[2] != vaddrs[3]);
   T_Ok(vaddrs[4] != vaddrs[5]);
 }
+
+#endif // OS_WINDOWS
 
 #endif
 
