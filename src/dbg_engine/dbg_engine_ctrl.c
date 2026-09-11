@@ -3039,9 +3039,9 @@ d_call_stack_from_unwind(Arena *arena, D_Entity *process, D_Unwind *base_unwind)
       FrameNode *first_inline_frame = 0;
       FrameNode *last_inline_frame = 0;
       U64 inline_frame_count = 0;
-      for(RDI_Scope *s = scope;
+      for(RDI_Scope *s = rdi_inline_scope_from_scope(rdi, scope);
           s->inline_site_idx != 0;
-          s = rdi_element_from_name_idx(rdi, Scopes, s->parent_scope_idx))
+          s = rdi_inline_scope_from_scope(rdi, rdi_parent_from_scope(rdi, s)))
       {
         FrameNode *dst_inline = push_array(scratch.arena, FrameNode, 1);
         if(first_inline_frame == 0)

@@ -145,10 +145,10 @@ rd_debug_snapshot(Arena *arena)
     String8 name = fully_qualified_str8_from_rdi_symbol(scratch.arena, rdi, rdi_procedure_from_voff(rdi, voff));
     if(frame->inline_depth != 0)
     {
-      RDI_Scope *scope = rdi_scope_from_voff(rdi, voff);
+      RDI_Scope *scope = rdi_inline_scope_from_scope(rdi, rdi_scope_from_voff(rdi, voff));
       U64 depth = 0;
-      for(RDI_Scope *s = scope; s->inline_site_idx != 0; s = rdi_element_from_name_idx(rdi, Scopes, s->parent_scope_idx)) {depth += 1;}
-      for(RDI_Scope *s = scope; s->inline_site_idx != 0; s = rdi_element_from_name_idx(rdi, Scopes, s->parent_scope_idx), depth -= 1)
+      for(RDI_Scope *s = scope; s->inline_site_idx != 0; s = rdi_inline_scope_from_scope(rdi, rdi_parent_from_scope(rdi, s))) {depth += 1;}
+      for(RDI_Scope *s = scope; s->inline_site_idx != 0; s = rdi_inline_scope_from_scope(rdi, rdi_parent_from_scope(rdi, s)), depth -= 1)
       {
         if(depth == frame->inline_depth)
         {

@@ -10,7 +10,7 @@ The runner needs Python 3, Git, and cleat with `launch --tag` support. On
 macOS it needs Clang, `xcrun dsymutil` and `xcrun llvm-nm`. RAD must have
 permission to debug its own test children. On Windows, run in the MSVC x64
 developer environment and pass `--debugger build/raddbg.exe`; fixture builds
-use MSVC, `/Zi /Od`, and `/INCREMENTAL:NO` (the inline case uses `/O2`).
+use MSVC, `/Zi /Od`, and `/INCREMENTAL:NO` (the inline cases use `/O2`).
 Windows also needs PowerShell/CIM to identify RAD beneath cleat's shell;
 the lookup only considers the owned session leader and its direct children.
 Linux fixture builds use Clang.
@@ -53,11 +53,21 @@ These are small C/assembly checks, not the planned five-language regression
 matrix. `c-inline` builds an optimized, forced-inline wrapper around a
 non-inlined leaf. It requires `leaf`, `wrapper`, `main` in stack order, source
 locations, distinct logical frame IDs and shared physical PC/SP for the
-inline wrapper and main. It passes with MSVC/PDB after correcting the
-converter's compilation-unit index for inline source tables. On macOS and
-Linux it currently fails because DWARF inline-subroutine conversion is
-unimplemented. This is a failing regression in `all`, not an expected-pass
-exception or an uncovered host.
+inline wrapper and main. It checks the caller's call-site line separately
+from the wrapper's body line. `c-inline-nested` requires
+`leaf -> wrapper -> outer -> main` at two different call sites, with wrapper
+in a header and its call inside a lexical block. It checks each frame's
+source file/line, inline depth and shared physical registers, then normal exit.
+Both cases pass on macOS ARM64 and Linux x64 with Clang/DWARF, and on Windows
+x64 with MSVC/PDB. `all` contains 12 cases; the seven ARM64-only cases remain
+uncovered on other hosts. These results do not cover Intel Mac live debugging.
+
+DWARF conversion resolves inline identity through abstract origins and
+specifications. It splits the CU's innermost-body lines into the existing
+RDI per-frame tables, using inline call-file/line attributes for callers.
+The original line sequences still supply source-breakpoint lookup. Lexical
+blocks do not terminate the inline chain in stack construction, source lookup,
+snapshot output or UI frame naming. No RDI format change is involved.
 
 Incremental Windows linking, broader optimized/inlined behavior, missing
 debug info, and other GUI workflows need separate coverage. `eval` still uses the

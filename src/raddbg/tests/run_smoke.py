@@ -37,12 +37,12 @@ def main():
     p.add_argument('--debugger', required=True, type=Path)
     p.add_argument('--sender', type=Path, help='Default: same binary as debugger')
     p.add_argument('--compiler', default='cl' if os.name == 'nt' else 'clang')
-    p.add_argument('--case', choices=['all', 'c', 'c-exit-37', 'c-detach', 'c-inline', *ARM_CASES], default='c')
+    p.add_argument('--case', choices=['all', 'c', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', *ARM_CASES], default='c')
     p.add_argument('--output-root', type=Path, help='Existing directory for retained, unique run directories')
     a = p.parse_args()
     a.debugger = a.debugger.resolve()
     a.sender = (a.sender or a.debugger).resolve()
-    cases = ['c', 'c-exit-37', 'c-detach', 'c-inline', *ARM_CASES] if a.case == 'all' else [a.case]
+    cases = ['c', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', *ARM_CASES] if a.case == 'all' else [a.case]
     statuses = [run_case(a, case)['status'] for case in cases]
     # An explicitly requested unsupported case is not a passing test.
     return 1 if 'fail' in statuses else 2 if 'uncovered' in statuses else 0
@@ -90,21 +90,25 @@ def run_case(a, case):
         stem = 'arm64_red_zone' if case == 'tls-red-zone' else 'arm64_unwind' if case in ARM_CASES else 'session'
         if case == 'c-inline':
             stem = 'inline'
+        if case == 'c-inline-nested':
+            stem = 'inline_nested'
         source = HERE/(stem+'.c')
         defines = ARM_CASES.get(case, []) + (['EXIT_CODE=37'] if case == 'c-exit-37' else [])
         sources = [source] + ([HERE/(stem+'.S')] if case in ARM_CASES else [])
         if case == 'unwind-unavailable':
             sources[1] = HERE/'arm64_unwind_error.S'
         record['fixture_hashes'] = {f.name: sha(f) for f in sources}
+        if case == 'c-inline-nested':
+            record['fixture_hashes']['inline_nested.h'] = sha(HERE/'inline_nested.h')
         target = output/('session.exe' if os.name == 'nt' else 'session')
         if os.name == 'nt':
-            run([a.compiler, '/Zi', '/O2' if case == 'c-inline' else '/Od', *['/D'+d for d in defines], str(source), '/Fe:'+str(target), '/link', '/debug', '/incremental:no'], timeout=60)
+            run([a.compiler, '/Zi', '/O2' if case.startswith('c-inline') else '/Od', *['/D'+d for d in defines], str(source), '/Fe:'+str(target), '/link', '/debug', '/incremental:no'], timeout=60)
         else:
             record['compiler_version'] = run([a.compiler, '--version'], timeout=10)
             objects = []
             for index, src in enumerate(sources):
                 obj = f'fixture-{index}.o'
-                run([a.compiler, '-g', '-O1' if case == 'c-inline' else '-O0', *['-D'+d for d in defines], '-c', str(src), '-o', obj], timeout=60)
+                run([a.compiler, '-g', '-O1' if case.startswith('c-inline') else '-O0', *['-D'+d for d in defines], '-c', str(src), '-o', obj], timeout=60)
                 objects.append(obj)
             run([a.compiler, '-g', *objects, '-o', str(target)], timeout=60)
             if platform.system() == 'Darwin':
@@ -114,7 +118,7 @@ def run_case(a, case):
                                        if f.is_file() and ('.dSYM/' in str(f) or f.suffix.lower() == '.pdb')}
         project = output/'test.project'
         stop_line = 6 if case in ARM_CASES else next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'volatile int seed = 20' in line)
-        if case == 'c-inline':
+        if case.startswith('c-inline'):
             stop_line = next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'SNAPSHOT_STOP' in line)
         project.write_text('// raddbg 0.9.29 project file\n\ntarget:\n{\n'
                            f' executable: {json.dumps(str(target))}\n working_directory: {json.dumps(str(output))}\n enabled: 1\n}}\n'
@@ -155,6 +159,28 @@ def run_case(a, case):
         else:
             raise AssertionError('Debugger did not become ready; see ipc.jsonl')
         record['debugger_build'] = initial['build']
+        if case == 'c-inline-nested':
+            source_lines = source.read_text().splitlines()
+            header = HERE/'inline_nested.h'
+            body_line = next(i for i, line in enumerate(header.read_text().splitlines(), 1) if 'INLINE_BODY' in line)
+            outer_line = next(i for i, line in enumerate(source_lines, 1) if 'OUTER_CALL' in line)
+            for visit in (1, 2):
+                stopped = client.stopped('restart' if visit == 1 else 'run')
+                frames = stopped['stack']['frames']
+                assert [f['function'] for f in frames[:4]] == ['leaf', 'wrapper', 'outer', 'main'], stopped
+                assert [f['inline_depth'] for f in frames[:4]] == [0, 2, 1, 0], stopped
+                assert len({f['id'] for f in frames}) == len(frames), stopped
+                for field in ('unwind_index', 'pc', 'sp', 'cfa'):
+                    assert len({f[field] for f in frames[1:4]}) == 1, stopped
+                caller_line = next(i for i, line in enumerate(source_lines, 1) if f'MAIN_CALL_{visit}' in line)
+                for frame, path, lines in zip(frames, [source, header, source, source],
+                                               [{stop_line}, {body_line, body_line+1}, {outer_line}, {caller_line}]):
+                    assert frame['source']['is_source'] and Path(frame['source']['path']) == path, stopped
+                    assert frame['source']['line'] in lines, stopped
+            ended = client.stopped('run')
+            assert ended['process_count'] == 0 and ended['last_process_end']['exit_code'] == 0, ended
+            record['status'] = 'pass'
+            return record
         if case == 'c-inline':
             stopped = client.stopped('restart')
             frames = stopped['stack']['frames']
@@ -165,6 +191,12 @@ def run_case(a, case):
             assert len({f['id'] for f in frames}) == len(frames), stopped
             for frame in frames[:3]:
                 assert frame['source']['is_source'] and Path(frame['source']['path']) == source, stopped
+            source_lines = source.read_text().splitlines()
+            caller_line = next(i for i, line in enumerate(source_lines, 1) if 'result = wrapper(seed)' in line)
+            body_line = next(i for i, line in enumerate(source_lines, 1) if 'int value = leaf(input)' in line)
+            assert frames[0]['source']['line'] == stop_line, stopped
+            assert frames[1]['source']['line'] in (body_line, body_line+1), stopped
+            assert frames[2]['source']['line'] == caller_line, stopped
             ended = client.stopped('run')
             assert ended['process_count'] == 0 and ended['last_process_end']['exit_code'] == 0, ended
             record['status'] = 'pass'
