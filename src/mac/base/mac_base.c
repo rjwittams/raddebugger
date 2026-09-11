@@ -1432,15 +1432,6 @@ process_launch(ProcessLaunchParams *params)
     int attr_init_code = posix_spawnattr_init(&attr);
     if(attr_init_code == 0)
     {
-      String8 executable_path = params->cmd_line.first->string;
-      if(path_style_from_str8(executable_path) == PathStyle_Relative && params->path.size != 0)
-      {
-        String8List l = str8_split_path(scratch.arena, params->path);
-        str8_list_push(scratch.arena, &l, executable_path);
-        executable_path = str8_path_list_join_by_style(scratch.arena, &l, PathStyle_SystemAbsolute);
-      }
-      char *executable_path_cstr = (char *)push_cstr(scratch.arena, executable_path).str;
-
       // package argv
       char **argv = push_array(scratch.arena, char *, params->cmd_line.node_count + 1);
       {
@@ -1472,7 +1463,8 @@ process_launch(ProcessLaunchParams *params)
 
       // spawn process
       pid_t pid = 0;
-      int spawn_code = posix_spawnp(&pid, executable_path_cstr, &file_actions, &attr, argv, envp);
+      // Match Linux: bare names use PATH; explicit paths retain their meaning.
+      int spawn_code = posix_spawnp(&pid, argv[0], &file_actions, &attr, argv, envp);
       if(spawn_code == 0)
       {
         handle.u64[0] = (U64)pid;
