@@ -2075,8 +2075,10 @@ d_macho_compact_unwind_x64_cfa_from_encoding(D_Handle process_handle, U64 module
 }
 
 internal D_UnwindStepResult
-d_unwind_step__macho_x64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, X64_RegBlock *regs, U64 endt_us)
+d_unwind_step__macho_x64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, X64_RegBlock *regs, U8 *reg_valid, U64 endt_us)
 {
+  U8 caller_valid[sizeof(*regs)];
+  uwnd_reg_valid_from_abi(Arch_x64, OperatingSystem_Mac, reg_valid, caller_valid);
   B32 is_stale = 0;
   B32 is_good = 1;
   Temp scratch = scratch_begin(0, 0);
@@ -2091,6 +2093,7 @@ d_unwind_step__macho_x64(D_Handle process_handle, D_Handle module_handle, U64 mo
   {
     case MACHO_UNWIND_X64_MODE_RBP_FRAME:
     {
+      if(!uwnd_reg_is_valid(Arch_x64, reg_valid, X64_RegCode_rbp)) {is_good = 0; break;}
       U64 rbp = regs->rbp;
       U64 saved_rbp = 0;
       U64 saved_rip = 0;
@@ -2123,12 +2126,15 @@ d_unwind_step__macho_x64(D_Handle process_handle, D_Handle module_handle, U64 mo
           }
           U64 *reg = d_unwind_reg_from_macho_reg__macho_x64(regs, macho_reg);
           *reg = value;
+          U64 off = (U8 *)reg - (U8 *)regs;
+          uwnd_reg_set_valid(caller_valid, r1u16(off, off+8), 1);
         }
         saved_regs_locations >>= 3;
       }
       if(is_good)
       {
         regs->rbp = saved_rbp;
+        uwnd_reg_mark_valid(Arch_x64, caller_valid, X64_RegCode_rbp, 0);
         regs->rip = saved_rip;
         regs->rsp = rbp + 16;
       }
@@ -2136,6 +2142,7 @@ d_unwind_step__macho_x64(D_Handle process_handle, D_Handle module_handle, U64 mo
     case MACHO_UNWIND_X64_MODE_STACK_IMMD:
     case MACHO_UNWIND_X64_MODE_STACK_IND:
     {
+      if(!uwnd_reg_is_valid(Arch_x64, reg_valid, X64_RegCode_rsp)) {is_good = 0; break;}
       U64 stack_size = 0;
       U32 reg_count = ((lookup.encoding & MACHO_UNWIND_X64_FRAMELESS_STACK_REG_COUNT) >> 10);
       U32 permutation = (lookup.encoding & MACHO_UNWIND_X64_FRAMELESS_STACK_REG_PERMUTATION);
@@ -2166,6 +2173,8 @@ d_unwind_step__macho_x64(D_Handle process_handle, D_Handle module_handle, U64 mo
         }
         U64 *reg = d_unwind_reg_from_macho_reg__macho_x64(regs, macho_reg);
         *reg = value;
+        U64 off = (U8 *)reg - (U8 *)regs;
+        uwnd_reg_set_valid(caller_valid, r1u16(off, off+8), 1);
       }
       if(is_good)
       {
@@ -2185,6 +2194,12 @@ d_unwind_step__macho_x64(D_Handle process_handle, D_Handle module_handle, U64 mo
     {
       is_good = 0;
     }break;
+  }
+  if(is_good && !is_stale && reg_valid)
+  {
+    uwnd_reg_mark_valid(Arch_x64, caller_valid, X64_RegCode_rip, 0);
+    uwnd_reg_mark_valid(Arch_x64, caller_valid, X64_RegCode_rsp, 0);
+    MemoryCopy(reg_valid, caller_valid, sizeof(*regs));
   }
   scratch_end(scratch);
   D_UnwindStepResult result = {0};
@@ -2356,32 +2371,40 @@ d_arm64_stack_inst(U32 word)
 // copy. No target registers or memory are written. The scan budget is a work
 // limit, not an assumption about prologue/epilogue length.
 internal B32
-d_unwind_arm64_epilogue(D_Handle process, Rng1U64 function, ARM64_RegBlock *regs, U64 endt_us, B32 *stale_out, U64 *cfa_out)
+d_unwind_arm64_epilogue(D_Handle process, Rng1U64 function, ARM64_RegBlock *regs, U8 *reg_valid, U64 endt_us, B32 *stale_out, U64 *cfa_out)
 {
   ARM64_RegBlock caller = *regs;
+  U8 caller_valid[sizeof(*regs)];
+  uwnd_reg_valid_from_abi(Arch_arm64, OperatingSystem_Mac, reg_valid, caller_valid);
+  B32 lr_valid = uwnd_reg_is_valid(Arch_arm64, reg_valid, ARM64_RegCode_x30);
   for(U64 pc = regs->pc; pc < function.max && pc-regs->pc < 256; pc += 4)
   {
     U32 word = 0;
     if(!d_process_memory_read_struct(process, pc, stale_out, &word, endt_us) || *stale_out) {return 0;}
     if(word == 0xd65f03c0) // RET LR
     {
-      if(caller.lr == 0) {return 0;}
+      if(caller.lr == 0 || !lr_valid || !uwnd_reg_is_valid(Arch_arm64, caller_valid, ARM64_RegCode_sp)) {return 0;}
       *cfa_out = caller.sp;
       caller.pc = caller.lr >= 4 ? caller.lr-4 : caller.lr;
       caller.lr = 0;
       *regs = caller;
+      uwnd_reg_mark_valid(Arch_arm64, caller_valid, ARM64_RegCode_pc, 0);
+      if(reg_valid) {MemoryCopy(reg_valid, caller_valid, sizeof(*regs));}
       return 1;
     }
     if(word == 0xd503201f) {continue;} // NOP
     D_ARM64StackInst inst = d_arm64_stack_inst(word);
     if(inst.adjust && inst.dst == 31 && inst.offset >= 0)
     {
+      if(!uwnd_reg_is_valid(Arch_arm64, caller_valid, inst.base == 31 ? ARM64_RegCode_sp : ARM64_RegCode_x29)) {return 0;}
       caller.sp = (inst.base == 31 ? caller.sp : caller.fp) + inst.offset;
+      uwnd_reg_mark_valid(Arch_arm64, caller_valid, ARM64_RegCode_sp, 0);
     }
     else if(inst.pair && inst.load && inst.mode != 0 &&
             (inst.mode == 2 || (inst.base == 31 && inst.offset >= 0)))
     {
       U64 base = (inst.base == 31 ? caller.sp : caller.fp);
+      if(!uwnd_reg_is_valid(Arch_arm64, caller_valid, inst.base == 31 ? ARM64_RegCode_sp : ARM64_RegCode_x29)) {return 0;}
       U64 addr = base + (inst.mode == 1 ? 0 : inst.offset);
       U64 values[2] = {0};
       if(!d_process_memory_read(process, r1u64(addr, addr+16), stale_out, values, endt_us) || *stale_out) {return 0;}
@@ -2389,6 +2412,12 @@ d_unwind_arm64_epilogue(D_Handle process, Rng1U64 function, ARM64_RegBlock *regs
       {
         if(inst.vector) {(&caller.q0)[inst.reg[i]].u64[0] = values[i];}
         else if(inst.reg[i] != 31) {(&caller.x0)[inst.reg[i]] = values[i];}
+        if(!inst.vector && inst.reg[i] == 30) {lr_valid = 1;}
+        if((inst.vector && inst.reg[i] >= 8 && inst.reg[i] <= 15) ||
+           (!inst.vector && inst.reg[i] >= 19 && inst.reg[i] <= 29))
+        {
+          uwnd_reg_mark_valid(Arch_arm64, caller_valid, (inst.vector ? ARM64_RegCode_q0 : ARM64_RegCode_x0)+inst.reg[i], 8);
+        }
       }
       if(inst.mode != 2) {caller.sp = base + inst.offset;}
     }
@@ -2401,10 +2430,11 @@ d_unwind_arm64_epilogue(D_Handle process, Rng1U64 function, ARM64_RegBlock *regs
 // we may use the compact body row only if the prefix has established that row.
 internal B32
 d_unwind_arm64_prefix(D_Handle process, U64 function_start, MachO_UnwindInfoLookupResult *lookup,
-                      ARM64_RegBlock *regs, U64 endt_us, B32 *stale_out, B32 *body_out, U64 *cfa_out)
+                      ARM64_RegBlock *regs, U8 *reg_valid, U64 endt_us, B32 *stale_out, B32 *body_out, U64 *cfa_out)
 {
   Temp scratch = scratch_begin(0, 0);
   B32 good = regs->pc >= function_start && (regs->pc-function_start)%4 == 0;
+  good = good && uwnd_reg_is_valid(Arch_arm64, reg_valid, ARM64_RegCode_sp);
   U64 size = good ? Min(regs->pc-function_start, KB(4)) : 0;
   U32 *code = push_array_no_zero(scratch.arena, U32, size/4);
   if(size != 0) {good = d_process_memory_read(process, r1u64(function_start, function_start+size), stale_out, code, endt_us);}
@@ -2489,6 +2519,9 @@ d_unwind_arm64_prefix(D_Handle process, U64 function_start, MachO_UnwindInfoLook
   if(good && !*stale_out)
   {
     ARM64_RegBlock caller = *regs;
+    U8 caller_valid[sizeof(*regs)];
+    uwnd_reg_valid_from_abi(Arch_arm64, OperatingSystem_Mac, reg_valid, caller_valid);
+    B32 lr_valid = uwnd_reg_is_valid(Arch_arm64, reg_valid, ARM64_RegCode_x30);
     U64 cfa = regs->sp - sp;
     for(U32 reg = 19; good && reg < 48; reg += 1)
     {
@@ -2498,15 +2531,22 @@ d_unwind_arm64_prefix(D_Handle process, U64 function_start, MachO_UnwindInfoLook
         good = d_process_memory_read_struct(process, cfa+slots[reg], stale_out, &value, endt_us);
         if(reg < 31) {(&caller.x0)[reg] = value;}
         else {(&caller.q0)[reg-32].u64[0] = value;}
+        if(good)
+        {
+          if(reg == 30) {lr_valid = 1;}
+          else {uwnd_reg_mark_valid(Arch_arm64, caller_valid, reg < 31 ? ARM64_RegCode_x0+reg : ARM64_RegCode_q0+reg-32, 8);}
+        }
       }
     }
-    if(good && !*stale_out && caller.lr != 0)
+    if(good && !*stale_out && caller.lr != 0 && lr_valid)
     {
       *cfa_out = cfa;
       caller.sp = cfa;
       caller.pc = caller.lr >= 4 ? caller.lr-4 : caller.lr;
       caller.lr = 0;
       *regs = caller;
+      uwnd_reg_mark_valid(Arch_arm64, caller_valid, ARM64_RegCode_pc, 0);
+      if(reg_valid) {MemoryCopy(reg_valid, caller_valid, sizeof(*regs));}
     }
     else {good = 0;}
   }
@@ -2515,16 +2555,23 @@ d_unwind_arm64_prefix(D_Handle process, U64 function_start, MachO_UnwindInfoLook
 }
 
 internal D_UnwindStepResult
-d_unwind_step__link_register_arm64(ARM64_RegBlock *regs)
+d_unwind_step__link_register_arm64(ARM64_RegBlock *regs, U8 *reg_valid)
 {
   B32 is_good = 0;
-  if(regs->lr != 0)
+  if(regs->lr != 0 && uwnd_reg_is_valid(Arch_arm64, reg_valid, ARM64_RegCode_x30))
   {
     U64 caller_pc = regs->lr >= 4 ? regs->lr - 4 : regs->lr;
     if(caller_pc != regs->pc)
     {
       regs->pc = caller_pc;
       regs->lr = 0;
+      if(reg_valid)
+      {
+        U8 caller_valid[sizeof(*regs)];
+        uwnd_reg_valid_from_abi(Arch_arm64, OperatingSystem_Mac, reg_valid, caller_valid);
+        uwnd_reg_mark_valid(Arch_arm64, caller_valid, ARM64_RegCode_pc, 0);
+        MemoryCopy(reg_valid, caller_valid, sizeof(*regs));
+      }
       is_good = 1;
     }
   }
@@ -2535,13 +2582,13 @@ d_unwind_step__link_register_arm64(ARM64_RegBlock *regs)
 }
 
 internal D_UnwindStepResult
-d_unwind_step__frame_pointer_arm64(D_Handle process_handle, ARM64_RegBlock *regs, U64 endt_us)
+d_unwind_step__frame_pointer_arm64(D_Handle process_handle, ARM64_RegBlock *regs, U8 *reg_valid, U64 endt_us)
 {
   B32 is_good = 0;
   B32 is_stale = 0;
   U64 frame_record[2] = {0};
   U64 frame_fp = regs->fp;
-  if(frame_fp != 0)
+  if(frame_fp != 0 && uwnd_reg_is_valid(Arch_arm64, reg_valid, ARM64_RegCode_x29))
   {
     B32 read = d_process_memory_read(process_handle, r1u64(frame_fp, frame_fp + sizeof(frame_record)), &is_stale, frame_record, endt_us);
     if(read && !is_stale)
@@ -2554,6 +2601,14 @@ d_unwind_step__frame_pointer_arm64(D_Handle process_handle, ARM64_RegBlock *regs
         regs->lr = caller_lr;
         regs->sp = frame_fp + 16;
         regs->pc = caller_lr >= 4 ? caller_lr - 4 : caller_lr;
+        if(reg_valid)
+        {
+          // A bare frame chain says nothing about the other saved registers.
+          MemoryZero(reg_valid, sizeof(*regs));
+          uwnd_reg_mark_valid(Arch_arm64, reg_valid, ARM64_RegCode_x29, 0);
+          uwnd_reg_mark_valid(Arch_arm64, reg_valid, ARM64_RegCode_sp, 0);
+          uwnd_reg_mark_valid(Arch_arm64, reg_valid, ARM64_RegCode_pc, 0);
+        }
         is_good = 1;
       }
     }
@@ -2566,15 +2621,17 @@ d_unwind_step__frame_pointer_arm64(D_Handle process_handle, ARM64_RegBlock *regs
 }
 
 internal D_UnwindStepResult
-d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, ARM64_RegBlock *regs, B32 prefer_entry_lr, U64 endt_us)
+d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, ARM64_RegBlock *regs, U8 *reg_valid, B32 prefer_entry_lr, U64 endt_us)
 {
   B32 is_stale = 0;
   B32 is_good = 0;
   Temp scratch = scratch_begin(0, 0);
+  U8 caller_valid[sizeof(*regs)];
+  uwnd_reg_valid_from_abi(Arch_arm64, OperatingSystem_Mac, reg_valid, caller_valid);
 
   if(prefer_entry_lr)
   {
-    D_UnwindStepResult lr_result = d_unwind_step__link_register_arm64(regs);
+    D_UnwindStepResult lr_result = d_unwind_step__link_register_arm64(regs, reg_valid);
     is_good = !(lr_result.flags & D_UnwindFlag_Error);
   }
   if(!is_good)
@@ -2588,7 +2645,8 @@ d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 
         case MACHO_UNWIND_ARM64_MODE_FRAMELESS:
         {
           U64 stack_size = ((lookup.encoding & MACHO_UNWIND_ARM64_FRAMELESS_STACK_SIZE_MASK) >> 12)*16;
-          if(regs->lr != 0)
+          if(regs->lr != 0 && uwnd_reg_is_valid(Arch_arm64, reg_valid, ARM64_RegCode_x30) &&
+             uwnd_reg_is_valid(Arch_arm64, reg_valid, ARM64_RegCode_sp))
           {
             U64 caller_pc = regs->lr >= 4 ? regs->lr - 4 : regs->lr;
             if(caller_pc != regs->pc)
@@ -2603,7 +2661,7 @@ d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 
         case MACHO_UNWIND_ARM64_MODE_FRAME:
         {
           U64 frame_record[2] = {0};
-          if(regs->fp != 0)
+          if(regs->fp != 0 && uwnd_reg_is_valid(Arch_arm64, reg_valid, ARM64_RegCode_x29))
           {
             U64 frame_fp = regs->fp;
             B32 read = d_process_memory_read(process_handle, r1u64(frame_fp, frame_fp + sizeof(frame_record)), &is_stale, frame_record, endt_us);
@@ -2642,8 +2700,10 @@ d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 
                 for(U64 slot_idx = 0; slot_idx < slot_count; slot_idx += 1)
                 {
                   d_macho_compact_unwind_arm64_write_reg_slot(regs, &slots[slot_idx], saved_values[slot_idx]);
+                  uwnd_reg_mark_valid(Arch_arm64, caller_valid, slots[slot_idx].reg_code, 8);
                 }
                 regs->fp = caller_fp;
+                uwnd_reg_mark_valid(Arch_arm64, caller_valid, ARM64_RegCode_x29, 0);
                 regs->lr = caller_lr;
                 regs->sp = frame_fp + 16;
                 regs->pc = caller_lr >= 4 ? caller_lr - 4 : caller_lr;
@@ -2656,9 +2716,15 @@ d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 
     }
   }
 
+  if(is_good && !is_stale && reg_valid)
+  {
+    uwnd_reg_mark_valid(Arch_arm64, caller_valid, ARM64_RegCode_pc, 0);
+    uwnd_reg_mark_valid(Arch_arm64, caller_valid, ARM64_RegCode_sp, 0);
+    MemoryCopy(reg_valid, caller_valid, sizeof(*regs));
+  }
   if(!is_good && !is_stale)
   {
-    D_UnwindStepResult fallback_result = d_unwind_step__frame_pointer_arm64(process_handle, regs, endt_us);
+    D_UnwindStepResult fallback_result = d_unwind_step__frame_pointer_arm64(process_handle, regs, reg_valid, endt_us);
     is_good = !(fallback_result.flags & D_UnwindFlag_Error);
     is_stale = !!(fallback_result.flags & D_UnwindFlag_Stale);
   }
@@ -2699,6 +2765,9 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
   void *regs_block = d_cached_reg_block_from_thread(scratch.arena, thread);
   B32 regs_block_good = (arch != Arch_Null && regs_block != 0);
   void *regs_block_restore = push_array(scratch.arena, U8, arch_reg_block_size);
+  U8 *reg_valid = push_array(scratch.arena, U8, arch_reg_block_size);
+  U8 *reg_valid_restore = push_array(scratch.arena, U8, arch_reg_block_size);
+  MemorySet(reg_valid, 1, arch_reg_block_size);
   
   //////////////////////////////
   //- rjf: grab initial memory
@@ -2732,6 +2801,8 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
     D_UnwindFrame *f = &frame_node->v;
     f->regs = push_array_no_zero(arena, U8, arch_reg_block_size);
     MemoryCopy(f->regs, regs_block, arch_reg_block_size);
+    f->reg_valid = push_array_no_zero(arena, U8, arch_reg_block_size);
+    MemoryCopy(f->reg_valid, reg_valid, arch_reg_block_size);
     DLLPushBack(first_frame_node, last_frame_node, frame_node);
     frame_node_count += 1;
   }
@@ -2760,7 +2831,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
       D_Entity *module_entity = d_module_from_process_vaddr(process_entity, start_ip);
       D_ModuleInfo *module_info = d_info_from_module(access, module_entity->handle);
       UWND_Unwinder unwinder = module_info->unwinder;
-      UWND_ModuleInfo unwinder_module_info = {module_entity->vaddr_range.min, module_info->unwind_info};
+      UWND_ModuleInfo unwinder_module_info = {module_entity->vaddr_range.min, module_info->unwind_info, process_entity->os};
       
       //- rjf: thread * module -> tls vaddr
       U64 tls_vaddr = 0;
@@ -2773,6 +2844,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
       {
         // rjf: remember registers pre-step
         MemoryCopy(regs_block_restore, regs_block, arch_reg_block_size);
+        MemoryCopy(reg_valid_restore, reg_valid, arch_reg_block_size);
         
         // Try Mach-O compact unwind first on macOS x64/arm64, then fall
         // back to the generic unwinder path.
@@ -2811,7 +2883,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
                   compact_supported &&
                   compact_cfa_good)
           {
-            D_UnwindStepResult step = d_unwind_step__macho_x64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, regs_x64, endt_us);
+            D_UnwindStepResult step = d_unwind_step__macho_x64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, regs_x64, reg_valid, endt_us);
             if(step.flags == 0)
             {
               last_frame_node->v.cfa = cfa;
@@ -2824,6 +2896,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
             else
             {
               MemoryCopy(regs_block, regs_block_restore, arch_reg_block_size);
+              MemoryCopy(reg_valid, reg_valid_restore, arch_reg_block_size);
             }
           }
         }
@@ -2847,10 +2920,10 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
           {
             Rng1U64 function = r1u64(module_entity->vaddr_range.min + function_voff_range.min,
                                     module_entity->vaddr_range.min + Min(function_voff_range.max, lookup.voff_range.max));
-            instruction_row = d_unwind_arm64_epilogue(process_entity->handle, function, regs_arm64, endt_us, &instruction_stale, &cfa);
+            instruction_row = d_unwind_arm64_epilogue(process_entity->handle, function, regs_arm64, reg_valid, endt_us, &instruction_stale, &cfa);
             if(!instruction_row && !instruction_stale)
             {
-              instruction_row = d_unwind_arm64_prefix(process_entity->handle, function.min, &lookup, regs_arm64, endt_us, &instruction_stale, &compact_body, &cfa);
+              instruction_row = d_unwind_arm64_prefix(process_entity->handle, function.min, &lookup, regs_arm64, reg_valid, endt_us, &instruction_stale, &compact_body, &cfa);
             }
           }
           if(instruction_stale)
@@ -2878,7 +2951,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
                    compact_cfa_good) ||
                   d_unwind_arm64_cfa_from_frame_pointer(regs_arm64, &cfa)))
           {
-            D_UnwindStepResult step = d_unwind_step__macho_arm64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, regs_arm64, 0, endt_us);
+            D_UnwindStepResult step = d_unwind_step__macho_arm64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, regs_arm64, reg_valid, 0, endt_us);
             if(step.flags == 0)
             {
               last_frame_node->v.cfa = cfa;
@@ -2894,17 +2967,19 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
             else
             {
               MemoryCopy(regs_block, regs_block_restore, arch_reg_block_size);
+              MemoryCopy(reg_valid, reg_valid_restore, arch_reg_block_size);
             }
           }
         }
         if(!unwind.flags && !step_is_good)
         {
           // rjf: try step
-          UWND_StepResult step = uwnd_step(step_unwinder, arch, &memory_map, &step_unwinder_module_info, tls_vaddr, regs_block, &cfa);
+          UWND_StepResult step = uwnd_step(step_unwinder, arch, &memory_map, &step_unwinder_module_info, tls_vaddr, regs_block, reg_valid, &cfa);
           // rjf: if the step failed -> restore original register values
           if(step.status != UWND_StepStatus_Good)
           {
             MemoryCopy(regs_block, regs_block_restore, arch_reg_block_size);
+            MemoryCopy(reg_valid, reg_valid_restore, arch_reg_block_size);
           }
           
           // rjf: if we failed to read memory, try to read that memory, equip to memory map.
@@ -2958,6 +3033,8 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
         D_UnwindFrame *f = &frame_node->v;
         f->regs = push_array_no_zero(arena, U8, arch_reg_block_size);
         MemoryCopy(f->regs, regs_block, arch_reg_block_size);
+        f->reg_valid = push_array_no_zero(arena, U8, arch_reg_block_size);
+        MemoryCopy(f->reg_valid, reg_valid, arch_reg_block_size);
         DLLPushBack(first_frame_node, last_frame_node, frame_node);
         frame_node_count += 1;
       }
@@ -3052,6 +3129,7 @@ d_call_stack_from_unwind(Arena *arena, D_Entity *process, D_Unwind *base_unwind)
         SLLQueuePush(first_frame, last_frame, dst_inline);
         dst_inline->v.unwind_count = base_frame_idx;
         dst_inline->v.regs         = src->regs;
+        dst_inline->v.reg_valid    = src->reg_valid;
         dst_inline->v.cfa          = src->cfa;
         frame_count += 1;
         inline_frame_count += 1;
@@ -3062,6 +3140,7 @@ d_call_stack_from_unwind(Arena *arena, D_Entity *process, D_Unwind *base_unwind)
       SLLQueuePush(first_frame, last_frame, dst_base);
       dst_base->v.unwind_count = base_frame_idx;
       dst_base->v.regs         = src->regs;
+      dst_base->v.reg_valid    = src->reg_valid;
       dst_base->v.cfa          = src->cfa;
       frame_count += 1;
       

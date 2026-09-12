@@ -2,7 +2,7 @@
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
 internal UWND_StepResult
-eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64 tls_vaddr, void *regs, U64 *cfa_out)
+eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64 tls_vaddr, void *regs, U8 *reg_valid, U64 *cfa_out)
 {
   Temp scratch = scratch_begin(0, 0);
   B32 done = 0;
@@ -14,6 +14,12 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
     EH_FrameHdr *header = &unwind_info->header;
     EH_PtrCtx *ptr_ctx = &unwind_info->ptr_ctx;
     ARCH_Info *arch_info = arch_info_from_arch(arch);
+    void *input_regs = push_array_no_zero(scratch.arena, U8, arch_info->reg_block_size);
+    MemoryCopy(input_regs, regs, arch_info->reg_block_size);
+    U8 *input_valid = reg_valid;
+    U8 *caller_valid = push_array(scratch.arena, U8, arch_info->reg_block_size);
+    U8 *abi_valid = push_array(scratch.arena, U8, arch_info->reg_block_size);
+    uwnd_reg_valid_from_abi(arch, module_info->os, 0, abi_valid);
     U64 pc = arch_ip_from_reg_block(arch_info, regs);
     
     //- rjf: find nearest FDE entry to the IP
@@ -61,6 +67,7 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
     
     //- rjf: parse info from FDE entry
     DW_CIE cie = {0};
+    B32 signal_frame = 0;
     DW_FDE fde = {0};
     U64 cie_inst_data_off = 0;
     U64 fde_inst_data_off = 0;
@@ -182,6 +189,8 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
       
       // rjf: parse CIE data, & FDE data
       cie_inst_data_off = eh_read_cie(cie_data, 0, cie_fmt, arch, cie_vaddr_range.min, ptr_ctx, &cie);
+      String8 augmentation = str8_substr(cie_data, cie.aug_string_range);
+      for(U64 i = 0; i < augmentation.size; i += 1) {signal_frame |= augmentation.str[i] == 'S';}
       fde_inst_data_off = eh_read_fde(fde_data, 0, fde_fmt, arch, fde_vaddr_range.min, ptr_ctx, &cie, &fde);
       cie_inst_data = str8_skip(cie_data, cie_inst_data_off);
       fde_inst_data = str8_skip(fde_data, fde_inst_data_off);
@@ -191,6 +200,14 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
     U64 reg_count = dw_reg_count_from_arch(arch);
     DW_CFIRow cfi_row = {0};
     cfi_row.reg_rules = push_array(scratch.arena, DW_UnwindRule, reg_count);
+    for(U64 r = 0; r < reg_count; r += 1)
+    {
+      Rng1U16 range = dw_reg_range_from_code(arch, r, 1);
+      cfi_row.reg_rules[r].code = !signal_frame && uwnd_reg_range_is_valid(abi_valid, range) ? DW_UnwindRuleCode_SameVal : DW_UnwindRuleCode_Undefined;
+    }
+    // The return-address column describes the return from this function, not
+    // a caller-visible copy of LR. A leaf can leave that address in live LR.
+    if(!signal_frame && arch == Arch_arm64 && cie.ret_addr_reg < reg_count) {cfi_row.reg_rules[cie.ret_addr_reg].code = DW_UnwindRuleCode_SameVal;}
     if(!done && (!contains_1u64(fde.pc_range, pc) || cie.ret_addr_reg >= reg_count))
     {
       done = 1;
@@ -226,7 +243,7 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
         // rjf: run unwind instruction program
         String8 inst_data = program_tasks[program_task_idx].inst_data;
         U64 inst_data_off = program_tasks[program_task_idx].inst_data_off;
-        for(U64 off = 0; off < inst_data.size;)
+        for(U64 off = 0; !done && off < inst_data.size;)
         {
           U64 start_off = off;
           
@@ -385,6 +402,8 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
                 cfi_row.reg_rules[reg].code = DW_UnwindRuleCode_Expr;
                 cfi_row.reg_rules[reg].expr = str8_substr(inst_data, r1u64(off, off+expr_size));
               }
+              if(expr_size > inst_data.size-off) {done = 1; break;}
+              off += expr_size;
             }break;
             case DW_CFAOpCode_ValOffset:
             {
@@ -423,6 +442,8 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
                 cfi_row.reg_rules[reg].code = DW_UnwindRuleCode_ValExpr;
                 cfi_row.reg_rules[reg].expr = str8_substr(inst_data, r1u64(off, off+expr_size));
               }
+              if(expr_size > inst_data.size-off) {done = 1; break;}
+              off += expr_size;
             }break;
             case DW_CFAOpCode_Offset:
             {
@@ -483,6 +504,8 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
               off += str8_deserial_read_uleb128(inst_data, off, &expr_size);
               cfi_row.cfa_rule.code = DW_UnwindRuleCode_Expr;
               cfi_row.cfa_rule.expr = str8_substr(inst_data, r1u64(off, off+expr_size));
+              if(expr_size > inst_data.size-off) {done = 1; break;}
+              off += expr_size;
             }break;
             
             //- rjf: register state resets
@@ -539,47 +562,55 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
     U64 cfa = 0;
     if(!done) switch(cfi_row.cfa_rule.code)
     {
-      default:{}break;
+      default:{done = 1;}break;
       case DW_UnwindRuleCode_Reg:
       {
         U64 cfa_reg_val = 0;
         DW_RegCode dw_reg_code = cfi_row.cfa_rule.reg_code;
         ARCH_RegCode reg_code = arch_reg_code_from_dw(arch, dw_reg_code);
-        arch_reg_block_read_range(arch_info, regs, arch_info->reg_code_rng_table[reg_code], &cfa_reg_val);
+        Rng1U16 range = arch_info->reg_code_rng_table[reg_code];
+        if(dim_1u16(range) > sizeof(cfa_reg_val) || !uwnd_reg_range_is_valid(input_valid, range)) {done = 1; break;}
+        arch_reg_block_read_range(arch_info, input_regs, range, &cfa_reg_val);
         cfa = cfa_reg_val + cfi_row.cfa_rule.s64;
       }break;
       case DW_UnwindRuleCode_Expr:
       {
         String8 expr = cfi_row.cfa_rule.expr;
-        DW_EvalState eval_state = {0};
-        DW_Eval eval = dw_eval(scratch.arena, cie.format, arch, memory_map, regs, 0, 0, tls_vaddr, &eval_state, expr, 1000);
+        DW_EvalState eval_state = {.reg_valid = input_valid, .unwind_register_sizes = 1};
+        DW_Eval eval = dw_eval(scratch.arena, cie.format, arch, memory_map, input_regs, 0, 0, tls_vaddr, &eval_state, expr, 1000);
         if(eval.status == DW_EvalStatus_FailedMemoryRead)
         {
           done = 1;
           result.status = UWND_StepStatus_FailedMemoryRead;
           result.missed_read_vaddr_range = eval.missed_read_vaddr_range;
         }
-        else
+        else if(eval.status == DW_EvalStatus_Good)
         {
           cfa = eval.val.u512.u64[0]; 
         }
+        else {done = 1;}
       }break;
     }
     
     //- rjf: apply CFI row rules to registers
-    if(!done) for EachIndex(reg_idx, reg_count)
+    if(!done) for(U64 reg_idx = 0; !done && reg_idx < reg_count; reg_idx += 1)
     {
       DW_UnwindRule *rule = &cfi_row.reg_rules[reg_idx];
       ARCH_RegCode reg_code = arch_reg_code_from_dw(arch, reg_idx);
-      Rng1U16 reg_rng = arch_info->reg_code_rng_table[reg_code];
+      Rng1U16 reg_rng = dw_reg_range_from_code(arch, reg_idx, 1);
       U64 reg_size = dim_1u16(reg_rng);
+      if(reg_size == 0) {continue;}
       switch(rule->code)
       {
         default:
-        case DW_UnwindRuleCode_SameVal:{}break;
+        case DW_UnwindRuleCode_SameVal:
+        {
+          if(input_valid) {MemoryCopy(caller_valid+reg_rng.min, input_valid+reg_rng.min, reg_size);}
+          else {uwnd_reg_set_valid(caller_valid, reg_rng, 1);}
+        }break;
         case DW_UnwindRuleCode_Undefined:
         {
-          MemoryZero((U8 *)regs + reg_rng.min, reg_size);
+          // Retain storage bytes, but do not claim they describe the caller.
         }break;
         case DW_UnwindRuleCode_Off:
         {
@@ -596,6 +627,7 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
           if(!done)
           {
             arch_reg_block_write_range(arch_info, regs, reg_rng, reg_value_buffer);
+            uwnd_reg_set_valid(caller_valid, reg_rng, 1);
           }
           temp_end(temp);
         }break;
@@ -604,33 +636,38 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
           U64 reg_value = cfa + rule->s64;
           Rng1U16 write_range = r1u16(reg_rng.min, Min(reg_rng.max, reg_rng.min + sizeof(reg_value)));
           arch_reg_block_write_range(arch_info, regs, write_range, &reg_value);
+          uwnd_reg_set_valid(caller_valid, write_range, 1);
         }break;
         case DW_UnwindRuleCode_Reg:
         {
           Temp temp = temp_begin(scratch.arena);
           DW_RegCode src_reg_code_dw = rule->reg_code;
           ARCH_RegCode src_reg_code = arch_reg_code_from_dw(arch, src_reg_code_dw);
-          Rng1U16 src_reg_rng = arch_info->reg_code_rng_table[src_reg_code];
+          Rng1U16 src_reg_rng = dw_reg_range_from_code(arch, src_reg_code_dw, 1);
           U64 src_reg_size = dim_1u16(src_reg_rng);
           U64 read_size = Min(src_reg_size, reg_size);
+          src_reg_rng.max = src_reg_rng.min + read_size;
+          reg_rng.max = reg_rng.min + read_size;
           U8 *src_reg_val_buffer = push_array(temp.arena, U8, read_size);
-          arch_reg_block_read_range(arch_info, regs, src_reg_rng, src_reg_val_buffer);
+          arch_reg_block_read_range(arch_info, input_regs, src_reg_rng, src_reg_val_buffer);
           arch_reg_block_write_range(arch_info, regs, reg_rng, src_reg_val_buffer);
+          if(input_valid) {MemoryCopy(caller_valid+reg_rng.min, input_valid+src_reg_rng.min, read_size);}
+          else {uwnd_reg_set_valid(caller_valid, reg_rng, 1);}
           temp_end(temp);
         }break;
         case DW_UnwindRuleCode_Expr:
         {
           Temp temp = temp_begin(scratch.arena);
           String8 expr = rule->expr;
-          DW_EvalState eval_state = {0};
-          DW_Eval eval = dw_eval(scratch.arena, cie.format, arch, memory_map, regs, 0, cfa, tls_vaddr, &eval_state, expr, 1000);
+          DW_EvalState eval_state = {.reg_valid = input_valid, .unwind_register_sizes = 1};
+          DW_Eval eval = dw_eval(scratch.arena, cie.format, arch, memory_map, input_regs, 0, cfa, tls_vaddr, &eval_state, expr, 1000);
           if(eval.status == DW_EvalStatus_FailedMemoryRead)
           {
             done = 1;
             result.status = UWND_StepStatus_FailedMemoryRead;
             result.missed_read_vaddr_range = eval.missed_read_vaddr_range;
           }
-          if(!done)
+          if(!done && eval.status == DW_EvalStatus_Good)
           {
             U64 reg_val_vaddr = eval.val.u512.u64[0];
             Rng1U64 reg_value_vaddr_range = r1u64(reg_val_vaddr, reg_val_vaddr+reg_size);
@@ -644,6 +681,7 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
             else
             {
               arch_reg_block_write_range(arch_info, regs, reg_rng, reg_value_buffer);
+              uwnd_reg_set_valid(caller_valid, reg_rng, 1);
             }
           }
           temp_end(temp);
@@ -652,18 +690,19 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
         {
           Temp temp = temp_begin(scratch.arena);
           String8 expr = rule->expr;
-          DW_EvalState eval_state = {0};
-          DW_Eval eval = dw_eval(scratch.arena, cie.format, arch, memory_map, regs, 0, cfa, tls_vaddr, &eval_state, expr, 1000);
+          DW_EvalState eval_state = {.reg_valid = input_valid, .unwind_register_sizes = 1};
+          DW_Eval eval = dw_eval(scratch.arena, cie.format, arch, memory_map, input_regs, 0, cfa, tls_vaddr, &eval_state, expr, 1000);
           if(eval.status == DW_EvalStatus_FailedMemoryRead)
           {
             done = 1;
             result.status = UWND_StepStatus_FailedMemoryRead;
             result.missed_read_vaddr_range = eval.missed_read_vaddr_range;
           }
-          if(!done)
+          if(!done && eval.status == DW_EvalStatus_Good)
           {
             U512 reg_val = eval.val.u512;
             arch_reg_block_write_range(arch_info, regs, reg_rng, &reg_val);
+            uwnd_reg_set_valid(caller_valid, reg_rng, 1);
           }
           temp_end(temp);
         }break;
@@ -684,8 +723,13 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
     {
       U64 caller_pc = 0;
       ARCH_RegCode return_reg = arch_reg_code_from_dw(arch, cie.ret_addr_reg);
+      if(signal_frame && uwnd_reg_is_valid(arch, caller_valid, arch_info->instruction_pointer_reg_code))
+      {
+        return_reg = arch_info->instruction_pointer_reg_code;
+      }
       Rng1U16 return_rng = arch_info->reg_code_rng_table[return_reg];
       if(dim_1u16(return_rng) == 0 || dim_1u16(return_rng) > sizeof(caller_pc) ||
+         !uwnd_reg_range_is_valid(caller_valid, return_rng) ||
          !arch_reg_block_read_range(arch_info, regs, return_rng, &caller_pc))
       {
         done = 1;
@@ -694,6 +738,8 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
       else
       {
         arch_reg_block_write_ip(arch_info, regs, caller_pc);
+        if(!signal_frame && arch == Arch_arm64) {uwnd_reg_set_valid(caller_valid, return_rng, 0);}
+        uwnd_reg_set_valid(caller_valid, arch_info->reg_code_rng_table[arch_info->instruction_pointer_reg_code], 1);
       }
     }
 
@@ -705,7 +751,11 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
     //
     if(!done)
     {
-      arch_reg_block_write_sp(arch_info, regs, cfa);
+      if(!signal_frame || !uwnd_reg_is_valid(arch, caller_valid, arch_info->stack_pointer_reg_code))
+      {
+        arch_reg_block_write_sp(arch_info, regs, cfa);
+        uwnd_reg_set_valid(caller_valid, arch_info->reg_code_rng_table[arch_info->stack_pointer_reg_code], 1);
+      }
     }
     
     //- rjf: commit new register values, if we succeeded
@@ -716,6 +766,7 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
         *cfa_out = cfa;
       }
       result.status = UWND_StepStatus_Good;
+      if(reg_valid) {MemoryCopy(reg_valid, caller_valid, arch_info->reg_block_size);}
     }
   }
   scratch_end(scratch);

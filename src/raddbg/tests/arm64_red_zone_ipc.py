@@ -14,6 +14,7 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('sender')
 p.add_argument('pid', type=int)
 p.add_argument('--target', required=True)
+p.add_argument('--caller-registers', action='store_true')
 a = p.parse_args()
 client = Client(a.sender, a.pid)
 
@@ -45,6 +46,23 @@ try:
             break
         ipc('up_one_frame')
     assert value('pc') == address
+    if a.caller_registers:
+        assert value('x0') == 1234
+        ipc('down_one_frame')
+        assert value('pc') != address
+        assert value('sp') != 0
+        raw = ipc('eval x0')
+        assert 'unavailable' in raw.lower() and 'value: "1234"' not in raw, raw
+        raw = ipc('eval x0+1')
+        assert 'unavailable' in raw.lower(), raw
+        assert 'unavailable' not in client.value('q8.u64s[0]').lower()
+        assert 'unavailable' in ipc('eval q8.u64s[1]').lower()
+        raw = ipc('eval q8')
+        assert 'unavailable' in raw.lower(), raw
+        ipc('up_one_frame')
+        assert value('x0') == 1234
+        print('PASS: caller x0 is unavailable; stopped x0 and recovered caller SP remain readable')
+        raise SystemExit(0)
     original_sp = value('sp')
     registers = {f'x{i}': value(f'x{i}') for i in range(31)}
     before = [value(f'*(cast(uint64*) ({original_sp}-{i}))') for i in range(8, 129, 8)]

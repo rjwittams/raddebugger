@@ -44,7 +44,10 @@ remain visibly uncovered on other hosts. Use `--case c`, `c-exit-37`, or
 Cases cover source breakpoint identity/path, restart, Over/Into/Out, leaf and
 caller locals, frame selection, exit 0 and exit 37, and detach after a previous
 normal exit. The ARM64 cases build five compact/EH-frame variants, checking 46
-instruction boundaries, plus cold TLS red-zone preservation. The
+instruction boundaries, plus cold TLS red-zone preservation. `caller-registers`
+checks that an unavailable caller x0 stays unavailable in arithmetic, while
+the stopped x0 remains readable. It also checks partial SIMD availability:
+the caller's low q8 lane is readable, but its upper lane and whole q8 are not. The
 `unwind-unavailable` case deliberately damages the stack: it requires an
 explicit pending/error result with no apparently valid frames. It does not
 require the existing memory cache to settle an unreadable stack as an error.
@@ -59,7 +62,7 @@ from the wrapper's body line. `c-inline-nested` requires
 in a header and its call inside a lexical block. It checks each frame's
 source file/line, inline depth and shared physical registers, then normal exit.
 Both cases pass on macOS ARM64 and Linux x64 with Clang/DWARF, and on Windows
-x64 with MSVC/PDB. `all` contains 12 cases; the seven ARM64-only cases remain
+x64 with MSVC/PDB. `all` contains 13 cases; the eight ARM64-only cases remain
 uncovered on other hosts. These results do not cover Intel Mac live debugging.
 
 DWARF conversion resolves inline identity through abstract origins and
@@ -71,8 +74,18 @@ snapshot output or UI frame naming. No RDI format change is involved.
 
 Incremental Windows linking, broader optimized/inlined behavior, missing
 debug info, and other GUI workflows need separate coverage. `eval` still uses the
-selected GUI frame and rendered value text. Register availability and
-frame-explicit evaluation remain follow-up work.
+selected GUI frame and rendered value text. Unwinding now carries byte-level
+register validity through the shared register-read path used by evaluation
+and GUI value formatting. Unknown bytes render as unavailable; a recovered
+zero remains a known value. Frame-explicit evaluation remains follow-up work.
+
+The lower-level `eh_frame_register_availability_rules` torture case exercises
+20 ARM64/x64 combinations: same-value and undefined rules, register transfers,
+zero recovery, expression evaluation, unknown CFA inputs, partial SIMD saves,
+pending memory reads and explicit signal-frame recovery. The existing
+`eh_frame_caller_registers` case checks ABI defaults; `pe_leaf_register_availability`
+checks Windows x64 leaf defaults and propagation of unknown input bytes.
+These synthetic cases do not establish live signal-frame support.
 
 ## `debug_snapshot` version 1
 

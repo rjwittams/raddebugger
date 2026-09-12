@@ -152,7 +152,7 @@ E_InterpretationCodeTable:
   { BadOp                   "Invalid operation." }
   { BadOpTypes              "Invalid operation types." }
   { BadMemRead              "Failed memory read." }
-  { BadRegRead              "Failed register read." }
+  { BadRegRead              "Register value unavailable." }
   { BadFrameBase            "Invalid frame base address." }
   { BadModuleBase           "Invalid module base address." }
   { BadTLSBase              "Invalid thread-local storage base address." }

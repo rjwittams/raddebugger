@@ -25,6 +25,7 @@ ARM_CASES = {
     'unwind-branch': ['FRAME_RECORD', 'BRANCH_BODY'],
     'unwind-unavailable': [],
     'tls-red-zone': [],
+    'caller-registers': [],
 }
 
 
@@ -87,7 +88,7 @@ def run_case(a, case):
         record['test_scripts_sha256'] = {f.name: sha(f) for f in HERE.glob('*.py')}
         help_text = run(['cleat', 'launch', '--help'], timeout=10)
         assert '--tag' in help_text, 'cleat is too old: launch must support --tag'
-        stem = 'arm64_red_zone' if case == 'tls-red-zone' else 'arm64_unwind' if case in ARM_CASES else 'session'
+        stem = 'arm64_red_zone' if case in ('tls-red-zone', 'caller-registers') else 'arm64_unwind' if case in ARM_CASES else 'session'
         if case == 'c-inline':
             stem = 'inline'
         if case == 'c-inline-nested':
@@ -202,8 +203,10 @@ def run_case(a, case):
             record['status'] = 'pass'
             return record
         if case in ARM_CASES:
-            script = 'arm64_red_zone_ipc.py' if case == 'tls-red-zone' else 'arm64_unwind_ipc.py'
+            script = 'arm64_red_zone_ipc.py' if case in ('tls-red-zone', 'caller-registers') else 'arm64_unwind_ipc.py'
             options = ['--frame-record'] if 'FRAME_RECORD' in defines else []
+            if case == 'caller-registers':
+                options.append('--caller-registers')
             if 'BRANCH_BODY' in defines:
                 options.append('--branch-body')
             if case == 'unwind-unavailable':

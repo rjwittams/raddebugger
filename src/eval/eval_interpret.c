@@ -332,7 +332,7 @@ e_interpret(String8 bytecode)
         B32 good_read = e_space_read(selected_space, &nval, 0, r1u64(addr, addr+size));
         if(!good_read)
         {
-          result.code = E_InterpretationCode_BadMemRead;
+          result.code = e_space_match(selected_space, e_interpret_ctx->reg_space) ? E_InterpretationCode_BadRegRead : E_InterpretationCode_BadMemRead;
           goto done;
         }
       }break;
