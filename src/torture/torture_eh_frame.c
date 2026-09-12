@@ -138,6 +138,41 @@ TEST(eh_frame_register_availability_rules)
   }
 }
 
+TEST(eh_frame_undefined_return_ends_stack)
+{
+  Arch arches[] = {Arch_arm64, Arch_x64};
+  for EachElement(arch_idx, arches)
+  {
+    Arch arch = arches[arch_idx];
+    ARCH_Info *ai = arch_info_from_arch(arch);
+    U8 ra = arch == Arch_arm64 ? 30 : 16, sp = arch == Arch_arm64 ? 31 : 7;
+    // _start can explicitly end the chain without a recoverable caller CFA.
+    U8 bytes[] = {16,0,0,0, 0,0,0,0, 1,'z','R',0, 1,0x78,ra,1,4,0x0c,sp,8,
+                  23,0,0,0, 24,0,0,0, 0,0x10,0,0,0,0,0,0, 0,1,0,0,0,0,0,0,
+                  0,0x07,ra};
+    MemoryMap map = {0};
+    memory_map_push(arena, &map, r1u64(0x4000, 0x4000+sizeof(bytes)), bytes);
+    EH_UWND_ModuleUnwindInfo info = {.override_fde_vaddr = 0x4014};
+    UWND_ModuleInfo module = {.unwind_info = &info};
+    void *regs = push_array(arena, U8, ai->reg_block_size);
+    U8 *valid = push_array(arena, U8, ai->reg_block_size);
+    arch_reg_block_write_ip(ai, regs, 0x1004);
+    arch_reg_block_write_sp(ai, regs, 0x2000);
+    U64 cfa = 0;
+    UWND_StepResult step = eh_uwnd_step(arch, &map, &module, 0, regs, valid, &cfa);
+    T_Ok(step.status == UWND_StepStatus_EndOfStack);
+    T_Ok(arch_ip_from_reg_block(ai, regs) == 0x1004);
+    T_Ok(arch_sp_from_reg_block(ai, regs) == 0x2000);
+    T_Ok(cfa == 0);
+    for(U64 i = 0; i < ai->reg_block_size; i += 1) {T_Ok(valid[i] == 0);}
+    // A rule that needs unknown return-address bytes is an error, not an end.
+    bytes[sizeof(bytes)-2] = 0x08;
+    uwnd_reg_mark_valid(arch, valid, ai->stack_pointer_reg_code, 0);
+    step = eh_uwnd_step(arch, &map, &module, 0, regs, valid, &cfa);
+    T_Ok(step.status == UWND_StepStatus_Error);
+  }
+}
+
 TEST(pe_leaf_register_availability)
 {
   PE_X64_UWND_ModuleUnwindInfo info = {0};

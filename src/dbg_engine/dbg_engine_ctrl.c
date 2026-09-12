@@ -2840,7 +2840,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
       //- rjf: do one unwind step
       B32 step_is_good = 0;
       B32 stop_after_step = 0;
-      for(;!unwind.flags && !step_is_good;)
+      for(;!unwind.flags && !step_is_good && !stop_after_step;)
       {
         // rjf: remember registers pre-step
         MemoryCopy(regs_block_restore, regs_block, arch_reg_block_size);
@@ -3003,6 +3003,12 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
             }
           }
           
+          // A terminal row preserves the frames already recovered.
+          else if(step.status == UWND_StepStatus_EndOfStack)
+          {
+            stop_after_step = 1;
+          }
+
           // rjf: if the step itself failed, we just fail out.
           else if(step.status == UWND_StepStatus_Error)
           {

@@ -86,6 +86,9 @@ pending memory reads and explicit signal-frame recovery. The existing
 `eh_frame_caller_registers` case checks ABI defaults; `pe_leaf_register_availability`
 checks Windows x64 leaf defaults and propagation of unknown input bytes.
 These synthetic cases do not establish live signal-frame support.
+`eh_frame_undefined_return_ends_stack` distinguishes a terminal return-address
+rule, as used by Linux `_start`, from a rule that needs unavailable input.
+The former completes the stack; the latter remains an unwind error.
 
 ## `debug_snapshot` version 1
 
