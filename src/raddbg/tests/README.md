@@ -43,7 +43,10 @@ remain visibly uncovered on other hosts. Use `--case c`, `c-exit-37`, or
 
 Cases cover source breakpoint identity/path, restart, Over/Into/Out, leaf and
 caller locals, frame selection, exit 0 and exit 37, and detach after a previous
-normal exit. The ARM64 cases build five compact/EH-frame variants, checking 46
+normal exit. On macOS the basic C cases also require one startup frame mapped
+to `/usr/lib/dyld` at the first stop and after stepping; the detach case checks
+it again after restart. This checks module discovery, not a symbol-name fallback.
+The ARM64 cases build five compact/EH-frame variants, checking 46
 instruction boundaries, plus cold TLS red-zone preservation. `caller-registers`
 checks that an unavailable caller x0 stays unavailable in arithmetic, while
 the stopped x0 remains readable. It also checks partial SIMD availability:

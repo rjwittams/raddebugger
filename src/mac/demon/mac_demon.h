@@ -24,6 +24,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <mach-o/dyld_images.h>
+#include <mach-o/loader.h>
 #include <mach/mig_errors.h>
 #include <mach/ndr.h>
 #include <stdlib.h>

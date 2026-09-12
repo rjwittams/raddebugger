@@ -33,6 +33,12 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def check_loader_frame(snapshot):
+    if platform.system() == 'Darwin':
+        frames = [f for f in snapshot['stack']['frames'] if f['module'] == '/usr/lib/dyld']
+        assert len(frames) == 1, ('startup frame must identify dyld', snapshot)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--debugger', required=True, type=Path)
@@ -223,6 +229,7 @@ def run_case(a, case):
         observed_source = Path(stopped['stack']['frames'][0]['source']['path'])
         assert observed_source.is_absolute() and observed_source == source, stopped
         assert stopped['stack']['frames'][0]['source']['line'] == stop_line, stopped
+        check_loader_frame(stopped)
         client.stopped('step_over_line')
         assert client.value('seed') == '20'
         stopped = client.stopped('step_into_line')
@@ -231,6 +238,7 @@ def run_case(a, case):
         stopped = client.stopped('step_over_line')
         frames = stopped['stack']['frames']
         assert frames[0]['function'] == 'leaf' and frames[1]['function'] == 'main', stopped
+        check_loader_frame(stopped)
         assert frames[0]['pc'] != frames[1]['pc'] and frames[0]['sp'] != frames[1]['sp'], stopped
         assert client.value('input') == '20'
         assert client.value('doubled') == '40'
@@ -245,6 +253,7 @@ def run_case(a, case):
                                                   exit_code=37 if case == 'c-exit-37' else 0), stopped
         if case == 'c-detach':
             stopped = client.stopped('restart')
+            check_loader_frame(stopped)
             end_sequence = stopped['last_process_end']['sequence']
             client.command(['detach', 'query:control.'+stopped['process_handle']])
             deadline = time.monotonic()+10
