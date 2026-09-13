@@ -52,6 +52,7 @@ wm_string_from_event_kind(WM_EventKind kind)
     case WM_EventKind_FileDrop:             {result = str8_lit("FileDrop");}break;
     case WM_EventKind_Wakeup:               {result = str8_lit("Wakeup");}break;
     case WM_EventKind_MenuCommand:          {result = str8_lit("MenuCommand");}break;
+    case WM_EventKind_MenuOpen:             {result = str8_lit("MenuOpen");}break;
   }
   return result;
 }
@@ -63,6 +64,7 @@ wm_string_list_from_modifiers(Arena *arena, WM_Modifiers modifiers)
   if(modifiers & WM_Modifier_Ctrl)  { str8_list_push(arena, &result, str8_lit("Ctrl")); }
   if(modifiers & WM_Modifier_Shift) { str8_list_push(arena, &result, str8_lit("Shift")); }
   if(modifiers & WM_Modifier_Alt)   { str8_list_push(arena, &result, str8_lit("Alt")); }
+  if(modifiers & WM_Modifier_Cmd)   { str8_list_push(arena, &result, str8_lit("Cmd")); }
   return result;
 }
 

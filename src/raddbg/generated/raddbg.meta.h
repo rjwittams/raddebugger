@@ -128,6 +128,7 @@ RD_CmdKind_DecViewFontSize,
 RD_CmdKind_OpenWindow,
 RD_CmdKind_WindowSettings,
 RD_CmdKind_CloseWindow,
+RD_CmdKind_MinimizeWindow,
 RD_CmdKind_ToggleFullscreen,
 RD_CmdKind_BringToFront,
 RD_CmdKind_PopupAccept,
@@ -631,7 +632,7 @@ Z(getting_started)\
 C_LINKAGE_BEGIN
 extern String8 rd_tab_fast_path_view_name_table[25];
 extern String8 rd_tab_fast_path_query_name_table[25];
-extern RD_VocabInfo rd_vocab_info_table[371];
+extern RD_VocabInfo rd_vocab_info_table[372];
 extern RD_NameSchemaInfo rd_name_schema_info_table[39];
 extern String8 rd_reg_slot_code_name_table[56];
 extern Rng1U64 rd_reg_slot_range_table[56];

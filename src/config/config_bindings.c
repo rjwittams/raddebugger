@@ -25,6 +25,7 @@ cfg_key_map_from_cfg(Arena *arena)
         {
           if(0){}
           else if(str8_match(child->string, str8_lit("ctrl"), 0))   { binding.modifiers |= WM_Modifier_Ctrl; }
+          else if(str8_match(child->string, str8_lit("cmd"), 0))    { binding.modifiers |= WM_Modifier_Cmd; }
           else if(str8_match(child->string, str8_lit("alt"), 0))    { binding.modifiers |= WM_Modifier_Alt; }
           else if(str8_match(child->string, str8_lit("shift"), 0))  { binding.modifiers |= WM_Modifier_Shift; }
           else
