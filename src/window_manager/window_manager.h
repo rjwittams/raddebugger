@@ -155,6 +155,7 @@ struct WM_Event
   String8 string;
   Vec2F32 pos;
   Vec2F32 delta;
+  B32 scroll_is_precise;
   String8List strings;
 };
 
