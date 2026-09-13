@@ -44,12 +44,12 @@ def main():
     p.add_argument('--debugger', required=True, type=Path)
     p.add_argument('--sender', type=Path, help='Default: same binary as debugger')
     p.add_argument('--compiler', default='cl' if os.name == 'nt' else 'clang')
-    p.add_argument('--case', choices=['all', 'c', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', *ARM_CASES], default='c')
+    p.add_argument('--case', choices=['all', 'c', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', *ARM_CASES], default='c')
     p.add_argument('--output-root', type=Path, help='Existing directory for retained, unique run directories')
     a = p.parse_args()
     a.debugger = a.debugger.resolve()
     a.sender = (a.sender or a.debugger).resolve()
-    cases = ['c', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', *ARM_CASES] if a.case == 'all' else [a.case]
+    cases = ['c', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', *ARM_CASES] if a.case == 'all' else [a.case]
     statuses = [run_case(a, case)['status'] for case in cases]
     # An explicitly requested unsupported case is not a passing test.
     return 1 if 'fail' in statuses else 2 if 'uncovered' in statuses else 0
@@ -232,6 +232,10 @@ def run_case(a, case):
         check_loader_frame(stopped)
         client.stopped('step_over_line')
         assert client.value('seed') == '20'
+        if case == 'c-memory':
+            assert client.value('seed-20') == '0', 'A known zero must remain a value'
+            for expr in ('*(cast(int32*)0)', '*(cast(int32*)0)+1', '*(cast(int32**)0)'):
+                assert client.value(expr) == '<unavailable>', expr
         stopped = client.stopped('step_into_line')
         if stopped['stack']['frames'][0]['source']['line'] == 8:
             client.stopped('step_over_line')

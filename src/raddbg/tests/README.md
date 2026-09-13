@@ -39,7 +39,11 @@ the runner does not prove that a supplied binary matches the current source.
 Exit status is 0 for passed cases, 1 for failure, and 2 for uncovered cases
 (missing tool or unsupported host). `all` lists every case; ARM64-only cases
 remain visibly uncovered on other hosts. Use `--case c`, `c-exit-37`, or
-`c-detach` for the portable C checks.
+`c-detach` for the portable C checks. `c-memory` also checks that an unmapped
+scalar, an unmapped pointer slot and arithmetic requiring an unmapped read
+render as `<unavailable>`, while a valid local and a zero-valued expression
+remain readable. This does not distinguish a pending cache read from a
+permanently unreadable address, or guarantee freshness of successful reads.
 
 Cases cover source breakpoint identity/path, restart, Over/Into/Out, leaf and
 caller locals, frame selection, exit 0 and exit 37, and detach after a previous
@@ -65,7 +69,7 @@ from the wrapper's body line. `c-inline-nested` requires
 in a header and its call inside a lexical block. It checks each frame's
 source file/line, inline depth and shared physical registers, then normal exit.
 Both cases pass on macOS ARM64 and Linux x64 with Clang/DWARF, and on Windows
-x64 with MSVC/PDB. `all` contains 13 cases; the eight ARM64-only cases remain
+x64 with MSVC/PDB. `all` contains 14 cases; the eight ARM64-only cases remain
 uncovered on other hosts. These results do not cover Intel Mac live debugging.
 
 DWARF conversion resolves inline identity through abstract origins and
