@@ -1289,7 +1289,9 @@ wm_get_events(Arena *arena, B32 wait)
         if(key == WM_Key_Alt   && (wm_event->modifiers & WM_Modifier_Alt))   { wm_event->modifiers &= ~WM_Modifier_Alt; }
         if(key == WM_Key_Ctrl  && (wm_event->modifiers & WM_Modifier_Ctrl))  { wm_event->modifiers &= ~WM_Modifier_Ctrl; }
         if(key == WM_Key_Shift && (wm_event->modifiers & WM_Modifier_Shift)) { wm_event->modifiers &= ~WM_Modifier_Shift; }
-        if(type == NSEventTypeKeyDown)
+        // Shortcut key presses must not also insert text into newly focused inputs.
+        if(type == NSEventTypeKeyDown &&
+           !([event modifierFlags] & (NSEventModifierFlagCommand|NSEventModifierFlagControl)))
         {
           mac_wm_push_text_events_from_ns_string(arena, &result, window, [event characters]);
         }
