@@ -69,8 +69,19 @@ from the wrapper's body line. `c-inline-nested` requires
 in a header and its call inside a lexical block. It checks each frame's
 source file/line, inline depth and shared physical registers, then normal exit.
 Both cases pass on macOS ARM64 and Linux x64 with Clang/DWARF, and on Windows
-x64 with MSVC/PDB. `all` contains 14 cases; the eight ARM64-only cases remain
+x64 with MSVC/PDB. `all` contains 16 cases; the eight ARM64-only cases remain
 uncovered on other hosts. These results do not cover Intel Mac live debugging.
+
+`c-assert` and `c-assert-optimized` use a `__builtin_trap()` assertion at
+`-O0` and `-O2`. They require the assert's source line, the faulting function
+and its callers, the local value and a caller's local. On ARM64 they also
+require the stopped PC to point at Clang's `BRK #1`, since an instruction
+after the trap can still share its source line. Only the unoptimized case
+checks the parameter value: the optimized fixture exposes a separate missing
+parameter-location result, despite LLDB and the raw x0 register showing 20.
+The Windows/MSVC runner reports these two cases as uncovered. Continuing
+after this noreturn builtin is not valid target behavior; use `line_step.S`
+and `line_step_ipc.py --case over` to check resumption after a returning trap.
 
 DWARF conversion resolves inline identity through abstract origins and
 specifications. It splits the CU's innermost-body lines into the existing

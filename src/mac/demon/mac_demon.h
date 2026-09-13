@@ -123,6 +123,8 @@ struct MAC_DMN_Thread
   B32 is_stepping_over_debug_trap;
   U64 dyld_notification_step_vaddr;
   U64 dyld_bootstrap_step_vaddr;
+  U64 pending_trap_vaddr;
+  U64 pending_trap_size;
 };
 
 typedef struct MAC_DMN_Module MAC_DMN_Module;
@@ -296,7 +298,7 @@ internal U64 mac_dmn_thread_read_ip(MAC_DMN_Thread *thread);
 internal U64 mac_dmn_thread_read_sp(MAC_DMN_Thread *thread);
 internal U64 mac_dmn_stack_base_vaddr_from_thread(MAC_DMN_Thread *thread);
 internal B32 mac_dmn_thread_write_ip(MAC_DMN_Thread *thread, U64 ip);
-internal B32 mac_dmn_thread_skip_past_trap_instruction(MAC_DMN_Thread *thread);
+internal U64 mac_dmn_thread_trap_instruction_size(MAC_DMN_Thread *thread);
 internal B32 mac_dmn_set_single_step_flag(MAC_DMN_Thread *thread, B32 is_on);
 #if ARCH_ARM64
 internal B32 mac_dmn_arm64_debug_state_regs_from_trap(DMN_Trap *trap, U64 *wvr_out, U64 *wcr_out);

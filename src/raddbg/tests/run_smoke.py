@@ -44,12 +44,12 @@ def main():
     p.add_argument('--debugger', required=True, type=Path)
     p.add_argument('--sender', type=Path, help='Default: same binary as debugger')
     p.add_argument('--compiler', default='cl' if os.name == 'nt' else 'clang')
-    p.add_argument('--case', choices=['all', 'c', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', *ARM_CASES], default='c')
+    p.add_argument('--case', choices=['all', 'c', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', *ARM_CASES], default='c')
     p.add_argument('--output-root', type=Path, help='Existing directory for retained, unique run directories')
     a = p.parse_args()
     a.debugger = a.debugger.resolve()
     a.sender = (a.sender or a.debugger).resolve()
-    cases = ['c', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', *ARM_CASES] if a.case == 'all' else [a.case]
+    cases = ['c', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', *ARM_CASES] if a.case == 'all' else [a.case]
     statuses = [run_case(a, case)['status'] for case in cases]
     # An explicitly requested unsupported case is not a passing test.
     return 1 if 'fail' in statuses else 2 if 'uncovered' in statuses else 0
@@ -82,6 +82,9 @@ def run_case(a, case):
         if case in ARM_CASES and (platform.system() != 'Darwin' or platform.machine() != 'arm64'):
             record.update(status='uncovered', reason='Requires a native macOS ARM64 debugger and target')
             return record
+        if case.startswith('c-assert') and os.name == 'nt':
+            record.update(status='uncovered', reason='Fixture requires __builtin_trap; the Windows runner uses MSVC')
+            return record
         record['debugger_sha256'] = sha(a.debugger)
         record['sender_sha256'] = sha(a.sender)
         record['source_revision'] = run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], timeout=10).strip()
@@ -99,6 +102,8 @@ def run_case(a, case):
             stem = 'inline'
         if case == 'c-inline-nested':
             stem = 'inline_nested'
+        if case.startswith('c-assert'):
+            stem = 'assert_trap'
         source = HERE/(stem+'.c')
         defines = ARM_CASES.get(case, []) + (['EXIT_CODE=37'] if case == 'c-exit-37' else [])
         sources = [source] + ([HERE/(stem+'.S')] if case in ARM_CASES else [])
@@ -115,7 +120,8 @@ def run_case(a, case):
             objects = []
             for index, src in enumerate(sources):
                 obj = f'fixture-{index}.o'
-                run([a.compiler, '-g', '-O1' if case.startswith('c-inline') else '-O0', *['-D'+d for d in defines], '-c', str(src), '-o', obj], timeout=60)
+                optimization = '-O2' if case == 'c-assert-optimized' else '-O1' if case.startswith('c-inline') else '-O0'
+                run([a.compiler, '-g', optimization, *['-D'+d for d in defines], '-c', str(src), '-o', obj], timeout=60)
                 objects.append(obj)
             run([a.compiler, '-g', *objects, '-o', str(target)], timeout=60)
             if platform.system() == 'Darwin':
@@ -127,9 +133,10 @@ def run_case(a, case):
         stop_line = 6 if case in ARM_CASES else next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'volatile int seed = 20' in line)
         if case.startswith('c-inline'):
             stop_line = next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'SNAPSHOT_STOP' in line)
+        breakpoint = '' if case.startswith('c-assert') else f'breakpoint:\n{{\n source_location: {json.dumps(str(source)+f":{stop_line}:1")}\n enabled: 1\n}}\n'
         project.write_text('// raddbg 0.9.29 project file\n\ntarget:\n{\n'
                            f' executable: {json.dumps(str(target))}\n working_directory: {json.dumps(str(output))}\n enabled: 1\n}}\n'
-                           f'breakpoint:\n{{\n source_location: {json.dumps(str(source)+f":{stop_line}:1")}\n enabled: 1\n}}\n', encoding='utf-8')
+                           + breakpoint, encoding='utf-8')
         argv = [str(a.debugger), '--user:'+str(output/'test.user'), '--project:'+str(project)]
         command = subprocess.list2cmdline(argv) if os.name == 'nt' else shlex.join(argv)
         run(['cleat', 'launch', session, '--tag', 'project=raddbg', '--tag', 'purpose=test',
@@ -166,6 +173,24 @@ def run_case(a, case):
         else:
             raise AssertionError('Debugger did not become ready; see ipc.jsonl')
         record['debugger_build'] = initial['build']
+        if case.startswith('c-assert'):
+            stopped = client.stopped('restart')
+            frames = stopped['stack']['frames']
+            assert stopped['stop']['cause'] in ('trap', 'exception'), stopped
+            assert [f['function'] for f in frames[:3]] == ['check_value', 'caller', 'main'], stopped
+            assert frames[0]['source']['is_source'] and Path(frames[0]['source']['path']) == source, stopped
+            trap_line = next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'assert(local' in line)
+            assert frames[0]['source']['line'] == trap_line, stopped
+            if case == 'c-assert':
+                assert client.value('input') == '20'
+            if platform.machine() == 'arm64':
+                # Clang emits BRK #1. Source lines alone miss a one-instruction PC error at -O0.
+                assert int(client.value('*(cast(uint32*) pc)'), 0) == 0xd4200020
+            assert client.value('local') == '22'
+            client.command('down_one_frame')
+            assert client.value('seed') == '20'
+            record['status'] = 'pass'
+            return record
         if case == 'c-inline-nested':
             source_lines = source.read_text().splitlines()
             header = HERE/'inline_nested.h'

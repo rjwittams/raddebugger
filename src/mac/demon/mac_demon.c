@@ -2146,29 +2146,23 @@ mac_dmn_thread_write_ip(MAC_DMN_Thread *thread, U64 ip)
   return result;
 }
 
-internal B32
-mac_dmn_thread_skip_past_trap_instruction(MAC_DMN_Thread *thread)
+internal U64
+mac_dmn_thread_trap_instruction_size(MAC_DMN_Thread *thread)
 {
-  B32 result = 0;
-  if(thread != 0 && thread->process != 0)
+  U64 result = 0;
+  // x86 reports a PC already past INT3; only inspect traps at the stopped PC.
+  if(thread != 0 && thread->process != 0 &&
+     arch_software_breakpoint_pc_offset(OperatingSystem_Mac, thread->arch) == 0)
   {
-    MAC_DMN_ExceptionMessage *exception = &thread->process->pending_exception;
-    if(mac_dmn_exception_is_software_breakpoint(thread->arch, exception))
+    U64 ip = mac_dmn_thread_read_ip(thread);
+    U64 read_size = min_instruction_size_from_arch(thread->arch);
+    U8 trap_bytes[16] = {0};
+    mach_vm_size_t bytes_read = 0;
+    if(0 < read_size && read_size <= sizeof(trap_bytes) &&
+       mach_vm_read_overwrite(thread->process->task, ip, read_size, (mach_vm_address_t)trap_bytes, &bytes_read) == KERN_SUCCESS &&
+       bytes_read == read_size)
     {
-      U64 ip = mac_dmn_thread_read_ip(thread);
-      U64 read_size = min_instruction_size_from_arch(thread->arch);
-      U8 trap_bytes[16] = {0};
-      mach_vm_size_t bytes_read = 0;
-      if(0 < read_size && read_size <= sizeof(trap_bytes) &&
-         mach_vm_read_overwrite(thread->process->task, ip, read_size, (mach_vm_address_t)trap_bytes, &bytes_read) == KERN_SUCCESS &&
-         bytes_read == read_size)
-      {
-        U64 trap_inst_size = arch_trap_instruction_size_from_code(thread->arch, str8(trap_bytes, bytes_read));
-        if(trap_inst_size != 0)
-        {
-          result = mac_dmn_thread_write_ip(thread, ip + trap_inst_size);
-        }
-      }
+      result = arch_trap_instruction_size_from_code(thread->arch, str8(trap_bytes, bytes_read));
     }
   }
   return result;
@@ -2967,6 +2961,8 @@ mac_dmn_push_event_trap(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *pro
     e->thread = mac_dmn_handle_from_entity(thread_entity);
     e->instruction_pointer = mac_dmn_thread_read_ip(&thread_entity->thread);
     e->stack_pointer = mac_dmn_thread_read_sp(&thread_entity->thread);
+    thread_entity->thread.pending_trap_vaddr = e->instruction_pointer;
+    thread_entity->thread.pending_trap_size = mac_dmn_thread_trap_instruction_size(&thread_entity->thread);
   }
 }
 
@@ -3514,6 +3510,28 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
 
   if(result.count == 0)
   {
+    // Keep the faulting PC intact for inspection. Advance past a target's trap
+    // only when its thread resumes, before installing debugger breakpoints.
+    for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+    {
+      MAC_DMN_Process *process = &entity->process;
+      if(entity->kind == MAC_DMN_EntityKind_Process && process->is_attached && !process->is_running)
+      {
+        for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+        {
+          MAC_DMN_Thread *thread = &thread_entity->thread;
+          if(thread->pending_trap_size != 0 && mac_dmn_thread_should_run(thread_entity, ctrls))
+          {
+            if(mac_dmn_thread_read_ip(thread) == thread->pending_trap_vaddr &&
+               mac_dmn_thread_trap_instruction_size(thread) == thread->pending_trap_size)
+            {
+              mac_dmn_thread_write_ip(thread, thread->pending_trap_vaddr + thread->pending_trap_size);
+            }
+            thread->pending_trap_size = 0;
+          }
+        }
+      }
+    }
     U32 internal_continue_count = 0;
     mac_dmn_run_again:;
     Temp scratch = scratch_begin(0, 0);
@@ -3915,7 +3933,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
                     thread_entity->thread.is_stepping_over_debug_trap = 0;
                     if(got_mach_exception &&
                        mac_dmn_exception_is_software_breakpoint(thread_entity->thread.arch, &process->pending_exception) &&
-                       mac_dmn_thread_skip_past_trap_instruction(&thread_entity->thread))
+                       mac_dmn_thread_trap_instruction_size(&thread_entity->thread) != 0)
                     {
                       mac_dmn_push_event_trap(arena, &result, process_entity, thread_entity, signo);
                     }
@@ -3928,7 +3946,6 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
                 else if(got_mach_exception &&
                         mac_dmn_exception_is_software_breakpoint(thread_entity->thread.arch, &process->pending_exception))
                 {
-                  mac_dmn_thread_skip_past_trap_instruction(&thread_entity->thread);
                   mac_dmn_push_event_trap(arena, &result, process_entity, thread_entity, signo);
                 }
                 else
