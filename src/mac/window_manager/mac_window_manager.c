@@ -299,6 +299,8 @@ mac_wm_apply_chrome_mode_to_window(MAC_WM_Window *window, MAC_WM_ChromeMode mode
       style_mask &= ~NSWindowStyleMaskFullSizeContentView;
     }
     [window->ns_window setStyleMask:style_mask];
+    // Custom title bars start drags explicitly after excluding client controls.
+    [window->ns_window setMovable:!window->custom_border];
 
     if(window->custom_border)
     {
