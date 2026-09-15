@@ -11586,6 +11586,19 @@ rd_init(CmdLine *cmdln)
     for EachElement(idx, rd_name_schema_info_table)
     {
       MD_Node *schema = md_tree_from_string(rd_state->arena, rd_name_schema_info_table[idx].schema)->first;
+      // Resolve platform defaults in the schema so settings UI and commands agree.
+      if(OS_MAC)
+      {
+        for(MD_Node *setting = schema->first; !md_node_is_nil(setting); setting = setting->next)
+        {
+          MD_Node *default_tag = md_tag_from_string(setting, str8_lit("default"), 0);
+          MD_Node *mac_default_tag = md_tag_from_string(setting, str8_lit("default_mac"), 0);
+          if(!md_node_is_nil(default_tag->first) && !md_node_is_nil(mac_default_tag->first))
+          {
+            default_tag->first->string = mac_default_tag->first->string;
+          }
+        }
+      }
       cfg_schema_table_insert(rd_state->arena, rd_state->cfg_schema_table, rd_name_schema_info_table[idx].name, schema);
     }
   }
@@ -12566,7 +12579,22 @@ rd_frame(void)
               }
             }
             rd_cmd(RD_CmdKind_RunCommand, .cmd_name = cmd_name);
-            wm_text(&events, event->window, hit_char);
+            // Prefer text attached to this key press over a layout-independent guess.
+            B32 took_key_text = 0;
+            for(WM_Event *text = event->next, *text_next = 0;
+                text != 0 && text->kind == WM_EventKind_Text &&
+                text->key != WM_Key_Null && text->key == event->key &&
+                wm_window_match(text->window, event->window);
+                text = text_next)
+            {
+              text_next = text->next;
+              wm_eat_event(&events, text);
+              took_key_text = 1;
+            }
+            if(!took_key_text)
+            {
+              wm_text(&events, event->window, hit_char);
+            }
             next = event->next;
             take = 1;
             if(event->modifiers & WM_Modifier_Alt)
@@ -16930,6 +16958,12 @@ rd_frame(void)
 #undef Opt
               }
               
+              RD_ViewState *vs = rd_view_state_from_cfg(view);
+              String8 current_query_cmd_name = cmd->first->string;
+              B32 same_query = str8_match(current_query_cmd_name, cmd_name, 0);
+              B32 focus_query = (!is_floating && !rd_setting_b32_from_name(s("repeat_query_closes_input")));
+              B32 reactivate_query = (focus_query && same_query && vs->query_is_open);
+
               // rjf: choose initial input string
               String8 initial_input = {0};
               if(cmd_name.size != 0)
@@ -16946,20 +16980,18 @@ rd_frame(void)
                   initial_input = current_path_string;
                   initial_input = push_str8f(scratch.arena, "%S/", initial_input);
                 }
-                else if(cmd_kind_info->query.flags & RD_QueryFlag_KeepOldInput)
+                else if(reactivate_query || cmd_kind_info->query.flags & RD_QueryFlag_KeepOldInput)
                 {
                   initial_input = input->first->string;
                 }
               }
               
               // rjf: build query state
-              String8 current_query_cmd_name = cmd->first->string;
               cfg_node_new_replace(rd_state->cfg, input, initial_input);
               cfg_node_new_replace(rd_state->cfg, cmd, cmd_name);
-              RD_ViewState *vs = rd_view_state_from_cfg(view);
               if(cmd_name.size != 0)
               {
-                if(!vs->query_is_open && cmd_kind_info->query.flags & RD_QueryFlag_SelectOldInput)
+                if(reactivate_query || (!vs->query_is_open && cmd_kind_info->query.flags & RD_QueryFlag_SelectOldInput))
                 {
                   vs->query_cursor = input->first->string.size;
                   vs->query_mark = 0;
@@ -16969,7 +17001,7 @@ rd_frame(void)
                   vs->query_cursor = input->first->string.size;
                   vs->query_mark = vs->query_cursor;
                 }
-                if(!str8_match(current_query_cmd_name, cmd_name, 0))
+                if(focus_query || !same_query)
                 {
                   vs->query_is_open = 1;
                 }

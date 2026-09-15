@@ -151,6 +151,7 @@ struct WM_Event
   WM_Window window;
   WM_EventKind kind;
   WM_Modifiers modifiers;
+  // Text events may name their originating key when emitted directly after its press.
   WM_Key key;
   B32 is_repeat;
   B32 right_sided;
