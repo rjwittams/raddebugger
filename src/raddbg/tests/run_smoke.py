@@ -44,12 +44,12 @@ def main():
     p.add_argument('--debugger', required=True, type=Path)
     p.add_argument('--sender', type=Path, help='Default: same binary as debugger')
     p.add_argument('--compiler', default='cl' if os.name == 'nt' else 'clang')
-    p.add_argument('--case', choices=['all', 'c', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', *ARM_CASES], default='c')
+    p.add_argument('--case', choices=['all', 'c', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', 'symbol-library', *ARM_CASES], default='c')
     p.add_argument('--output-root', type=Path, help='Existing directory for retained, unique run directories')
     a = p.parse_args()
     a.debugger = a.debugger.resolve()
     a.sender = (a.sender or a.debugger).resolve()
-    cases = ['c', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', *ARM_CASES] if a.case == 'all' else [a.case]
+    cases = ['c', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', 'symbol-library', *ARM_CASES] if a.case == 'all' else [a.case]
     statuses = [run_case(a, case)['status'] for case in cases]
     # An explicitly requested unsupported case is not a passing test.
     return 1 if 'fail' in statuses else 2 if 'uncovered' in statuses else 0
@@ -85,6 +85,9 @@ def run_case(a, case):
         if case.startswith('c-assert') and os.name == 'nt':
             record.update(status='uncovered', reason='Fixture requires __builtin_trap; the Windows runner uses MSVC')
             return record
+        if case == 'symbol-library' and platform.system() != 'Darwin':
+            record.update(status='uncovered', reason='Mach-O name-only symbol provider; ELF/PE providers not implemented')
+            return record
         record['debugger_sha256'] = sha(a.debugger)
         record['sender_sha256'] = sha(a.sender)
         record['source_revision'] = run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], timeout=10).strip()
@@ -104,6 +107,8 @@ def run_case(a, case):
             stem = 'inline_nested'
         if case.startswith('c-assert'):
             stem = 'assert_trap'
+        if case == 'symbol-library':
+            stem = 'symbol_library_main'
         source = HERE/(stem+'.c')
         defines = ARM_CASES.get(case, []) + (['EXIT_CODE=37'] if case == 'c-exit-37' else [])
         sources = [source] + ([HERE/(stem+'.S')] if case in ARM_CASES else [])
@@ -113,6 +118,14 @@ def run_case(a, case):
         if case == 'c-inline-nested':
             record['fixture_hashes']['inline_nested.h'] = sha(HERE/'inline_nested.h')
         target = output/('session.exe' if os.name == 'nt' else 'session')
+        if case == 'symbol-library':
+            library_source = HERE/'symbol_library.c'
+            library = output/'libsymbols.dylib'
+            record['fixture_hashes'][library_source.name] = sha(library_source)
+            run([a.compiler, '-dynamiclib', '-g0', '-O0', '-fno-omit-frame-pointer',
+                 str(library_source), '-o', str(library)], timeout=60)
+            run(['xcrun', 'strip', '-S', str(library)], timeout=60)
+            record['library_sha256'] = sha(library)
         if os.name == 'nt':
             run([a.compiler, '/Zi', '/O2' if case.startswith('c-inline') else '/Od', *['/D'+d for d in defines], str(source), '/Fe:'+str(target), '/link', '/debug', '/incremental:no'], timeout=60)
         else:
@@ -133,7 +146,7 @@ def run_case(a, case):
         stop_line = 6 if case in ARM_CASES else next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'volatile int seed = 20' in line)
         if case.startswith('c-inline'):
             stop_line = next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'SNAPSHOT_STOP' in line)
-        breakpoint = '' if case.startswith('c-assert') else f'breakpoint:\n{{\n source_location: {json.dumps(str(source)+f":{stop_line}:1")}\n enabled: 1\n}}\n'
+        breakpoint = '' if case.startswith('c-assert') or case == 'symbol-library' else f'breakpoint:\n{{\n source_location: {json.dumps(str(source)+f":{stop_line}:1")}\n enabled: 1\n}}\n'
         project.write_text('// raddbg 0.9.29 project file\n\ntarget:\n{\n'
                            f' executable: {json.dumps(str(target))}\n working_directory: {json.dumps(str(output))}\n enabled: 1\n}}\n'
                            + breakpoint, encoding='utf-8')
@@ -173,6 +186,27 @@ def run_case(a, case):
         else:
             raise AssertionError('Debugger did not become ready; see ipc.jsonl')
         record['debugger_build'] = initial['build']
+        if case == 'symbol-library':
+            stopped = client.stopped('restart')
+            assert stopped['stop']['cause'] in ('trap', 'exception'), stopped
+            frames = stopped['stack']['frames']
+            for frame, name in zip(frames[:2], ('_symbol_library_leaf', '_symbol_library_caller')):
+                assert Path(frame['module']).name == 'libsymbols.dylib', frame
+                assert frame['symbol']['name'] == name and frame['symbol']['source'] == 'symbol_table', frame
+                assert not frame['function'] and not frame['source']['is_source'], frame
+                assert int(frame['symbol']['address'], 16)+int(frame['symbol']['offset'], 16) == int(frame['pc'], 16), frame
+            assert len(frames) >= 3 and frames[2]['function'] == 'main', stopped
+            assert frames[2]['symbol']['source'] == 'debug_info', frames[2]
+            deadline = time.monotonic()+10
+            while frames[0].get('debug_info_status') == 'pending' and time.monotonic() < deadline:
+                time.sleep(.03)
+                stopped = client.snapshot()
+                frames = stopped['stack']['frames']
+            assert frames[0].get('debug_info_status') == 'unavailable', frames[0]
+            assert frames[2]['debug_info_status'] == 'ready', frames[2]
+            assert stopped['symbols_pending'] == any(f['debug_info_status'] == 'pending' for f in frames), stopped
+            record['status'] = 'pass'
+            return record
         if case.startswith('c-assert'):
             stopped = client.stopped('restart')
             frames = stopped['stack']['frames']

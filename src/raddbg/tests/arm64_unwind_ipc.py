@@ -86,6 +86,12 @@ try:
         if index:
             stop('step_into_inst')
         assert state()['ip'] == leaf + offset, state()['raw']
+        frames = client.snapshot()['stack']['frames']
+        symbol = frames[0].get('symbol', {})
+        assert symbol.get('name') == '_unwind_leaf', frames[0]
+        assert symbol['source'] == 'symbol_table' and int(symbol['offset'], 16) == offset, symbol
+        assert not frames[0]['function'], 'Assembly label must not invent a DWARF procedure'
+        assert frames[1]['function'] == 'main' and frames[1]['symbol']['source'] == 'debug_info', frames[1]
         # Source navigation may initially select main when the assembly has no
         # source DIE. Explicitly select the actual stopped frame before reading.
         for _ in range(8):

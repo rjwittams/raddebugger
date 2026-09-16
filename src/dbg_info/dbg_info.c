@@ -481,6 +481,27 @@ di_push_all_loaded_keys(Arena *arena)
   return array;
 }
 
+internal DI_LoadStatus
+di_load_status_from_key(DI_Key key)
+{
+  DI_LoadStatus result = DI_LoadStatus_None;
+  U64 slot_idx = u64_hash_from_str8(str8_struct(&key))%di_shared->slots_count;
+  Stripe *stripe = stripe_from_slot_idx(&di_shared->stripes, slot_idx);
+  RWMutexScope(stripe->rw_mutex, 0)
+  {
+    for(DI_Node *n = di_shared->slots[slot_idx].first; n != 0; n = n->next)
+    {
+      if(di_key_match(n->key, key) && ins_atomic_u64_eval(&n->refcount) > 0)
+      {
+        if(n->completion_count == 0) {result = DI_LoadStatus_Pending;}
+        else {result = n->rdi.raw_data_size ? DI_LoadStatus_Ready : DI_LoadStatus_Unavailable;}
+        break;
+      }
+    }
+  }
+  return result;
+}
+
 internal RDI_Parsed *
 di_rdi_from_key(Access *access, DI_Key key, B32 high_priority, U64 endt_us)
 {

@@ -143,6 +143,7 @@ rd_debug_snapshot(Arena *arena)
     RDI_Parsed *rdi = di_rdi_from_key(access, key, 1, now_time_us()+1000);
     RDI_LineTable *line_table = rdi_line_table_from_unit(rdi, rdi_unit_from_voff(rdi, voff));
     String8 name = fully_qualified_str8_from_rdi_symbol(scratch.arena, rdi, rdi_procedure_from_voff(rdi, voff));
+    D_SymbolName symbol = d_symbol_name_from_module_voff(scratch.arena, access, module->handle, rdi, voff);
     if(frame->inline_depth != 0)
     {
       RDI_Scope *scope = rdi_inline_scope_from_scope(rdi, rdi_scope_from_voff(rdi, voff));
@@ -154,6 +155,9 @@ rd_debug_snapshot(Arena *arena)
         {
           RDI_InlineSite *site = rdi_element_from_name_idx(rdi, InlineSites, s->inline_site_idx);
           name.str = rdi_string_from_idx(rdi, site->name_string_idx, &name.size);
+          symbol.name = name;
+          symbol.kind = name.size ? D_SymbolNameKind_DebugInfo : D_SymbolNameKind_None;
+          symbol.voff = voff; // Inline sites need not have one contiguous range.
           line_table = rdi_element_from_name_idx(rdi, LineTables, site->line_table_idx);
           break;
         }
@@ -162,14 +166,25 @@ rd_debug_snapshot(Arena *arena)
     // Select this frame's table directly. Missing inline line tables must not
     // shift the remaining frames onto somebody else's source location.
     D_Line line = rd_snapshot_source_line(scratch.arena, rdi, line_table, dbgi->string, voff);
-    if(dbgi->string.size != 0 && rdi->raw_data_size == 0) {symbols_pending = 1;}
+    DI_LoadStatus debug_info_status = di_load_status_from_key(key);
+    // The load may finish between the RDI lookup and the status query. This
+    // observation still needs another pass before it can expose those symbols.
+    if(debug_info_status == DI_LoadStatus_Ready && rdi->raw_data_size == 0) {debug_info_status = DI_LoadStatus_Pending;}
+    if(debug_info_status == DI_LoadStatus_Pending) {symbols_pending = 1;}
     str8_list_pushf(scratch.arena, &body,
                    "%s{\"id\":%I64u,\"unwind_index\":%I64u,\"inline_depth\":%I64u,"
                    "\"pc\":\"0x%I64x\",\"sp\":\"0x%I64x\",\"cfa\":\"0x%I64x\","
                    "\"module_offset\":\"0x%I64x\",\"module\":%S,\"function\":%S,"
+                   "\"symbol\":{\"name\":%S,\"source\":\"%s\",\"address\":\"0x%I64x\",\"offset\":\"0x%I64x\"},"
+                   "\"debug_info_status\":\"%s\","
                    "\"source\":{\"path\":%S,\"line\":%I64d,\"column\":%I64d,\"is_source\":%s}}",
                    idx ? "," : "", idx, frame->unwind_count, frame->inline_depth, pc, sp, frame->cfa, voff,
                    rd_snapshot_json_string(scratch.arena, module->string), rd_snapshot_json_string(scratch.arena, name),
+                   rd_snapshot_json_string(scratch.arena, symbol.name),
+                   symbol.kind == D_SymbolNameKind_DebugInfo ? "debug_info" : symbol.kind == D_SymbolNameKind_SymbolTable ? "symbol_table" : "none",
+                   symbol.kind ? module->vaddr_range.min+symbol.voff : 0, symbol.kind ? voff-symbol.voff : 0,
+                   debug_info_status == DI_LoadStatus_Pending ? "pending" : debug_info_status == DI_LoadStatus_Ready ? "ready" :
+                   debug_info_status == DI_LoadStatus_Unavailable ? "unavailable" : "none",
                    rd_snapshot_json_string(scratch.arena, line.file_path), line.pt.line, line.pt.column,
                    d_line_has_source(&line) ? "true" : "false");
   }

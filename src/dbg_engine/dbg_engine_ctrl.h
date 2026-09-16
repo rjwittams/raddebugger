@@ -174,6 +174,7 @@ struct D_ModuleInfo
   void *unwind_info;
   String8 macho_unwind_info_data;
   U64Array macho_function_start_voffs;
+  MachO_CodeSymbolArray macho_code_symbols;
   String8 local_debug_info_path;
   String8 dbg_name;
   Guid dbg_guid;
@@ -562,6 +563,20 @@ internal void d_module_info_evict(D_Handle module);
 
 //- rjf: cache lookups
 internal D_ModuleInfo *d_info_from_module(Access *access, D_Handle module);
+typedef enum D_SymbolNameKind
+{
+  D_SymbolNameKind_None,
+  D_SymbolNameKind_DebugInfo,
+  D_SymbolNameKind_SymbolTable,
+} D_SymbolNameKind;
+typedef struct D_SymbolName D_SymbolName;
+struct D_SymbolName
+{
+  String8 name;
+  U64 voff;
+  D_SymbolNameKind kind;
+};
+internal D_SymbolName d_symbol_name_from_module_voff(Arena *arena, Access *access, D_Handle module, RDI_Parsed *rdi, U64 voff);
 internal U64 d_entry_point_voff_from_module(D_Handle module_handle);
 internal U64 d_raddbg_attached_marker_voff_from_module(D_Handle module_handle);
 internal String8 d_initial_debug_info_path_from_module(Arena *arena, D_Handle module_handle);

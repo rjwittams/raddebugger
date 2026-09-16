@@ -69,8 +69,19 @@ from the wrapper's body line. `c-inline-nested` requires
 in a header and its call inside a lexical block. It checks each frame's
 source file/line, inline depth and shared physical registers, then normal exit.
 Both cases pass on macOS ARM64 and Linux x64 with Clang/DWARF, and on Windows
-x64 with MSVC/PDB. `all` contains 16 cases; the eight ARM64-only cases remain
-uncovered on other hosts. These results do not cover Intel Mac live debugging.
+x64 with MSVC/PDB. `all` contains 17 cases; the eight ARM64-only cases remain
+uncovered on other hosts. The Mach-O `symbol-library` case is also uncovered
+on Linux and Windows. These results do not cover Intel Mac live debugging.
+
+`symbol-library` loads a library built without debug info and stripped of
+debug symbols. It requires symbol-table names and offsets for its leaf and
+caller, no invented function/source information, and ordinary debug-info
+resolution for the application's `main`. It also waits for the library's
+debug-info load to settle as unavailable. The five ARM64 unwind variants
+check `_unwind_leaf` name-only labels and exact offsets at their instruction
+boundaries. The `macho_symbol_fallback` torture case checks executable-section
+boundaries, deterministic aliases, malformed names/tables, UUID/CPU matching
+and universal-image slice selection.
 
 `c-assert` and `c-assert-optimized` use a `__builtin_trap()` assertion at
 `-O0` and `-O2`. They require the assert's source line, the faulting function
@@ -90,8 +101,8 @@ The original line sequences still supply source-breakpoint lookup. Lexical
 blocks do not terminate the inline chain in stack construction, source lookup,
 snapshot output or UI frame naming. No RDI format change is involved.
 
-Incremental Windows linking, broader optimized/inlined behavior, missing
-debug info, and other GUI workflows need separate coverage. `eval` still uses the
+Incremental Windows linking, broader optimized/inlined behavior, other missing
+debug-info cases, and other GUI workflows need separate coverage. `eval` still uses the
 selected GUI frame and rendered value text. Unwinding now carries byte-level
 register validity through the shared register-read path used by evaluation
 and GUI value formatting. Unknown bytes render as unavailable; a recovered
@@ -164,6 +175,31 @@ arbitrary caller registers are available.
 Source paths preserve recorded case and use RAD's debug-info-relative path
 resolution. Missing inline line tables produce missing source, not a shifted
 location from another inline depth. Empty function/path fields mean no
-resolved information. `symbols_pending` means a nonempty debug-info key has no
-loaded RDI yet; it does not distinguish loading from permanently missing or
-failed conversion, nor does false guarantee that every frame has symbols.
+resolved debug information; a symbol-table label does not fill these fields.
+
+Each frame also has `symbol: {name, source, address, offset}`. Its source is
+`debug_info`, `symbol_table`, or `none`; addresses and offsets are hexadecimal
+strings. Debug-info names take precedence. A symbol-table result names the
+nearest preceding code symbol in the same executable section, not a proven
+containing function. It must not supply source, scope, or stepping ranges.
+Missing names have zero address/offset. Inline names come from RDI; their
+anchor is the observed PC with zero offset, since an inline site need not
+have one contiguous range. The GUI marks fallback labels with `[symbol]`.
+
+`debug_info_status` is `none` (no referenced load), `pending` (queued/loading),
+`ready` (loaded RDI), or `unavailable` (completed without RDI). Unavailable
+does not distinguish missing inputs, unsupported formats and conversion
+failure. `symbols_pending` now means at least one returned frame has a
+pending debug-info load; false does not promise names for every frame.
+If loading finishes between queries but this snapshot still has no RDI,
+that frame stays pending until another observation can expose it.
+
+The fallback provider currently reads 64-bit Mach-O symbol tables, cached
+with each loaded module. It first tries target memory, then a local image
+with matching UUID, CPU type and subtype. It supports thin and big-endian
+FAT32/FAT64 containers. Reads are bounded to 16 MiB of symbol entries and
+64 MiB of strings; the on-disk fallback also caps the whole file at 64 MiB.
+Names must terminate within 4096 bytes. Same-address aliases use bytewise
+name order. There is no ELF/PE export provider, export-trie parser, shared-cache
+local-symbol extraction or symbol download in this change. A library stripped
+of all usable names can still display an address. RDI layout is unchanged.

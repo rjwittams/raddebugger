@@ -1862,6 +1862,31 @@ d_info_from_module(Access *access, D_Handle module)
   return result;
 }
 
+internal D_SymbolName
+d_symbol_name_from_module_voff(Arena *arena, Access *access, D_Handle module, RDI_Parsed *rdi, U64 voff)
+{
+  D_SymbolName result = {0};
+  RDI_Symbol *procedure = rdi_procedure_from_voff(rdi, voff);
+  result.name = fully_qualified_str8_from_rdi_symbol(arena, rdi, procedure);
+  if(result.name.size != 0)
+  {
+    result.kind = D_SymbolNameKind_DebugInfo;
+    result.voff = rdi_first_voff_from_procedure(rdi, procedure);
+  }
+  else
+  {
+    D_ModuleInfo *info = d_info_from_module(access, module);
+    MachO_CodeSymbol *symbol = macho_code_symbol_from_voff(info->macho_code_symbols, voff);
+    if(symbol != 0)
+    {
+      result.kind = D_SymbolNameKind_SymbolTable;
+      result.name = str8_copy(arena, symbol->name);
+      result.voff = symbol->voff;
+    }
+  }
+  return result;
+}
+
 internal U64
 d_entry_point_voff_from_module(D_Handle module_handle)
 {
@@ -4173,6 +4198,7 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
       Arena *arena = arena_alloc();
       String8 macho_unwind_info_data = {0};
       U64Array macho_function_start_voffs = {0};
+      MachO_CodeSymbolArray code_symbols = {0};
       EH_UWND_ModuleUnwindInfo *synthesized_eh_unwind_info = 0;
       DMN_ModuleInfo synthesized_module_info = {0};
       if(module_info == 0 || module_info == &dmn_module_info_nil)
@@ -4200,6 +4226,30 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
               Arch arch = arch_from_macho_cpu_type(bin.header.cpu_type);
               U64 file_base_vaddr = macho_base_vaddr_from_bin(data, &bin);
               U64 slide = base_vaddr - file_base_vaddr;
+              // Read the loaded image's tables so architecture, image identity
+              // and lifetime match the module, including images not on disk.
+              Rng1U64 symbols_range = {0}, strings_range = {0};
+              if(macho_symbol_table_vranges(data, &bin, slide, &symbols_range, &strings_range) &&
+                 dim_1u64(symbols_range) <= MB(16) && dim_1u64(strings_range) <= MB(64))
+              {
+                String8 symbols = d_data_from_process_vaddr_range(scratch2.arena, process_handle, symbols_range, 0);
+                String8 strings = d_data_from_process_vaddr_range(scratch2.arena, process_handle, strings_range, 0);
+                if(symbols.size == dim_1u64(symbols_range) && strings.size == dim_1u64(strings_range))
+                {
+                  code_symbols = macho_code_symbols(arena, data, &bin, symbols, strings);
+                }
+              }
+              // Shared-cache tables can refer to a cache-wide string pool.
+              // A bounded file fallback must match the loaded UUID and CPU.
+              if(code_symbols.count == 0)
+              {
+                FileProperties props = properties_from_file_path(module_path);
+                if(props.size != 0 && props.size <= MB(64))
+                {
+                  String8 file_data = data_from_file_path(scratch2.arena, module_path);
+                  code_symbols = macho_code_symbols_from_matching_file(arena, file_data, &bin.header, macho_uuid_from_bin(data, &bin));
+                }
+              }
               U64 text_vaddr = 0;
               Rng1U64 eh_frame_vrange = {0};
               Rng1U64 unwind_info_vrange = {0};
@@ -4432,6 +4482,7 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
         info.unwind_info                  = unwind_info_opaque;
         info.macho_unwind_info_data       = str8_copy(arena, macho_unwind_info_data);
         info.macho_function_start_voffs   = macho_function_start_voffs;
+        info.macho_code_symbols           = code_symbols;
         info.local_debug_info_path        = initial_debug_info_path;
         info.dbg_name                     = str8_copy(arena, str8_skip_last_slash(module_info->debug_info_path));
         info.dbg_guid                     = module_info->debug_info_guid;

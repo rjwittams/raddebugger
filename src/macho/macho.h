@@ -7,6 +7,12 @@
 #define MACHO_MAGIC_32 0xfeedface
 #define MACHO_MAGIC_64 0xfeedfacf
 #define MACHO_LC_SEGMENT_64 0x19
+#define MACHO_LC_SYMTAB 0x2
+#define MACHO_N_STAB 0xe0
+#define MACHO_N_TYPE 0x0e
+#define MACHO_N_SECT 0x0e
+#define MACHO_S_ATTR_PURE_INSTRUCTIONS 0x80000000
+#define MACHO_S_ATTR_SOME_INSTRUCTIONS 0x00000400
 #define MACHO_LC_UUID 0x1b
 #define MACHO_LC_FUNCTION_STARTS 0x26
 #define MACHO_LC_MAIN 0x80000028
@@ -232,6 +238,40 @@ struct MachO_Bin
   B32 is_64;
 };
 
+typedef struct MachO_SymtabCommand MachO_SymtabCommand;
+struct MachO_SymtabCommand
+{
+  U32 cmd, cmd_size, symoff, nsyms, stroff, strsize;
+};
+
+typedef struct MachO_Nlist64 MachO_Nlist64;
+struct MachO_Nlist64
+{
+  U32 strx;
+  U8 type, sect;
+  U16 desc;
+  U64 value;
+};
+
+// Name-only anchors, not procedure extents. Ranges bound the containing section.
+typedef struct MachO_CodeSymbol MachO_CodeSymbol;
+struct MachO_CodeSymbol
+{
+  String8 name;
+  U64 voff;
+  Rng1U64 section;
+};
+typedef struct MachO_CodeSymbolArray MachO_CodeSymbolArray;
+struct MachO_CodeSymbolArray
+{
+  MachO_CodeSymbol *v;
+  U64 count;
+};
+
+internal B32 macho_symbol_table_vranges(String8 header, MachO_Bin *bin, U64 slide, Rng1U64 *symbols, Rng1U64 *strings);
+internal MachO_CodeSymbolArray macho_code_symbols(Arena *arena, String8 header, MachO_Bin *bin, String8 symbols, String8 strings);
+internal MachO_CodeSymbolArray macho_code_symbols_from_matching_file(Arena *arena, String8 file, MachO_Header64 *loaded_header, MachO_UUID loaded_uuid);
+internal MachO_CodeSymbol *macho_code_symbol_from_voff(MachO_CodeSymbolArray symbols, U64 voff);
 internal B32 macho_magic_is_32(U32 magic);
 internal B32 macho_magic_is_64(U32 magic);
 internal B32 macho_magic_is_supported(U32 magic);
