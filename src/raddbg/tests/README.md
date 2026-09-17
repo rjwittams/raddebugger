@@ -94,6 +94,14 @@ The Windows/MSVC runner reports these two cases as uncovered. Continuing
 after this noreturn builtin is not valid target behavior; use `line_step.S`
 and `line_step_ipc.py --case over` to check resumption after a returning trap.
 
+Fresh `c-assert` runs also exercise cold debug-info loading: on Linux, the
+locals cache previously retained an empty map built while RDI was pending.
+The stack could then report ready while `eval input` still failed. Repeating
+the case with a new fixture each time caught this race; reusing an already
+converted binary did not. The test does not force that scheduling window,
+and it does not cover the corresponding C++ member-map path. Keep the first
+evaluation failure as a failure, without retrying it into a passing result.
+
 DWARF conversion resolves inline identity through abstract origins and
 specifications. It splits the CU's innermost-body lines into the existing
 RDI per-frame tables, using inline call-file/line attributes for callers.
