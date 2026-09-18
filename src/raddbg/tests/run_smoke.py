@@ -44,12 +44,12 @@ def main():
     p.add_argument('--debugger', required=True, type=Path)
     p.add_argument('--sender', type=Path, help='Default: same binary as debugger')
     p.add_argument('--compiler', default='cl' if os.name == 'nt' else 'clang')
-    p.add_argument('--case', choices=['all', 'c', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', 'symbol-library', *ARM_CASES], default='c')
+    p.add_argument('--case', choices=['all', 'c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', 'symbol-library', *ARM_CASES], default='c')
     p.add_argument('--output-root', type=Path, help='Existing directory for retained, unique run directories')
     a = p.parse_args()
     a.debugger = a.debugger.resolve()
     a.sender = (a.sender or a.debugger).resolve()
-    cases = ['c', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', 'symbol-library', *ARM_CASES] if a.case == 'all' else [a.case]
+    cases = ['c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', 'symbol-library', *ARM_CASES] if a.case == 'all' else [a.case]
     statuses = [run_case(a, case)['status'] for case in cases]
     # An explicitly requested unsupported case is not a passing test.
     return 1 if 'fail' in statuses else 2 if 'uncovered' in statuses else 0
@@ -263,6 +263,9 @@ def run_case(a, case):
             assert frames[0]['source']['line'] == stop_line, stopped
             assert frames[1]['source']['line'] in (body_line, body_line+1), stopped
             assert frames[2]['source']['line'] == caller_line, stopped
+            for frame in (1, 2):
+                result = client.evaluated(stopped, frame, 'input')
+                assert result['status'] == 'unsupported', result
             ended = client.stopped('run')
             assert ended['process_count'] == 0 and ended['last_process_end']['exit_code'] == 0, ended
             record['status'] = 'pass'
@@ -305,10 +308,44 @@ def run_case(a, case):
         assert frames[0]['pc'] != frames[1]['pc'] and frames[0]['sp'] != frames[1]['sp'], stopped
         assert client.value('input') == '20'
         assert client.value('doubled') == '40'
+        if case == 'c-eval':
+            for frame, expr, expected in ((1, 'seed', 20), (0, 'doubled', 40), (1, 'seed-20', 0)):
+                value = client.evaluated(stopped, frame, expr)
+                assert value['status'] == 'ready', value
+                assert int.from_bytes(bytes.fromhex(value['value']['bytes']), 'little', signed=True) == expected, value
+                assert value['context']['frame'] == frame, value
+                assert client.value('input') == '20', 'Explicit evaluation changed GUI frame selection'
+            for expr in ('*(cast(int32*)0)', '*(cast(int32*)0)+1'):
+                value = client.evaluated(stopped, 0, expr)
+                assert value['status'] == 'unavailable', value
+            assert client.evaluated(stopped, 0, 'not_a_local_here')['status'] == 'error'
+            assert client.evaluated(stopped, 0, '1/0')['status'] == 'error'
+            # RAD's '=' defines an evaluator macro, not a target-memory write.
+            definition = client.evaluated(stopped, 0, 'doubled = 99')
+            assert definition['status'] == 'ready', definition
+            assert int.from_bytes(bytes.fromhex(definition['value']['bytes']), 'little') == 99, definition
+            again = client.evaluated(stopped, 0, 'doubled')
+            assert again['status'] == 'ready' and int.from_bytes(bytes.fromhex(again['value']['bytes']), 'little') == 40, again
+            assert client.value('doubled') == '40', 'Read-only evaluation changed target memory or GUI macros'
+            result = client.evaluated(stopped, 0, 'leaf(99)')
+            assert result['status'] in ('error', 'unsupported'), result
+            for expr in ('', 'x'*4097):
+                assert client.evaluate(stopped, 0, expr)['status'] == 'invalid_request'
+            assert client.evaluate(stopped, 0, 'input', unexpected=1)['status'] == 'invalid_request'
+            assert client.evaluate(stopped, 999999, 'input')['status'] == 'invalid_request'
+            assert client.evaluate(stopped, 0, 'input', thread_id=0)['status'] == 'invalid_request'
+            assert client.evaluate(stopped, 0, 'input', reg_gen=stopped['reg_gen']+1)['status'] == 'stale'
+            assert client.evaluate(stopped, 0, 'input', frame_pc='0x0')['status'] == 'stale'
+            assert client.evaluate(stopped, 0, 'input', inline_depth=1)['status'] == 'stale'
+            current = client.snapshot()
+            assert all(current[k] == stopped[k] for k in ('run_gen', 'stop_count', 'mem_gen', 'reg_gen')), current
+            eval_stop = stopped
         client.command('down_one_frame')
         assert client.value('seed') == '20'
         client.command('up_one_frame')
         stopped = client.stopped('step_out')
+        if case == 'c-eval':
+            assert client.evaluate(eval_stop, 0, 'input')['status'] == 'stale'
         assert stopped['stack']['frames'][0]['function'] == 'main', stopped
         stopped = client.stopped('run')
         assert stopped['process_count'] == 0, stopped

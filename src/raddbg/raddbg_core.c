@@ -11,6 +11,7 @@
 
 #include "generated/raddbg.meta.c"
 #include "raddbg_debug_snapshot.c"
+#include "raddbg_debug_eval.c"
 
 ////////////////////////////////
 //~ rjf: Registers Type Functions
@@ -12645,6 +12646,7 @@ rd_frame(void)
   D_Handle find_thread_retry = {0};
   RD_Cmd *cmd = 0;
   String8Node *debug_snapshot_output = 0;
+  String8Node *debug_eval_output = 0;
   ProfScope("loop - consume events in core, tick engine, and repeat") for(U64 cmd_process_loop_idx = 0; cmd_process_loop_idx < 3; cmd_process_loop_idx += 1)
   {
     ////////////////////////////
@@ -14239,6 +14241,18 @@ rd_frame(void)
             rd_state->cmd_outputs.total_size -= debug_snapshot_output->string.size;
             debug_snapshot_output->string = snapshot;
             rd_state->cmd_outputs.total_size += snapshot.size;
+          }break;
+          case RD_CmdKind_DebugEval:
+          {
+            String8 result = rd_debug_eval(rd_state->cmd_output_arena, rd_regs()->expr);
+            if(debug_eval_output == 0)
+            {
+              str8_list_push(rd_state->cmd_output_arena, &rd_state->cmd_outputs, str8_zero());
+              debug_eval_output = rd_state->cmd_outputs.last;
+            }
+            rd_state->cmd_outputs.total_size -= debug_eval_output->string.size;
+            debug_eval_output->string = result;
+            rd_state->cmd_outputs.total_size += result.size;
           }break;
           case RD_CmdKind_Eval:
           {

@@ -69,7 +69,7 @@ from the wrapper's body line. `c-inline-nested` requires
 in a header and its call inside a lexical block. It checks each frame's
 source file/line, inline depth and shared physical registers, then normal exit.
 Both cases pass on macOS ARM64 and Linux x64 with Clang/DWARF, and on Windows
-x64 with MSVC/PDB. `all` contains 17 cases; the eight ARM64-only cases remain
+x64 with MSVC/PDB. `all` contains 18 cases; the eight ARM64-only cases remain
 uncovered on other hosts. The Mach-O `symbol-library` case is also uncovered
 on Linux and Windows. These results do not cover Intel Mac live debugging.
 
@@ -82,6 +82,70 @@ check `_unwind_leaf` name-only labels and exact offsets at their instruction
 boundaries. The `macho_symbol_fallback` torture case checks executable-section
 boundaries, deterministic aliases, malformed names/tables, UUID/CPU matching
 and universal-image slice selection.
+
+## Frame-explicit scalar evaluation
+
+`debug_eval` is separate from legacy `eval`. It takes one flat, comma-separated
+Metadesk request and returns one JSON object. The IPC transport still requires
+serialized clients. `Client.evaluate(stop, frame, expression)` constructs the
+request from a `debug_snapshot` result; frame is a logical frame ID in that
+snapshot. The context is valid only for the same RAD instance.
+
+Required fields are `run_gen`, `stop_count`, `mem_gen`, `reg_gen`,
+`process_handle`, `thread_id`, `frame`, `frame_pc`, `unwind_index`,
+`inline_depth` and `expr`. The first four and process/thread identity come
+from the snapshot; the frame row supplies the remaining identity fields.
+`expr` is a quoted RAD expression. Missing, unknown or repeated fields are
+invalid. The command does not fall back to the selected GUI thread/frame.
+It compares both generations and frame identity, so a stale request cannot
+silently refer to a different logical frame after debug-info loading.
+
+The v1 response has `status`, `complete`, `reason`, `type`, `value` and an
+echoed `context`, with these status meanings:
+
+| Status | Meaning |
+| --- | --- |
+| `ready` | A scalar value was evaluated without a detected generation change or stale required read. |
+| `pending` | Required stack, debug info or memory has not settled. No value; `complete` is false. |
+| `unavailable` | Required registers/memory/debug info are unavailable, or stack reconstruction failed. |
+| `stale` | The supplied generations/frame identity no longer match, or live registers disagree with the reconstructed stack. Take a new snapshot. |
+| `running` | Targets are running; this command does not evaluate against a moving target. |
+| `invalid_request` | Malformed/missing fields, invalid process/thread/frame, empty expression or oversized request. |
+| `error` | Parse, name-resolution or interpretation error, including division by zero. |
+| `unsupported` | Non-scalar result, inline scope, TLS access, unsupported space or exhausted read budget. |
+| `too_large` | The response would exceed the transport allowance. This minimal response omits the other descriptive fields. |
+
+Every status except `pending` has `complete: true`; completion is not success.
+Only `ready` contains a value. That value has `bytes` (hex), `byte_size` and
+`byte_order: "little"`, matching the supported x86/x64/ARM64 targets. `type`
+is a display string, not a stable type ID. The command supplies scalar bytes,
+not GUI-rendered values or a full type/children interface.
+
+Each query owns its evaluation cache and restores the previous evaluator
+context. It uses no GUI macros/display rules and provides no write or target-call
+hook. RAD's `=` defines an evaluator macro, not a target assignment; such a
+definition exists only within that query. TLS is unsupported in this increment,
+including platform TLS resolution that would execute code in the target.
+Inline frames and concrete frames whose PC is inside an inline scope are
+unsupported until scope selection is implemented. Aggregate/member expansion
+is deferred, though scalar member expressions use the existing evaluator.
+
+Cache waits share a 10 ms deadline; this is not a wall-clock deadline for all
+parsing/evaluation work. Requests are limited to 8 KiB, expressions to 4 KiB,
+target/register reads to 64 KiB per query and replies to 60 KiB. Register reads
+honor reconstructed byte availability, and process reads request fresh cache
+data. Required debug-info changes during evaluation return pending. The engine
+can leave some unreadable memory pending indefinitely; the caller must bound
+its own wait. `Client.evaluated` retries only `pending`, for at most ten seconds,
+and never turns a completed error/unavailable result into success.
+
+`c-eval` checks leaf/caller values without GUI frame selection, genuine zero,
+unreadable memory, invalid context, old-stop rejection, and query-local macro
+isolation. `caller-registers` also checks explicit caller x0 and partial q8
+availability on ARM64. `c-inline` checks the unsupported-inline contract,
+not inline evaluation support. Deliberately forced cold-loading schedules,
+nonselected threads, target-memory mutation between queries, C++ members and
+oversized replies still need dedicated coverage.
 
 `c-assert` and `c-assert-optimized` use a `__builtin_trap()` assertion at
 `-O0` and `-O2`. They require the assert's source line, the faulting function

@@ -48,6 +48,17 @@ try:
     assert value('pc') == address
     if a.caller_registers:
         assert value('x0') == 1234
+        for expr in ('x0', 'x0+1', 'q8.u64s[1]'):
+            result = client.evaluated(s, 1, expr)
+            assert result['status'] == 'unavailable', result
+        assert client.evaluated(s, 1, 'q8')['status'] == 'unsupported'  # A register union, not a scalar.
+        for frame, expr, expected in ((0, 'x0', 1234), (1, 'sp', None), (1, 'q8.u64s[0]', None)):
+            result = client.evaluated(s, frame, expr)
+            assert result['status'] == 'ready', result
+            if expected is not None:
+                assert int.from_bytes(bytes.fromhex(result['value']['bytes']), 'little') == expected, result
+        assert client.evaluated(s, 0, 'red_tls')['status'] == 'unsupported'
+        assert value('x0') == 1234 and value('pc') == address
         ipc('down_one_frame')
         assert value('pc') != address
         assert value('sp') != 0

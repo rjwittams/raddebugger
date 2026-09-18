@@ -52,3 +52,32 @@ class Client:
         match = re.search(r'value:\s*"([^\"]*)"', raw)
         assert match and match[1], raw
         return match[1]
+
+    def evaluate(self, stop, frame, expression, **overrides):
+        request = {key: stop[key] for key in ('run_gen', 'stop_count', 'mem_gen', 'reg_gen',
+                                              'process_handle', 'thread_id')}
+        request.update(frame=frame, expr=expression)
+        frame_info = next((f for f in stop['stack']['frames'] if f['id'] == frame), {})
+        request.update(frame_pc=frame_info.get('pc', '0x0'),
+                       unwind_index=frame_info.get('unwind_index', 0), inline_depth=frame_info.get('inline_depth', 0))
+        request.update(overrides)
+        payload = ', '.join(f'{key}: {json.dumps(value, ensure_ascii=False)}'
+                           for key, value in request.items())
+        raw = self.command(['debug_eval', payload])
+        try:
+            result = json.loads(raw)
+        except ValueError as error:
+            raise AssertionError(f'debug_eval did not return JSON: {raw!r}') from error
+        assert result['version'] == 1, result
+        assert result['complete'] == (result['status'] != 'pending'), result
+        if result['status'] != 'ready':
+            assert result['value'] is None, result
+        return result
+
+    def evaluated(self, stop, frame, expression):
+        deadline = time.monotonic()+10
+        while True:
+            result = self.evaluate(stop, frame, expression)
+            if result['status'] != 'pending' or time.monotonic() >= deadline:
+                return result
+            time.sleep(.03)
