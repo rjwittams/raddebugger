@@ -219,6 +219,7 @@ fp_raster(Arena *arena, FP_Handle handle, F32 size, FP_RasterFlags flags, String
             }
             // Keep logical spacing independent of the bitmap's pixel grid.
             result.advance = advance;
+            result.baseline = (F32)atlas_dim.y - descent - line_gap;
 
             CGContextRelease(ctx);
           }
