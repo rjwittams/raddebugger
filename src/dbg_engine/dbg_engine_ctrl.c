@@ -6062,7 +6062,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   // which may include features put on a trap net trap at the same address as
   // the user breakpoint.
   //
-  B32 target_thread_is_on_user_bp_and_trap_net_trap = 0;
+  U64 initial_target_overlap_vaddr = 0;
   if(stop_event == 0)
   {
     // rjf: gather stuck threads
@@ -6113,7 +6113,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
               
               if(is_on_user_bp && is_on_net_trap && dmn_handle_match(d_dmn_from_handle(thread->handle), target_thread_dmn))
               {
-                target_thread_is_on_user_bp_and_trap_net_trap = 1;
+                initial_target_overlap_vaddr = rip;
               }
             }
           }
@@ -6689,7 +6689,17 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
         
         // rjf: user breakpoints
         {
-          if(event->user_data != 0)
+          // Let the trap net handle the initial overlap once, including events
+          // carrying a user breakpoint ID. Later hits must remain user stops.
+          B32 step_past_initial_user_bp = (initial_target_overlap_vaddr != 0 &&
+                                          event->instruction_pointer == initial_target_overlap_vaddr &&
+                                          dmn_handle_match(event->thread, target_thread_dmn) &&
+                                          event->address == 0);
+          if(step_past_initial_user_bp)
+          {
+            initial_target_overlap_vaddr = 0;
+          }
+          if(event->user_data != 0 && !step_past_initial_user_bp)
           {
             hit_user_bp = 1;
           }
@@ -6701,7 +6711,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
             {
               if(dmn_handle_match(trap->process, event->process) &&
                  trap->vaddr == event->instruction_pointer &&
-                 (!dmn_handle_match(event->thread, d_dmn_from_handle(target_thread)) || !target_thread_is_on_user_bp_and_trap_net_trap))
+                 !step_past_initial_user_bp)
               {
                 D_Breakpoint *user_bp = (D_Breakpoint *)trap->id;
                 hit_user_bp = 1;

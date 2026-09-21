@@ -37,7 +37,8 @@ identified as its HEAD commit. Binary hashes identify the executable tested;
 the runner does not prove that a supplied binary matches the current source.
 
 Exit status is 0 for passed cases, 1 for failure, and 2 for uncovered cases
-(missing tool or unsupported host). `all` lists every case; ARM64-only cases
+(missing tool or unsupported host). `all` runs the built-in cases and adds the
+language cases when `--examples` is supplied; ARM64-only cases
 remain visibly uncovered on other hosts. Use `--case c`, `c-exit-37`, or
 `c-detach` for the portable C checks. `c-memory` also checks that an unmapped
 scalar, an unmapped pointer slot and arithmetic requiring an unmapped read
@@ -82,6 +83,33 @@ check `_unwind_leaf` name-only labels and exact offsets at their instruction
 boundaries. The `macho_symbol_fallback` torture case checks executable-section
 boundaries, deterministic aliases, malformed names/tables, UUID/CPU matching
 and universal-image slice selection.
+
+## External language fixtures
+
+```sh
+python3 src/raddbg/tests/run_smoke.py --debugger build/raddbg \
+  --case languages --examples /path/to/raddebugger_examples
+```
+
+`language-c`, `language-cpp`, `language-rust`, `language-odin` and `language-zig`
+also run individually. The examples checkout must contain
+`examples/language-basics/build.py`; there is no implicit clone, fetch or sibling
+directory lookup. The runner records both repository revisions/statuses and
+the builder/source hashes. It retains compiler commands, versions, debug-info
+hashes, raw IPC and RAD logs in each fresh output directory. Python 3.9 relative
+output roots and macOS `/var` aliases resolve to absolute paths before building.
+
+Each case checks a caller source breakpoint, an enabled function breakpoint,
+progress past its prologue, Over/Into/Out, source paths/lines, leaf and caller
+scalar values through `debug_eval`, a later user breakpoint, and normal exit.
+A second launch checks Into with the function breakpoint still enabled. The
+prologue allowance is bounded and requires PC progress; it does not skip
+missing source lines or disable user breakpoints. Failures do not retry a case
+until it passes. Missing compilers remain uncovered.
+
+These are unoptimized scalar cases, not a claim of complete language support.
+They initially ran on Kiwi ARM64 only; other hosts need their own validation.
+No new IPC commands or RDI structure changes are required.
 
 ## Frame-explicit scalar evaluation
 

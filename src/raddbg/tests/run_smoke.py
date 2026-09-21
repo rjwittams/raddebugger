@@ -14,6 +14,7 @@ import traceback
 import uuid
 
 from ipc_client import Client
+import language_basics
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
@@ -44,19 +45,26 @@ def main():
     p.add_argument('--debugger', required=True, type=Path)
     p.add_argument('--sender', type=Path, help='Default: same binary as debugger')
     p.add_argument('--compiler', default='cl' if os.name == 'nt' else 'clang')
-    p.add_argument('--case', choices=['all', 'c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', 'symbol-library', *ARM_CASES], default='c')
+    p.add_argument('--case', choices=['all', 'languages', *['language-'+x for x in language_basics.LANGUAGES], 'c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', 'symbol-library', *ARM_CASES], default='c')
+    p.add_argument('--examples', type=Path, help='Explicit raddebugger_examples checkout for language cases')
     p.add_argument('--output-root', type=Path, help='Existing directory for retained, unique run directories')
     a = p.parse_args()
     a.debugger = a.debugger.resolve()
     a.sender = (a.sender or a.debugger).resolve()
+    if a.output_root:
+        a.output_root = a.output_root.resolve()
     cases = ['c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', 'symbol-library', *ARM_CASES] if a.case == 'all' else [a.case]
+    if a.case == 'languages':
+        cases = ['language-'+x for x in language_basics.LANGUAGES]
+    elif a.case == 'all' and a.examples:
+        cases += ['language-'+x for x in language_basics.LANGUAGES]
     statuses = [run_case(a, case)['status'] for case in cases]
     # An explicitly requested unsupported case is not a passing test.
     return 1 if 'fail' in statuses else 2 if 'uncovered' in statuses else 0
 
 
 def run_case(a, case):
-    output = Path(tempfile.mkdtemp(prefix='rad-smoke-'+case+'-', dir=a.output_root))
+    output = Path(tempfile.mkdtemp(prefix='rad-smoke-'+case+'-', dir=a.output_root)).resolve()
     print(f'Artifacts: {output}', flush=True)
     record = dict(status='running', case=case, host=platform.node(), os=platform.platform(),
                   arch=platform.machine(), debugger=str(a.debugger), commands=[])
@@ -100,6 +108,9 @@ def run_case(a, case):
         record['test_scripts_sha256'] = {f.name: sha(f) for f in HERE.glob('*.py')}
         help_text = run(['cleat', 'launch', '--help'], timeout=10)
         assert '--tag' in help_text, 'cleat is too old: launch must support --tag'
+        language = None
+        if case.startswith('language-'):
+            language = language_basics.build(a.examples, case[len('language-'):], output, run, record)
         stem = 'arm64_red_zone' if case in ('tls-red-zone', 'caller-registers') else 'arm64_unwind' if case in ARM_CASES else 'session'
         if case == 'c-inline':
             stem = 'inline'
@@ -110,6 +121,8 @@ def run_case(a, case):
         if case == 'symbol-library':
             stem = 'symbol_library_main'
         source = HERE/(stem+'.c')
+        if language:
+            source = Path(language['source'])
         defines = ARM_CASES.get(case, []) + (['EXIT_CODE=37'] if case == 'c-exit-37' else [])
         sources = [source] + ([HERE/(stem+'.S')] if case in ARM_CASES else [])
         if case == 'unwind-unavailable':
@@ -126,7 +139,9 @@ def run_case(a, case):
                  str(library_source), '-o', str(library)], timeout=60)
             run(['xcrun', 'strip', '-S', str(library)], timeout=60)
             record['library_sha256'] = sha(library)
-        if os.name == 'nt':
+        if language:
+            assert Path(language['target']) == target, language
+        elif os.name == 'nt':
             run([a.compiler, '/Zi', '/O2' if case.startswith('c-inline') else '/Od', *['/D'+d for d in defines], str(source), '/Fe:'+str(target), '/link', '/debug', '/incremental:no'], timeout=60)
         else:
             record['compiler_version'] = run([a.compiler, '--version'], timeout=10)
@@ -143,14 +158,18 @@ def run_case(a, case):
         record['debug_info_hashes'] = {str(f.relative_to(output)): sha(f) for f in output.rglob('*')
                                        if f.is_file() and ('.dSYM/' in str(f) or f.suffix.lower() == '.pdb')}
         project = output/'test.project'
-        stop_line = 6 if case in ARM_CASES else next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'volatile int seed = 20' in line)
+        stop_line = language_basics.line(source, 'MATRIX_CALL') if language else 6 if case in ARM_CASES else next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'volatile int seed = 20' in line)
         if case.startswith('c-inline'):
             stop_line = next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'SNAPSHOT_STOP' in line)
         breakpoint = '' if case.startswith('c-assert') or case == 'symbol-library' else f'breakpoint:\n{{\n source_location: {json.dumps(str(source)+f":{stop_line}:1")}\n enabled: 1\n}}\n'
+        if language:
+            breakpoint += f'breakpoint:\n{{\n address_location: {json.dumps(language["leaf"])}\n enabled: 1\n}}\n'
+            return_line = language_basics.line(source, 'MATRIX_RETURN')
+            breakpoint += f'breakpoint:\n{{\n source_location: {json.dumps(str(source)+f":{return_line}:1")}\n enabled: 1\n}}\n'
         project.write_text('// raddbg 0.9.29 project file\n\ntarget:\n{\n'
                            f' executable: {json.dumps(str(target))}\n working_directory: {json.dumps(str(output))}\n enabled: 1\n}}\n'
                            + breakpoint, encoding='utf-8')
-        argv = [str(a.debugger), '--user:'+str(output/'test.user'), '--project:'+str(project)]
+        argv = [str(a.debugger), '--user:'+str(output/'test.user'), '--project:'+str(project), '--logs:'+str(output/'logs')]
         command = subprocess.list2cmdline(argv) if os.name == 'nt' else shlex.join(argv)
         run(['cleat', 'launch', session, '--tag', 'project=raddbg', '--tag', 'purpose=test',
              '--cwd', str(output), '--cmd', command], timeout=20)
@@ -186,6 +205,10 @@ def run_case(a, case):
         else:
             raise AssertionError('Debugger did not become ready; see ipc.jsonl')
         record['debugger_build'] = initial['build']
+        if language:
+            language_basics.exercise(client, source, language)
+            record['status'] = 'pass'
+            return record
         if case == 'symbol-library':
             stopped = client.stopped('restart')
             assert stopped['stop']['cause'] in ('trap', 'exception'), stopped
