@@ -4798,6 +4798,8 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
           
           //- rjf: try to obtain this module's RDI
           RDI_Parsed *rdi = di_rdi_from_key(scope->access, dbgi_key, 0, 0);
+          // Both queued and actively loading RDI need the required-info check.
+          B32 rdi_is_pending = (rdi == &rdi_parsed_nil || rdi == &di_rdi_parsed_nil_waiting);
           
           //- rjf: if this RDI is not yet ready => determine if we need to wait for it
           //
@@ -4808,7 +4810,7 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
           {
             rdi_is_necessary = 0;
           }
-          else if(rdi == &rdi_parsed_nil) ProfScope("determine if RDI is necessary")
+          else if(rdi_is_pending) ProfScope("determine if RDI is necessary")
           {
             // rjf: find cached result
             U64 hash = d_hash_from_handle(mod->handle);
@@ -4883,7 +4885,7 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
           }
           
           //- rjf: if this RDI is necessary, but we do not have it => wait for it forever
-          if(rdi == &rdi_parsed_nil && rdi_is_necessary) ProfScope("RDI is necessary -> wait")
+          if(rdi_is_pending && rdi_is_necessary) ProfScope("RDI is necessary -> wait")
           {
             rdi = di_rdi_from_key(scope->access, dbgi_key, 1, max_U64);
           }
