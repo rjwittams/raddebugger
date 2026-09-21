@@ -24,7 +24,7 @@ entry_point(CmdLine *cmdline)
   String8 fonts[] = {str8_lit("data/segoeui.ttf"),
                     str8_lit("data/Inconsolata-Regular.ttf"),
                     str8_lit("data/JetBrainsMono-Regular.ttf")};
-  F32 sizes[] = {13, 17, 17.5f};
+  F32 sizes[] = {13, 17, 17.5f, 24};
   FNT_RasterFlags flags[] = {0, FNT_RasterFlag_Smooth, FNT_RasterFlag_Hinted};
   String8 samples[] = {str8_lit("/M"), str8_lit("/MMMMMMMMMMMMMMMM"),
                       str8_lit("/iiiiiiiiiiiiiiii"), str8_lit("/Users/robert/")};
@@ -68,6 +68,51 @@ entry_point(CmdLine *cmdline)
       }
     }
   }
+  // The flat bottom of H sits on the baseline in these fonts. Inspect the
+  // actual raster coverage, then apply the placement returned to drawing.
+  Arena *arena = arena_alloc();
+  for(U64 font_idx = 0; font_idx < ArrayCount(fonts); font_idx += 1)
+  {
+    FP_Handle handle = fp_font_open(fonts[font_idx]);
+    FNT_Tag font = fnt_tag_from_path(fonts[font_idx]);
+    for(U64 size_idx = 0; size_idx < ArrayCount(sizes); size_idx += 1)
+    for(U64 flags_idx = 0; flags_idx < ArrayCount(flags); flags_idx += 1)
+    for(U32 scale = 1; scale <= 2; scale += 1)
+    {
+      Temp temp = temp_begin(arena);
+      F32 size = sizes[size_idx];
+      FP_RasterFlags fp_flags = 0;
+      if(flags[flags_idx] & FNT_RasterFlag_Smooth) { fp_flags |= FP_RasterFlag_Smooth; }
+      if(flags[flags_idx] & FNT_RasterFlag_Hinted) { fp_flags |= FP_RasterFlag_Hinted; }
+      FP_RasterResult raster = fp_raster(arena, handle, floor_f32(size)*scale, fp_flags, str8_lit("H"));
+      dr_set_raster_scale((F32)scale);
+      FNT_Run drawn = dr_fnt_run_from_string(font, size, 0, 0, flags[flags_idx], str8_lit("H"));
+      S32 bottom = -1;
+      for(S32 y = 0; y < raster.atlas_dim.y; y += 1)
+      for(S32 x = 0; x < raster.atlas_dim.x; x += 1)
+      {
+        U8 alpha = ((U8 *)raster.atlas)[4*(y*raster.atlas_dim.x+x)+3];
+        if(alpha >= 128) { bottom = Max(bottom, y); }
+      }
+      F32 baseline_error = 0;
+      B32 pass = (bottom >= 0 && drawn.pieces.count == 1);
+      if(pass)
+      {
+        baseline_error = drawn.pieces.v[0].offset.y*scale + bottom + 1;
+      }
+      pass = pass && abs_f32(baseline_error) <= 0.5f;
+      cases += 1;
+      failures += !pass;
+      if(!pass)
+      {
+        fprintf(stderr, "FAIL baseline font=%.*s size=%.1f flags=%u scale=%u error=%.3f raster pixels\n",
+                str8_varg(fonts[font_idx]), size, flags[flags_idx], scale, baseline_error);
+      }
+      temp_end(temp);
+    }
+    fp_font_close(handle);
+  }
+  arena_release(arena);
   printf("Text positions: %u cases, %u failures\n", cases, failures);
   exit(failures != 0);
 }

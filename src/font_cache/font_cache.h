@@ -104,6 +104,7 @@ struct FNT_RasterCacheInfo
   Vec2F32 draw_dim;
   S16 atlas_num;
   F32 advance;
+  F32 baseline;
 };
 
 typedef struct FNT_Hash2InfoRasterCacheNode FNT_Hash2InfoRasterCacheNode;
