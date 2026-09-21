@@ -589,6 +589,7 @@ fp_raster(Arena *arena, FP_Handle font_handle, F32 size, FP_RasterFlags flags, S
     result.atlas_dim    = atlas_dim;
     result.atlas        = push_array_no_zero(arena, U8, atlas_dim.x*atlas_dim.y*4);
     result.advance      = round_f32(advance);
+    result.baseline     = draw_p.y;
     
     // rjf: fill atlas
     {

@@ -807,6 +807,7 @@ fnt_run_from_string_scaled(FNT_Tag tag, F32 size, F32 raster_scale, F32 base_ali
             info->raster_dim = raster.atlas_dim;
             info->draw_dim   = v2f32((F32)raster.atlas_dim.x*inv_raster_scale, (F32)raster.atlas_dim.y*inv_raster_scale);
             info->advance    = raster.advance*inv_raster_scale;
+            info->baseline   = raster.baseline*inv_raster_scale;
           }
         }
         
@@ -852,7 +853,7 @@ fnt_run_from_string_scaled(FNT_Tag tag, F32 size, F32 raster_scale, F32 base_ali
             piece->advance = advance;
             piece->draw_dim = info->draw_dim;
             piece->decode_size = piece_substring.size;
-            piece->offset = v2f32(0, -(hash2style_node->ascent + hash2style_node->descent));
+            piece->offset = v2f32(0, -info->baseline);
           }
           base_align_px += advance;
           dim.x += piece->advance;
