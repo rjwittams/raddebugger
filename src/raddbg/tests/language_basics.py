@@ -79,12 +79,13 @@ def exercise(client, source, metadata):
     function_breakpoint = leaf['stop']['breakpoint_id']
     leaf = enter_body(leaf)
     assert [f['function'] for f in leaf['stack']['frames'][:2]] == [metadata['leaf'], metadata['caller']], leaf
-    value(leaf, 0, 'input', 20)
     value(leaf, 1, 'seed', 20)
     for marker, expected in (('MATRIX_UPDATE', 40), ('MATRIX_RETURN', 42)):
         current = client.stopped('step_over_line')
         at(current, 'matrix_leaf', marker)
         assert current['stack']['frames'][0]['pc'] != leaf['stack']['frames'][0]['pc'], current
+        # The first body line can precede the parameter's valid location range.
+        value(current, 0, 'input', 20)
         value(current, 0, 'doubled', expected)
         if marker == 'MATRIX_RETURN':
             assert current['stop']['cause'] == 'breakpoint', current
