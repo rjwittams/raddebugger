@@ -27,8 +27,13 @@ eh_parse_frame_hdr(String8 data, U64 address_size, EH_PtrCtx *ptr_ctx)
     if (table_enc_size == 0) { goto exit; }
     cursor += table_enc_size;
     
-    cursor += eh_read_ptr(data, cursor, cursor, ptr_ctx, header.eh_frame_ptr_enc, &header.eh_frame_ptr);
-    cursor += eh_read_ptr(data, cursor, cursor, ptr_ctx, header.fde_count_enc, &header.fde_count);
+    cursor += eh_read_ptr(data, cursor, ptr_ctx->pc_vaddr + cursor, ptr_ctx, header.eh_frame_ptr_enc, &header.eh_frame_ptr);
+    // Either omitted encoding means there is no search table.
+    if(header.fde_count_enc == EH_PtrEnc_Omit || header.table_enc == EH_PtrEnc_Omit)
+    {
+      goto exit;
+    }
+    cursor += eh_read_ptr(data, cursor, ptr_ctx->pc_vaddr + cursor, ptr_ctx, header.fde_count_enc, &header.fde_count);
     
     switch (header.table_enc & EH_PtrEnc_TypeMask) {
       case EH_PtrEnc_Ptr:     { header.field_byte_size = address_size; } break;

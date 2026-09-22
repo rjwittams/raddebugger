@@ -175,7 +175,7 @@ lnx_dmn_module_info_from_process_module(Arena *arena, pid_t pid, int memory_fd, 
     }
     
     //- rjf: determine shdrs/phdrs addresses
-    U64 phdrs_vaddr = module_rebase + phdrs_off;
+    U64 phdrs_vaddr = base_vaddr + phdrs_off;
     U64 phdrs_vaddr_opl = phdrs_vaddr + phdrs_count*phdrs_entry_size;
     U64 shdrs_vaddr = module_rebase + shdrs_off;
     
@@ -492,7 +492,7 @@ lnx_dmn_module_alloc(LNX_DMN_ProcessCtx *ctx, int memory_fd, U64 base_vaddr, U64
     
     // rjf: unpack module's vaddr range
     U64 module_rebase = module_ehdr.e_type == ELF_Type_Dyn ? base_vaddr : 0;
-    U64 module_phdr_vaddr = module_rebase + module_ehdr.e_phoff;
+    U64 module_phdr_vaddr = base_vaddr + module_ehdr.e_phoff;
     Rng1U64 module_vrange = lnx_dmn_vaddr_range_from_phdrs(memory_fd, module_ehdr.e_ident[ELF_Identifier_Class], module_rebase, module_phdr_vaddr, module_ehdr.e_phentsize, module_ehdr.e_phnum);
     
     // rjf: read TLS index and TLS offset

@@ -1956,16 +1956,24 @@ d_macho_function_start_voff_range_from_module_voff(D_Handle module_handle, U64 v
 //~ rjf: Unwinding Functions
 
 internal String8
-d_eh_frame_hdr_from_eh_frame(Arena *arena, String8 eh_frame_data, U64 eh_frame_vaddr, Arch arch, EH_PtrCtx *eh_ptr_ctx)
+d_eh_frame_hdr_from_eh_frame(Arena *arena, String8 eh_frame_data, U64 eh_frame_vaddr, Arch arch, EH_PtrCtx *eh_ptr_ctx, B32 require_terminator)
 {
   Temp scratch = scratch_begin(&arena, 1);
   String8 result = {0};
   U64 fde_cap = eh_frame_data.size / sizeof(U32);
   U64 fde_count = 0;
+  B32 terminated = 0;
   U64 *fde_offsets = push_array(scratch.arena, U64, fde_cap);
   DW_FDE *fdes = push_array(scratch.arena, DW_FDE, fde_cap);
   for(U64 cursor = 0; cursor + sizeof(U32) <= eh_frame_data.size;)
   {
+    U32 length = 0;
+    str8_deserial_read_struct(eh_frame_data, cursor, &length);
+    if(length == 0)
+    {
+      terminated = 1;
+      break;
+    }
     DW_CFIHeader desc = {0};
     eh_read_cfi_header(eh_frame_data, cursor, &desc);
     U64 entry_size = dim_1u64(desc.entry_range);
@@ -2004,9 +2012,63 @@ d_eh_frame_hdr_from_eh_frame(Arena *arena, String8 eh_frame_data, U64 eh_frame_v
     }
     cursor += entry_size;
   }
-  if(fde_count != 0)
+  if(fde_count != 0 && (!require_terminator || terminated))
   {
     result = eh_frame_hdr_from_call_frame_info(arena, fde_count, fde_offsets, fdes);
+  }
+  scratch_end(scratch);
+  return result;
+}
+
+internal String8
+d_eh_frame_hdr_from_elf_process(Arena *arena, D_Handle process, U64 base_vaddr, U64 eh_frame_vaddr, Arch arch, EH_PtrCtx *ptr_ctx)
+{
+  Temp scratch = scratch_begin(&arena, 1);
+  String8 result = {0};
+  U8 header_bytes[sizeof(ELF_Hdr64)] = {0};
+  if(base_vaddr <= max_U64 - sizeof(header_bytes))
+  {
+    U64 read_size = d_process_read(process, r1u64(base_vaddr, base_vaddr + sizeof(header_bytes)), header_bytes);
+    String8 header_data = str8(header_bytes, read_size);
+    ELF_Class elf_class = header_bytes[ELF_Identifier_Class];
+    U64 header_size = elf_hdr_size_from_class(elf_class);
+    if(header_size != 0 && read_size >= header_size &&
+       str8_match(str8_prefix(header_data, elf_magic_string.size), elf_magic_string, 0) &&
+       header_bytes[ELF_Identifier_Data] == ELF_Data_2LSB)
+    {
+      ELF_Hdr64 header = elf_hdr64_from_class_data(elf_class, header_data);
+      U64 phdr_size = elf_phdr_size_from_class(elf_class);
+      U64 phdrs_size = (U64)header.e_phnum * header.e_phentsize;
+      // Use the loaded image, not a possibly replaced file at its old path.
+      if((header.e_type == ELF_Type_Exec || header.e_type == ELF_Type_Dyn) &&
+         arch_from_elf_machine(header.e_machine) == arch &&
+         phdr_size != 0 && header.e_phentsize == phdr_size &&
+         header.e_phoff <= MB(1) && phdrs_size <= MB(1) - header.e_phoff &&
+         base_vaddr <= max_U64 - header.e_phoff - phdrs_size)
+      {
+        U64 phdrs_vaddr = base_vaddr + header.e_phoff;
+        String8 phdrs = d_data_from_process_vaddr_range(scratch.arena, process, r1u64(phdrs_vaddr, phdrs_vaddr + phdrs_size), 0);
+        U64 rebase = header.e_type == ELF_Type_Dyn ? base_vaddr : 0;
+        for(U64 idx = 0; phdrs.size == phdrs_size && idx < header.e_phnum; idx += 1)
+        {
+          ELF_Phdr64 phdr = elf_phdr64_from_class_data(elf_class, str8_skip(phdrs, idx*phdr_size));
+          if(phdr.p_type == ELF_PType_Load && (phdr.p_flags & ELF_PFlag_Read) &&
+             phdr.p_filesz <= phdr.p_memsz && phdr.p_vaddr <= max_U64 - rebase)
+          {
+            U64 load_vaddr = rebase + phdr.p_vaddr;
+            if(phdr.p_filesz <= max_U64 - load_vaddr &&
+               eh_frame_vaddr >= load_vaddr && eh_frame_vaddr - load_vaddr < phdr.p_filesz)
+            {
+              // The segment bounds the read; the CFI terminator bounds the records.
+              U64 size = Min(phdr.p_filesz - (eh_frame_vaddr - load_vaddr), MB(16));
+              String8 data = d_data_from_process_vaddr_range(scratch.arena, process, r1u64(eh_frame_vaddr, eh_frame_vaddr + size), 0);
+              result = d_eh_frame_hdr_from_eh_frame(arena, data, eh_frame_vaddr, arch, ptr_ctx, 1);
+              break;
+            }
+          }
+        }
+      }
+    }
   }
   scratch_end(scratch);
   return result;
@@ -4343,7 +4405,7 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
                 synthesized_eh_unwind_info = push_array(arena, EH_UWND_ModuleUnwindInfo, 1);
                 synthesized_eh_unwind_info->ptr_ctx = eh_ptr_ctx;
                 synthesized_eh_unwind_info->eh_frame_vaddr = eh_frame_vrange.min;
-                String8 eh_frame_hdr_data = d_eh_frame_hdr_from_eh_frame(arena, eh_frame_data, eh_frame_vrange.min, arch, &eh_ptr_ctx);
+                String8 eh_frame_hdr_data = d_eh_frame_hdr_from_eh_frame(arena, eh_frame_data, eh_frame_vrange.min, arch, &eh_ptr_ctx, 0);
                 if(eh_frame_hdr_data.size != 0)
                 {
                   synthesized_eh_unwind_info->header = eh_parse_frame_hdr(eh_frame_hdr_data, byte_size_from_arch(arch), &synthesized_eh_unwind_info->ptr_ctx);
@@ -4402,7 +4464,21 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
             String8 eh_frame_hdr_data = d_data_from_process_vaddr_range(arena, process_handle, module_info->eh_frame_header_vaddr_range, 0);
             unwind_info->ptr_ctx.pc_vaddr   = module_info->eh_frame_header_vaddr_range.min;
             unwind_info->ptr_ctx.data_vaddr = module_info->eh_frame_header_vaddr_range.min;
+            unwind_info->ptr_ctx.ptr_align  = byte_size_from_arch(module_info->arch);
             unwind_info->header = eh_parse_frame_hdr(eh_frame_hdr_data, byte_size_from_arch(module_info->arch), &unwind_info->ptr_ctx);
+            if(unwind_info->header.version == 1 &&
+               (unwind_info->header.fde_count_enc == EH_PtrEnc_Omit || unwind_info->header.table_enc == EH_PtrEnc_Omit) &&
+               unwind_info->header.eh_frame_ptr_enc != EH_PtrEnc_Omit &&
+               !(unwind_info->header.eh_frame_ptr_enc & EH_PtrEnc_Indirect))
+            {
+              U64 eh_frame_vaddr = unwind_info->header.eh_frame_ptr;
+              String8 synthesized_header = d_eh_frame_hdr_from_elf_process(arena, process_handle, base_vaddr, eh_frame_vaddr, module_info->arch, &unwind_info->ptr_ctx);
+              if(synthesized_header.size != 0)
+              {
+                unwind_info->eh_frame_vaddr = eh_frame_vaddr;
+                unwind_info->header = eh_parse_frame_hdr(synthesized_header, byte_size_from_arch(module_info->arch), &unwind_info->ptr_ctx);
+              }
+            }
           }
           unwind_info_opaque = unwind_info;
         }

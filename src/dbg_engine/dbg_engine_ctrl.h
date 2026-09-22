@@ -586,7 +586,8 @@ internal Rng1U64 d_macho_function_start_voff_range_from_module_voff(D_Handle mod
 ////////////////////////////////
 //~ rjf: Unwinding Functions
 
-internal String8 d_eh_frame_hdr_from_eh_frame(Arena *arena, String8 eh_frame_data, U64 eh_frame_vaddr, Arch arch, EH_PtrCtx *eh_ptr_ctx);
+internal String8 d_eh_frame_hdr_from_eh_frame(Arena *arena, String8 eh_frame_data, U64 eh_frame_vaddr, Arch arch, EH_PtrCtx *eh_ptr_ctx, B32 require_terminator);
+internal String8 d_eh_frame_hdr_from_elf_process(Arena *arena, D_Handle process, U64 base_vaddr, U64 eh_frame_vaddr, Arch arch, EH_PtrCtx *ptr_ctx);
 internal U64 *d_unwind_reg_from_macho_reg__macho_x64(X64_RegBlock *regs, MachO_UnwindX64Reg macho_reg);
 internal B32 d_macho_compact_unwind_x64_mode_is_supported(U32 encoding);
 internal B32 d_macho_compact_unwind_x64_frameless_stack_size_from_encoding(D_Handle process_handle, U64 module_base_vaddr, MachO_UnwindInfoLookupResult *lookup, B32 *is_stale_out, U64 endt_us, U64 *stack_size_out);

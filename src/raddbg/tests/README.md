@@ -13,7 +13,13 @@ developer environment and pass `--debugger build/raddbg.exe`; fixture builds
 use MSVC, `/Zi /Od`, and `/INCREMENTAL:NO` (the inline cases use `/O2`).
 Windows also needs PowerShell/CIM to identify RAD beneath cleat's shell;
 the lookup only considers the owned session leader and its direct children.
-Linux fixture builds use Clang.
+Linux fixture builds use Clang. `c-elf-exec` and `c-elf-pie` run the ordinary
+C stepping/evaluation checks with explicitly non-PIE and PIE executables.
+They verify the resulting ELF type before launching; other hosts report
+these Linux-loader cases as uncovered. Their `-no-index` variants omit the
+optional `.eh_frame_hdr` count/table encodings in the generated executable,
+leaving its unwind records intact, then run the same C assertions. These
+check ELF unwind-index synthesis for both executable types.
 A headless build can be supplied as `--sender build/raddbg_non_graphical`.
 The sender and debugger must use compatible IPC transports.
 
@@ -70,9 +76,11 @@ from the wrapper's body line. `c-inline-nested` requires
 in a header and its call inside a lexical block. It checks each frame's
 source file/line, inline depth and shared physical registers, then normal exit.
 Both cases pass on macOS ARM64 and Linux x64 with Clang/DWARF, and on Windows
-x64 with MSVC/PDB. `all` contains 18 cases; the eight ARM64-only cases remain
+x64 with MSVC/PDB. `all` contains 22 built-in cases; the eight ARM64-only cases remain
 uncovered on other hosts. The Mach-O `symbol-library` case is also uncovered
-on Linux and Windows. These results do not cover Intel Mac live debugging.
+on Linux and Windows; the four ELF cases are uncovered outside Linux.
+Supplying `--examples` adds the five language cases, for 27 total.
+These results do not cover Intel Mac live debugging.
 
 `symbol-library` loads a library built without debug info and stripped of
 debug symbols. It requires symbol-table names and offsets for its leaf and

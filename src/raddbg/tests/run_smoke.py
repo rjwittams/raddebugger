@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import platform
 import shlex
+import struct
 import subprocess
 import sys
 import tempfile
@@ -18,6 +19,7 @@ import language_basics
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+ELF_CASES = ('c-elf-exec', 'c-elf-pie', 'c-elf-exec-no-index', 'c-elf-pie-no-index')
 ARM_CASES = {
     'unwind-compact': [],
     'unwind-dwarf': ['DWARF_ROWS'],
@@ -34,6 +36,26 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def omit_elf_unwind_index(target):
+    # Change only the two optional-index encodings; keep the CFI and its pointer.
+    data = bytearray(target.read_bytes())
+    assert data[:6] == b'\x7fELF\x02\x01', 'Fixture requires little-endian ELF64'
+    phoff = struct.unpack_from('<Q', data, 32)[0]
+    phentsize, phnum = struct.unpack_from('<HH', data, 54)
+    assert phentsize == 56 and phoff + phentsize*phnum <= len(data)
+    for index in range(phnum):
+        phdr = phoff + index*phentsize
+        if struct.unpack_from('<I', data, phdr)[0] == 0x6474e550:  # PT_GNU_EH_FRAME
+            offset = struct.unpack_from('<Q', data, phdr+8)[0]
+            size = struct.unpack_from('<Q', data, phdr+32)[0]
+            assert size >= 8 and offset + size <= len(data)
+            assert data[offset] == 1 and data[offset+2] != 0xff and data[offset+3] != 0xff
+            data[offset+2:offset+4] = b'\xff\xff'
+            target.write_bytes(data)
+            return
+    raise AssertionError('Fixture has no PT_GNU_EH_FRAME')
+
+
 def check_loader_frame(snapshot):
     if platform.system() == 'Darwin':
         frames = [f for f in snapshot['stack']['frames'] if f['module'] == '/usr/lib/dyld']
@@ -45,7 +67,7 @@ def main():
     p.add_argument('--debugger', required=True, type=Path)
     p.add_argument('--sender', type=Path, help='Default: same binary as debugger')
     p.add_argument('--compiler', default='cl' if os.name == 'nt' else 'clang')
-    p.add_argument('--case', choices=['all', 'languages', *['language-'+x for x in language_basics.LANGUAGES], 'c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', 'symbol-library', *ARM_CASES], default='c')
+    p.add_argument('--case', choices=['all', 'languages', *['language-'+x for x in language_basics.LANGUAGES], 'c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', *ELF_CASES, 'symbol-library', *ARM_CASES], default='c')
     p.add_argument('--examples', type=Path, help='Explicit raddebugger_examples checkout for language cases')
     p.add_argument('--output-root', type=Path, help='Existing directory for retained, unique run directories')
     a = p.parse_args()
@@ -53,7 +75,7 @@ def main():
     a.sender = (a.sender or a.debugger).resolve()
     if a.output_root:
         a.output_root = a.output_root.resolve()
-    cases = ['c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', 'symbol-library', *ARM_CASES] if a.case == 'all' else [a.case]
+    cases = ['c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', *ELF_CASES, 'symbol-library', *ARM_CASES] if a.case == 'all' else [a.case]
     if a.case == 'languages':
         cases = ['language-'+x for x in language_basics.LANGUAGES]
     elif a.case == 'all' and a.examples:
@@ -87,6 +109,9 @@ def run_case(a, case):
         result.check_returncode()
         return result.stdout
     try:
+        if case in ELF_CASES and platform.system() != 'Linux':
+            record.update(status='uncovered', reason='Requires the Linux ELF module loader')
+            return record
         if case in ARM_CASES and (platform.system() != 'Darwin' or platform.machine() != 'arm64'):
             record.update(status='uncovered', reason='Requires a native macOS ARM64 debugger and target')
             return record
@@ -145,15 +170,29 @@ def run_case(a, case):
             run([a.compiler, '/Zi', '/O2' if case.startswith('c-inline') else '/Od', *['/D'+d for d in defines], str(source), '/Fe:'+str(target), '/link', '/debug', '/incremental:no'], timeout=60)
         else:
             record['compiler_version'] = run([a.compiler, '--version'], timeout=10)
+            compile_flags = []
+            link_flags = []
+            if case in ELF_CASES:
+                compile_flags = ['-fno-pie' if case.startswith('c-elf-exec') else '-fPIE']
+                link_flags = ['-no-pie' if case.startswith('c-elf-exec') else '-pie']
             objects = []
             for index, src in enumerate(sources):
                 obj = f'fixture-{index}.o'
                 optimization = '-O2' if case == 'c-assert-optimized' else '-O1' if case.startswith('c-inline') else '-O0'
-                run([a.compiler, '-g', optimization, *['-D'+d for d in defines], '-c', str(src), '-o', obj], timeout=60)
+                run([a.compiler, '-g', optimization, *compile_flags, *['-D'+d for d in defines], '-c', str(src), '-o', obj], timeout=60)
                 objects.append(obj)
-            run([a.compiler, '-g', *objects, '-o', str(target)], timeout=60)
+            run([a.compiler, '-g', *link_flags, *objects, '-o', str(target)], timeout=60)
             if platform.system() == 'Darwin':
                 run(['xcrun', 'dsymutil', str(target)], timeout=60)
+        if case in ELF_CASES:
+            with target.open('rb') as stream:
+                header = stream.read(18)
+            assert header[:4] == b'\x7fELF' and header[5] in (1, 2), header
+            record['elf_type'] = int.from_bytes(header[16:18], 'little' if header[5] == 1 else 'big')
+            assert record['elf_type'] == (2 if case.startswith('c-elf-exec') else 3), record['elf_type']
+            if case.endswith('-no-index'):
+                omit_elf_unwind_index(target)
+                record['unwind_index_omitted'] = True
         record['target_sha256'] = sha(target)
         record['debug_info_hashes'] = {str(f.relative_to(output)): sha(f) for f in output.rglob('*')
                                        if f.is_file() and ('.dSYM/' in str(f) or f.suffix.lower() == '.pdb')}
