@@ -3363,7 +3363,7 @@ cv2r_convert(Arena *arena, CV2R_ConvertParams *params)
                   if(!got_container && container_name.size != 0)
                   {
                     CV_TypeId cv_type_id = cv2r_first_itype_from_name(tpi_hash, tpi_leaf, container_name, 0);
-                    container_type = p2r_type_ptr_from_itype(cv_type_id);
+                    container_type = cv_type_id != 0 ? p2r_type_ptr_from_itype(cv_type_id) : 0;
                     got_container = (container_type != 0);
                   }
                   
@@ -3387,6 +3387,7 @@ cv2r_convert(Arena *arena, CV2R_ConvertParams *params)
                          n->ns != 0)
                       {
                         container_namespace = n->ns;
+                        got_container = 1;
                         break;
                       }
                     }
@@ -3449,7 +3450,7 @@ cv2r_convert(Arena *arena, CV2R_ConvertParams *params)
                 if(!got_container && container_name.size != 0 && tpi_hash != 0 && tpi_leaf != 0)
                 {
                   CV_TypeId cv_type_id = cv2r_first_itype_from_name(tpi_hash, tpi_leaf, container_name, 0);
-                  container_type = p2r_type_ptr_from_itype(cv_type_id);
+                  container_type = cv_type_id != 0 ? p2r_type_ptr_from_itype(cv_type_id) : 0;
                   got_container = (container_type != 0);
                 }
                 
@@ -3473,6 +3474,7 @@ cv2r_convert(Arena *arena, CV2R_ConvertParams *params)
                        n->ns != 0)
                     {
                       container_namespace = n->ns;
+                      got_container = 1;
                       break;
                     }
                   }
@@ -3535,6 +3537,7 @@ cv2r_convert(Arena *arena, CV2R_ConvertParams *params)
                   curr_proc_symbol->type             = type;
                   curr_proc_symbol->container_scope  = container_scope;
                   curr_proc_symbol->container_type   = container_type;
+                  curr_proc_symbol->container_namespace = container_namespace;
                   curr_proc_symbol->root_scope       = procedure_root_scope;
                   if(procedure_root_scope != 0)
                   {
@@ -3720,7 +3723,7 @@ cv2r_convert(Arena *arena, CV2R_ConvertParams *params)
                 if(!got_container && container_name.size != 0)
                 {
                   CV_TypeId cv_type_id = cv2r_first_itype_from_name(tpi_hash, tpi_leaf, container_name, 0);
-                  container_type = p2r_type_ptr_from_itype(cv_type_id);
+                  container_type = cv_type_id != 0 ? p2r_type_ptr_from_itype(cv_type_id) : 0;
                   got_container = (container_type != 0);
                 }
                 
@@ -3744,6 +3747,7 @@ cv2r_convert(Arena *arena, CV2R_ConvertParams *params)
                        n->ns != 0)
                     {
                       container_namespace = n->ns;
+                      got_container = 1;
                       break;
                     }
                   }
