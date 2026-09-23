@@ -430,8 +430,8 @@ internal U64 dw2_read_line_table_header(Arena *arena, DW_Raw *raw, DW2_ParseCtx 
 ////////////////////////////////
 //~ rjf: Offset Table Parsing (.debug_str_offsets, .debug_rnglists)
 
-internal U64 dw2_read_offset_table(String8 data, U64 off, DW2_OffsetTable *out);
-internal DW2_OffsetTableList dw2_offset_table_list_from_data(Arena *arena, String8 data);
+internal U64 dw2_read_offset_table(String8 data, U64 off, DW_SectionKind section_kind, DW2_OffsetTable *out);
+internal DW2_OffsetTableList dw2_offset_table_list_from_data(Arena *arena, String8 data, DW_SectionKind section_kind);
 internal B32 dw2_try_offset_from_table_idx(DW2_OffsetTable *tbl, U64 idx, U64 *out);
 internal DW2_OffsetTableSet dw2_offset_table_set_from_raw(Arena *arena, DW_Raw *raw);
 
