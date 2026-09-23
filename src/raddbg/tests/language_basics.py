@@ -40,10 +40,16 @@ def line(source, marker):
 
 
 def exercise(client, source, metadata):
+    def function_name(frame):
+        name = frame['function']
+        # Zig's native DWARF backend puts these declarations in module "main";
+        # the LLVM-backed fixtures can emit them without that enclosing scope.
+        return name.removeprefix('main::') if metadata['language'] == 'zig' else name
+
     def at(state, function, marker=None):
         frame = state['stack']['frames'][0]
         expected = metadata['leaf' if function == 'matrix_leaf' else 'caller']
-        assert frame['function'] == expected, state
+        assert function_name(frame) == expected, state
         assert frame['source']['is_source'] and Path(frame['source']['path']) == source, frame
         if marker:
             assert frame['source']['line'] == line(source, marker), frame
@@ -78,7 +84,7 @@ def exercise(client, source, metadata):
     assert leaf['stop']['breakpoint_id'] != source_breakpoint, leaf
     function_breakpoint = leaf['stop']['breakpoint_id']
     leaf = enter_body(leaf)
-    assert [f['function'] for f in leaf['stack']['frames'][:2]] == [metadata['leaf'], metadata['caller']], leaf
+    assert [function_name(f) for f in leaf['stack']['frames'][:2]] == [metadata['leaf'], metadata['caller']], leaf
     value(leaf, 1, 'seed', 20)
     for marker, expected in (('MATRIX_UPDATE', 40), ('MATRIX_RETURN', 42)):
         current = client.stopped('step_over_line')

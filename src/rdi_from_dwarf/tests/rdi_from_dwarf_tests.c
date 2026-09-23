@@ -114,6 +114,78 @@ Test(d2r_line_extended_opcode)
   }
 }
 
+Test(d2r_module_types)
+{
+  // Two compilation units: a procedure references a base type in a named scope
+  // in the second unit. Modules and namespaces must both retain that reference.
+  for(U64 module = 0; module <= 1; module += 1)
+  {
+    U8 abbrev[] = {1,0x11,1, 3,8, 0x11,1, 0x12,6, 0,0,
+                   2,0x2e,1, 3,8, 0x11,1, 0x12,6, 0,0,
+                   3,0x34,0, 3,8, 0x49,0x10, 2,0x18, 0,0,
+                   4,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0,
+                   5,0x39,1, 3,8, 0,0, 0};
+    abbrev[sizeof(abbrev)-7] = module ? DW_TagKind_Module : DW_TagKind_Namespace;
+    U8 info1[] = {0,0,0,0, 5,0,1,8, 0,0,0,0,
+                  1,'a',0, 0,0x10,0,0,0,0,0,0, 1,0,0,0,
+                  5,'a',0,
+                  2,'f',0, 0,0x10,0,0,0,0,0,0, 1,0,0,0,
+                  3,'x',0, 0,0,0,0, 2,0x44,0x9f, 0,0,0};
+    U8 info2[] = {0,0,0,0, 5,0,1,8, 0,0,0,0,
+                  1,'b',0, 0,0x10,0,0,0,0,0,0, 1,0,0,0,
+                  5,'b',0,
+                  4,'i','3','2',0,5,4, 0,0};
+    U32 size1 = sizeof(info1)-4, size2 = sizeof(info2)-4;
+    U32 type_off = sizeof(info1) + sizeof(info2) - 9;
+    MemoryCopy(info1, &size1, 4);
+    MemoryCopy(info2, &size2, 4);
+    MemoryCopy(info1+sizeof(info1)-10, &type_off, 4);
+    U8 lines[] = {0,0,0,0, 4,0, 0,0,0,0, 1,1,1,0xfb,14,13,
+                   0,1,1,1,1,0,0,0,1,0,0,1, 0, 'a',0,0,0,0,0,
+                   0,1,1};
+    U32 line_size = sizeof(lines)-4, header_size = sizeof(lines)-13;
+    MemoryCopy(lines, &line_size, 4);
+    MemoryCopy(lines+6, &header_size, 4);
+    String8List parts = {0};
+    str8_list_push(arena, &parts, str8_array_fixed(info1));
+    str8_list_push(arena, &parts, str8_array_fixed(info2));
+    RDIM_BinarySectionNode section = {0};
+    section.v.voff_first = 0x1000;
+    section.v.voff_opl = 0x1001;
+    D2R_ConvertParams params = {0};
+    params.arch = Arch_x64;
+    params.path_style = PathStyle_UnixAbsolute;
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    params.binary_sections.first = params.binary_sections.last = &section;
+    params.binary_sections.count = 1;
+    params.raw.sec[DW_SectionKind_Info].data = str8_list_join(arena, &parts, 0);
+    params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+    params.raw.sec[DW_SectionKind_Line].data = str8_array_fixed(lines);
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+    lane_ctx(restore);
+    test_outf("named scope tag: %s\n", module ? "module" : "namespace");
+    TestCheck(result.units.total_count == 2);
+    RDIM_Unit *unit = &result.units.first->v[0];
+    TestCheck(unit->procedures.total_count == 1);
+    RDIM_Symbol *procedure = &unit->procedures.first->v[0];
+    TestCheck(procedure->root_scope->locals.total_count == 1);
+    RDIM_Symbol *local = &procedure->root_scope->locals.first->v[0];
+    TestCheck(local->type != 0);
+    TestCheck(local->type->kind == RDI_TypeKind_Alias);
+    TestCheck(local->type->byte_size == 4);
+    TestCheck(str8_match(local->type->name, str8_lit("i32"), 0));
+    TestCheck(local->type->direct_type->kind == RDI_TypeKind_S32);
+    TestCheck(result.namespaces.total_count == 2);
+    TestCheck(procedure->container_namespace != 0);
+    TestCheck(str8_match(procedure->container_namespace->name, str8_lit("a"), 0));
+    arena_release(convert_arena);
+  }
+}
+
 SkippedTest(d2r_regressions)
 {
   String8 radbin_path = test_build_exe_path(arena, s("radbin"));
