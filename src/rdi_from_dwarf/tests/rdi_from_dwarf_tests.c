@@ -114,6 +114,77 @@ Test(d2r_line_extended_opcode)
   }
 }
 
+Test(d2r_sparse_units)
+{
+  // Keep line decoding and empty child lists independently testable.
+  for(U64 test_case = 0; test_case < 5; test_case += 1)
+  {
+    U8 abbrev[] = {1,0x11,1, 3,8, 0x10,0x17, 0,0,
+                   2,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0, 0};
+    U8 info[] = {0,0,0,0, 4,0, 0,0,0,0, 8, 1,'a',0, 0,0,0,0,
+                 2,'i','n','t',0,5,4, 0};
+    U64 info_size = sizeof(info);
+    if(test_case == 0)
+    {
+      abbrev[2] = 0;
+      info_size = 18;
+    }
+    U32 unit_size = info_size-4;
+    MemoryCopy(info, &unit_size, 4);
+    U8 lines[] = {0,0,0,0, 4,0, 0,0,0,0, 1,1,1,0xfb,14,13,
+                   0,1,1,1,1,0,0,0,1,0,0,1, 0, 'a',0,0,0,0,0,
+                   2,1, 0,1,1};
+    U32 line_size = sizeof(lines)-4, header_size = sizeof(lines)-15;
+    MemoryCopy(lines, &line_size, 4);
+    MemoryCopy(lines+6, &header_size, 4);
+    if(test_case == 2)
+    {
+      lines[14] = 0; // Invalid line_range, used by const_add_pc.
+      lines[sizeof(lines)-5] = 8;
+    }
+    if(test_case == 3) lines[11] = 0; // Invalid max_ops_per_inst.
+    D2R_ConvertParams params = {0};
+    params.arch = Arch_x64;
+    params.path_style = PathStyle_UnixAbsolute;
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    params.raw.sec[DW_SectionKind_Info].data = str8(info, info_size);
+    params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+    if(test_case != 1) params.raw.sec[DW_SectionKind_Line].data = str8_array_fixed(lines);
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
+    Arena *convert_arena = arena_alloc();
+    test_outf("sparse unit case: %I64u\n", test_case);
+    RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+    lane_ctx(restore);
+    TestCheck(result.units.total_count == 1);
+    TestCheck(result.units.first->v[0].line_table != 0);
+    if(test_case != 0)
+    {
+      if(test_case == 4)
+      {
+        TestCheck(result.units.first->v[0].line_table->line_count != 0);
+      }
+      else
+      {
+        TestCheck(result.units.first->v[0].line_table->line_count == 0);
+      }
+      B32 found_int = 0;
+      for EachNode(chunk, RDIM_TypeChunkNode, result.types.first)
+      {
+        for EachIndex(idx, chunk->count)
+        {
+          RDIM_Type *type = &chunk->v[idx];
+          found_int |= type->kind == RDI_TypeKind_Alias && type->byte_size == 4 &&
+                       str8_match(type->name, str8_lit("int"), 0);
+        }
+      }
+      TestCheck(found_int);
+    }
+    arena_release(convert_arena);
+  }
+}
+
 Test(d2r_module_types)
 {
   // Two compilation units: a procedure references a base type in a named scope
