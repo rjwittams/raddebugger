@@ -587,6 +587,27 @@ TEST(arm64_disasm_flow_register_operands)
   T_Ok(cbz.src_reg_code == ARM64_RegCode_x0);
 }
 
+TEST(arm64_unwind_written_gpr)
+{
+  for(U32 reg = 0; reg < 31; reg += 1)
+  {
+    // MOV Xn, X0 and MOV Wn, W0 write the same physical register.
+    U32 words[] = {0xaa0003e0u | reg, 0x2a0003e0u | reg};
+    for EachElement(idx, words)
+    {
+      DASM_Inst inst = dasm_inst_from_code(arena, Arch_arm64, 0x1000, str8((U8 *)&words[idx], 4), DASM_Syntax_Intel);
+      T_Ok(inst.size == 4);
+      T_Ok(d_arm64_gpr_index_from_reg_code(inst.dst_reg_code) == reg);
+    }
+  }
+  T_Ok(d_arm64_gpr_index_from_reg_code(ARM64_RegCode_fp) == 29);
+  T_Ok(d_arm64_gpr_index_from_reg_code(ARM64_RegCode_lr) == 30);
+  T_Ok(d_arm64_gpr_index_from_reg_code(ARM64_RegCode_nil) == max_U32);
+  T_Ok(d_arm64_gpr_index_from_reg_code(ARM64_RegCode_sp) == max_U32);
+  T_Ok(d_arm64_gpr_index_from_reg_code(ARM64_RegCode_pc) == max_U32);
+  T_Ok(d_arm64_gpr_index_from_reg_code(ARM64_RegCode_q0) == max_U32);
+}
+
 TEST(arm64_disasm_compare_operands)
 {
   U8 cmp_code[] = {0x1f, 0x00, 0x1f, 0xeb};

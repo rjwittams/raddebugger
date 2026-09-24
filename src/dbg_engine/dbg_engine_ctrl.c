@@ -2424,6 +2424,17 @@ struct D_ARM64StackInst
   S64 offset;
 };
 
+internal U32
+d_arm64_gpr_index_from_reg_code(ARCH_RegCode code)
+{
+  U32 result = max_U32;
+  if(code >= ARM64_RegCode_x0 && code <= ARM64_RegCode_lr) {result = code-ARM64_RegCode_x0;}
+  else if(code == ARM64_RegCode_x29) {result = 29;}
+  else if(code == ARM64_RegCode_x30) {result = 30;}
+  else if(code >= ARM64_RegCode_w0 && code <= ARM64_RegCode_w30) {result = code-ARM64_RegCode_w0;}
+  return result;
+}
+
 internal D_ARM64StackInst
 d_arm64_stack_inst(U32 word)
 {
@@ -2609,9 +2620,7 @@ d_unwind_arm64_prefix(D_Handle process, Rng1U64 function, MachO_UnwindInfoLookup
       {
         // An unsaved write makes that caller register unavailable. Saved
         // originals remain recoverable from their stack locations.
-        U32 reg = 64;
-        if(decoded.dst_reg_code >= ARM64_RegCode_x0 && decoded.dst_reg_code <= ARM64_RegCode_x30) {reg = decoded.dst_reg_code-ARM64_RegCode_x0;}
-        else if(decoded.dst_reg_code >= ARM64_RegCode_w0 && decoded.dst_reg_code <= ARM64_RegCode_w30) {reg = decoded.dst_reg_code-ARM64_RegCode_w0;}
+        U32 reg = d_arm64_gpr_index_from_reg_code(decoded.dst_reg_code);
         if(reg < 31) {modified |= (1ull << reg) & preserved;}
         if(reg == 29) {fp_known = 0;}
       }
