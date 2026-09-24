@@ -4218,6 +4218,8 @@ dmn_thread_call(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread_handle, DMN_Th
       {
         void *saved_regs = push_array(arena, U8, arch_info->reg_block_size);
         void *call_regs = push_array(arena, U8, arch_info->reg_block_size);
+        U64 saved_pending_trap_vaddr = thread_entity->thread.pending_trap_vaddr;
+        U64 saved_pending_trap_size = thread_entity->thread.pending_trap_size;
         if(!dmn_thread_read_reg_block(thread_handle, saved_regs))
         {
           result.error = str8_lit("could not read thread registers");
@@ -4334,6 +4336,11 @@ dmn_thread_call(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread_handle, DMN_Th
                 }
 
                 result.regs_restored = dmn_thread_write_reg_block(thread_handle, saved_regs);
+                if(result.regs_restored)
+                {
+                  thread_entity->thread.pending_trap_vaddr = saved_pending_trap_vaddr;
+                  thread_entity->thread.pending_trap_size = saved_pending_trap_size;
+                }
                 if(result.returned && result.regs_restored)
                 {
                   result.success = 1;
