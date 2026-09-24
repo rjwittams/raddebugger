@@ -18,6 +18,9 @@ p.add_argument('pid', type=int)
 p.add_argument('--target', required=True)
 p.add_argument('--frame-record', action='store_true')
 p.add_argument('--branch-body', action='store_true')
+p.add_argument('--shrink-wrap', action='store_true')
+p.add_argument('--body-only', action='store_true')
+p.add_argument('--early-return', action='store_true')
 p.add_argument('--broken-frame', action='store_true')
 a = p.parse_args()
 client = Client(a.sender, a.pid)
@@ -47,11 +50,13 @@ caller_sp = value('sp')
 caller_fp = value('x29')
 caller_x19 = value('x19')
 leaf += s['ip'] - s['voff'] - header
-reply = ipc(f'add_address_breakpoint {leaf:#x}')
+entry = leaf + (24 if a.body_only else 0)
+assert not a.body_only or a.shrink_wrap
+reply = ipc(f'add_address_breakpoint {entry:#x}')
 bp = re.search(r'\$[\da-fA-F]+', reply)
 assert bp, reply
 try:
-    assert stop('run')['ip'] == leaf
+    assert stop('run')['ip'] == entry
     ipc(f'remove_breakpoint {bp[0]}')
     if a.broken_frame:
         stop('step_into_inst')
@@ -78,6 +83,14 @@ try:
     sizes = (0, 16, 16, 48, 48, 48, 48, 48, 16, 0) if a.frame_record else (0, 16, 16, 16, 16, 16, 0)
     boundaries = list(enumerate(sizes))
     boundaries = [(index*4, size) for index, size in boundaries]
+    if a.shrink_wrap:
+        assert a.frame_record
+        boundaries = ([(0, 0)] + [(offset+4, size) for offset, size in boundaries if offset < 20] +
+                      [(24, 48)] + [(offset+8, size) for offset, size in boundaries if offset >= 20])
+        if a.body_only:
+            boundaries = [(offset, size) for offset, size in boundaries if offset >= 24]
+        if a.early_return:
+            boundaries = [(0, 0), (44, 0)]
     if a.branch_body:
         assert a.frame_record
         boundaries = [(0,0), (4,16), (8,16), (12,48), (16,48), (20,48),

@@ -57,8 +57,13 @@ caller locals, frame selection, exit 0 and exit 37, and detach after a previous
 normal exit. On macOS the basic C cases also require one startup frame mapped
 to `/usr/lib/dyld` at the first stop and after stepping; the detach case checks
 it again after restart. This checks module discovery, not a symbol-name fallback.
-The ARM64 cases build five compact/EH-frame variants, checking 46
-instruction boundaries, plus cold TLS red-zone preservation. `caller-registers`
+The ARM64 cases check compact/EH-frame instruction boundaries, plus cold
+TLS red-zone preservation. `unwind-shrink-wrap` adds a conditional early
+return before the frame-record prologue and checks every fall-through
+instruction boundary. `unwind-shrink-wrap-body` starts directly in the body,
+before a non-restore instruction; `unwind-shrink-wrap-return` takes the early
+return without creating a frame. These cover a direct-return guard, not
+arbitrary control flow or every compiler's shrink-wrapping pattern. `caller-registers`
 checks that an unavailable caller x0 stays unavailable in arithmetic, while
 the stopped x0 remains readable. It also checks partial SIMD availability:
 the caller's low q8 lane is readable, but its upper lane and whole q8 are not. The
@@ -76,17 +81,17 @@ from the wrapper's body line. `c-inline-nested` requires
 in a header and its call inside a lexical block. It checks each frame's
 source file/line, inline depth and shared physical registers, then normal exit.
 Both cases pass on macOS ARM64 and Linux x64 with Clang/DWARF, and on Windows
-x64 with MSVC/PDB. `all` contains 22 built-in cases; the eight ARM64-only cases remain
+x64 with MSVC/PDB. `all` contains 25 built-in cases; the eleven ARM64-only cases remain
 uncovered on other hosts. The Mach-O `symbol-library` case is also uncovered
 on Linux and Windows; the four ELF cases are uncovered outside Linux.
-Supplying `--examples` adds the five language cases, for 27 total.
+Supplying `--examples` adds the five language cases, for 30 total.
 These results do not cover Intel Mac live debugging.
 
 `symbol-library` loads a library built without debug info and stripped of
 debug symbols. It requires symbol-table names and offsets for its leaf and
 caller, no invented function/source information, and ordinary debug-info
 resolution for the application's `main`. It also waits for the library's
-debug-info load to settle as unavailable. The five ARM64 unwind variants
+debug-info load to settle as unavailable. The ARM64 unwind variants
 check `_unwind_leaf` name-only labels and exact offsets at their instruction
 boundaries. The `macho_symbol_fallback` torture case checks executable-section
 boundaries, deterministic aliases, malformed names/tables, UUID/CPU matching

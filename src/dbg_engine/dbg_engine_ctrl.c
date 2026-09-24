@@ -2516,10 +2516,11 @@ d_unwind_arm64_epilogue(D_Handle process, Rng1U64 function, ARM64_RegBlock *regs
 // Derive a stopped-PC row from the executed straight-line prefix. At a branch
 // we may use the compact body row only if the prefix has established that row.
 internal B32
-d_unwind_arm64_prefix(D_Handle process, U64 function_start, MachO_UnwindInfoLookupResult *lookup,
+d_unwind_arm64_prefix(D_Handle process, Rng1U64 function, MachO_UnwindInfoLookupResult *lookup,
                       ARM64_RegBlock *regs, U8 *reg_valid, U64 endt_us, B32 *stale_out, B32 *body_out, U64 *cfa_out)
 {
   Temp scratch = scratch_begin(0, 0);
+  U64 function_start = function.min;
   B32 good = regs->pc >= function_start && (regs->pc-function_start)%4 == 0;
   good = good && uwnd_reg_is_valid(Arch_arm64, reg_valid, ARM64_RegCode_sp);
   U64 size = good ? Min(regs->pc-function_start, KB(4)) : 0;
@@ -2571,6 +2572,20 @@ d_unwind_arm64_prefix(D_Handle process, U64 function_start, MachO_UnwindInfoLook
       if(decoded.flags & DASM_InstFlag_Call) {modified |= 1ull << 30;}
       else if(decoded.flags & (DASM_InstFlag_Branch|DASM_InstFlag_UnconditionalJump|DASM_InstFlag_Return))
       {
+        // A branch directly to RET cannot rejoin this prefix. A stop before
+        // that return therefore proves the conditional branch fell through.
+        if((decoded.flags & DASM_InstFlag_Branch) &&
+           !(decoded.flags & (DASM_InstFlag_UnconditionalJump|DASM_InstFlag_Return)) &&
+           decoded.dst_vaddr > regs->pc && decoded.dst_vaddr < function.max &&
+           function.max-decoded.dst_vaddr >= sizeof(U32))
+        {
+          U32 target_word = 0;
+          if(d_process_memory_read_struct(process, decoded.dst_vaddr, stale_out, &target_word, endt_us) &&
+             !*stale_out && target_word == 0xd65f03c0) // RET LR
+          {
+            continue;
+          }
+        }
         if(mode == MACHO_UNWIND_ARM64_MODE_FRAMELESS)
         {
           *body_out = (sp == -(S64)(((lookup->encoding & MACHO_UNWIND_ARM64_FRAMELESS_STACK_SIZE_MASK) >> 12)*16) &&
@@ -3010,7 +3025,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
             instruction_row = d_unwind_arm64_epilogue(process_entity->handle, function, regs_arm64, reg_valid, endt_us, &instruction_stale, &cfa);
             if(!instruction_row && !instruction_stale)
             {
-              instruction_row = d_unwind_arm64_prefix(process_entity->handle, function.min, &lookup, regs_arm64, reg_valid, endt_us, &instruction_stale, &compact_body, &cfa);
+              instruction_row = d_unwind_arm64_prefix(process_entity->handle, function, &lookup, regs_arm64, reg_valid, endt_us, &instruction_stale, &compact_body, &cfa);
             }
           }
           if(instruction_stale)

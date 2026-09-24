@@ -26,6 +26,9 @@ ARM_CASES = {
     'unwind-frame': ['FRAME_RECORD'],
     'unwind-frame-dwarf': ['FRAME_RECORD', 'DWARF_ROWS'],
     'unwind-branch': ['FRAME_RECORD', 'BRANCH_BODY'],
+    'unwind-shrink-wrap': ['FRAME_RECORD', 'SHRINK_WRAP'],
+    'unwind-shrink-wrap-body': ['FRAME_RECORD', 'SHRINK_WRAP'],
+    'unwind-shrink-wrap-return': ['FRAME_RECORD', 'SHRINK_WRAP', 'EARLY_RETURN'],
     'unwind-unavailable': [],
     'tls-red-zone': [],
     'caller-registers': [],
@@ -339,6 +342,12 @@ def run_case(a, case):
                 options.append('--caller-registers')
             if 'BRANCH_BODY' in defines:
                 options.append('--branch-body')
+            if 'SHRINK_WRAP' in defines:
+                options.append('--shrink-wrap')
+            if case == 'unwind-shrink-wrap-body':
+                options.append('--body-only')
+            if 'EARLY_RETURN' in defines:
+                options.append('--early-return')
             if case == 'unwind-unavailable':
                 options.append('--broken-frame')
             run([sys.executable, str(HERE/script), str(a.sender), str(pid), '--target', str(target), *options],

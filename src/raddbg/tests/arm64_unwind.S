@@ -3,6 +3,13 @@
 .globl _unwind_leaf
 .p2align 2
 _unwind_leaf:
+#ifdef SHRINK_WRAP
+#ifdef EARLY_RETURN
+  cbz xzr, Lunwind_return
+#else
+  cbz x0, Lunwind_return
+#endif
+#endif
 #if !defined(FRAME_RECORD) || defined(DWARF_ROWS)
 .cfi_startproc
 #endif
@@ -30,6 +37,10 @@ _unwind_leaf:
 Lunwind_body:
   mov x0, #0
 #endif
+#ifdef SHRINK_WRAP
+  // Stop before a body instruction, not inside the recognized restore suffix.
+  mov x0, #0
+#endif
   nop
   ldp x20, x19, [sp, #16]
 #ifdef DWARF_ROWS
@@ -43,6 +54,7 @@ Lunwind_body:
   .cfi_restore 29
   .cfi_restore 30
 #endif
+Lunwind_return:
   ret
 #else
   sub sp, sp, #16
