@@ -3416,7 +3416,6 @@ rd_view_ui(Rng2F32 rect)
         ProfScope("build ui")
         {
           Vec2F32 rect_dim = dim_2f32(rect);
-          F32 contents_width_px = (rect_dim.x - floor_f32(ui_bottom_font_size()*1.5f));
           Rng1S64 visible_row_rng = {0};
           UI_ScrollListParams scroll_list_params = {0};
           {
@@ -3443,6 +3442,7 @@ rd_view_ui(Rng2F32 rect)
                           &scroll_list_sig)
             UI_Focus(UI_FocusKind_Null)
           {
+            F32 contents_width_px = ui_top_parent()->fixed_size.x;
             ui_set_next_pref_height(ui_children_sum(1));
             ui_set_next_child_layout_axis(Axis2_Y);
             UI_Box *table = ui_build_box_from_string(0, str8_lit("table"));
@@ -6101,6 +6101,7 @@ rd_window_frame(void)
       
       // rjf: begin & push initial stack values
       ui_begin_build(ws->os, &ws->ui_events, &icon_info, ws->theme, &animation_info, rd_state->frame_dt, rd_state->frame_dt);
+      ui_set_active_scroll_bar_style(rd_setting_b32_from_name(str8_lit("overlay_scrollbars")) ? UI_ScrollBarStyle_Overlay : UI_ScrollBarStyle_Classic);
       ui_push_font(rd_font_from_slot(RD_FontSlot_Main));
       ui_push_font_size(top_level_font_size);
       ui_push_text_padding(floor_f32(ui_top_font_size()*0.3f));

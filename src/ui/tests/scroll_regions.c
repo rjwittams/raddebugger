@@ -91,6 +91,44 @@ scroll_region_diagnostics(ScrollTestWindow *ws)
   }
 
   UI_State *saved = ui_state;
+  // Exercise the list's public begin/end boundary with both styles. A style
+  // change must affect its viewport, not discard its fractional scroll state.
+  for(U32 style = 0; style < 2; style += 1)
+  {
+    UI_State *test_ui = ui_state_alloc();
+    ui_select_state(test_ui);
+    ui_set_active_scroll_bar_style((UI_ScrollBarStyle)style);
+    UI_ScrollPt pt = ui_scroll_pt(4, 0);
+    pt.target_off = 0.5f;
+    for(U32 frame = 0; frame < 3; frame += 1)
+    {
+      UI_EventList events = {0};
+      UI_EventNode wheel = {.v = {.kind = UI_EventKind_Scroll, .pos = {50, 50}, .delta_2f32 = {0, 5}, .scroll_is_precise = 1}};
+      if(frame == 2) { events.first = events.last = &wheel; events.count = 1; }
+      UI_IconInfo icons = {0};
+      UI_AnimationInfo animation = {0};
+      ui_begin_build(ws->os, &events, &icons, ws->theme, &animation, 1.f/60, 1.f/60);
+      UI_Font(fnt_tag_from_path(str8_lit("data/segoeui.ttf"))) UI_FontSize(16)
+      {
+        UI_ScrollListParams list = {0};
+        list.dim_px = v2f32(200, 100);
+        list.row_height_px = 20;
+        list.item_range = r1s64(0, 100);
+        list.precise_scroll = 1;
+        Rng1S64 rows = {0};
+        ui_scroll_list_begin(&list, &pt, 0, 0, &rows, 0);
+        UI_Box *content = ui_top_parent();
+        ScrollCheck(content->view_off.y == 10 && rows.min == 4, "list keeps fractional row offset");
+        ui_scroll_list_end();
+        ui_end_build();
+        ScrollCheck(dim_2f32(content->rect).x == (style ? 200 : 176), "list viewport follows scrollbar style");
+        ScrollCheck(pt.idx == 4 && pt.target_off == (frame == 2 ? 0.75f : 0.5f), "list preserves fractions and consumes precise wheel once");
+        ScrollCheck(events.count == 0, "list consumes its wheel event");
+      }
+    }
+    ui_state_release(test_ui);
+  }
+  ui_set_active_scroll_bar_style(UI_ScrollBarStyle_Classic);
   for(U32 style = 0; style < 2; style += 1)
   {
     UI_State *test_ui = ui_state_alloc();
