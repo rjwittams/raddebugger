@@ -100,6 +100,8 @@ try:
             stop('step_into_inst')
         assert state()['ip'] == leaf + offset, state()['raw']
         frames = client.snapshot()['stack']['frames']
+        assert frames[0]['lookup_pc'] == frames[0]['pc'], frames[0]
+        assert int(frames[1]['pc'], 16) == int(frames[1]['lookup_pc'], 16)+4, frames[1]
         symbol = frames[0].get('symbol', {})
         assert symbol.get('name') == '_unwind_leaf', frames[0]
         assert symbol['source'] == 'symbol_table' and int(symbol['offset'], 16) == offset, symbol
@@ -115,6 +117,7 @@ try:
         top_sp = value('sp')
         assert top_sp + stack_size == caller_sp
         ipc('down_one_frame')
+        assert value('pc') == int(frames[1]['pc'], 16), frames[1]
         recovered_sp = value('sp')
         seed = value('seed')
         print(f'+{offset}: caller SP delta={recovered_sp-caller_sp}, seed={seed}', flush=True)

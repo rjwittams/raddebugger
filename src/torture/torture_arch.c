@@ -183,7 +183,7 @@ TEST(step_out_return_traps_use_link_register_continuation)
 
   ARM64_RegBlock arm64_regs = {0};
   arm64_regs.pc = 0x2000;
-  T_Ok(d_step_out_trap_vaddr_from_return_frame(Arch_arm64, &arm64_regs) == 0x2004);
+  T_Ok(d_step_out_trap_vaddr_from_return_frame(Arch_arm64, &arm64_regs) == 0x2000);
 }
 
 TEST(arm64_rdi_dwarf_mappings)

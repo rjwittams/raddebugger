@@ -259,7 +259,7 @@ def run_case(a, case):
                 assert Path(frame['module']).name == 'libsymbols.dylib', frame
                 assert frame['symbol']['name'] == name and frame['symbol']['source'] == 'symbol_table', frame
                 assert not frame['function'] and not frame['source']['is_source'], frame
-                assert int(frame['symbol']['address'], 16)+int(frame['symbol']['offset'], 16) == int(frame['pc'], 16), frame
+                assert int(frame['symbol']['address'], 16)+int(frame['symbol']['offset'], 16) == int(frame['lookup_pc'], 16), frame
             assert len(frames) >= 3 and frames[2]['function'] == 'main', stopped
             assert frames[2]['symbol']['source'] == 'debug_info', frames[2]
             deadline = time.monotonic()+10

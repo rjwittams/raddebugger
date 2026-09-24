@@ -136,8 +136,8 @@ rd_debug_snapshot(Arena *arena)
     ARCH_Info *arch = arch_info_from_arch(thread->arch);
     U64 pc = arch_ip_from_reg_block(arch, frame->regs);
     U64 sp = arch_sp_from_reg_block(arch, frame->regs);
-    D_Entity *module = d_module_from_process_vaddr(process, pc);
-    U64 voff = d_voff_from_vaddr(module, pc);
+    D_Entity *module = d_module_from_process_vaddr(process, frame->lookup_vaddr);
+    U64 voff = d_voff_from_vaddr(module, frame->lookup_vaddr);
     D_Entity *dbgi = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
     DI_Key key = d_dbgi_key_from_module(module);
     RDI_Parsed *rdi = di_rdi_from_key(access, key, 1, now_time_us()+1000);
@@ -173,12 +173,12 @@ rd_debug_snapshot(Arena *arena)
     if(debug_info_status == DI_LoadStatus_Pending) {symbols_pending = 1;}
     str8_list_pushf(scratch.arena, &body,
                    "%s{\"id\":%I64u,\"unwind_index\":%I64u,\"inline_depth\":%I64u,"
-                   "\"pc\":\"0x%I64x\",\"sp\":\"0x%I64x\",\"cfa\":\"0x%I64x\","
+                   "\"pc\":\"0x%I64x\",\"lookup_pc\":\"0x%I64x\",\"sp\":\"0x%I64x\",\"cfa\":\"0x%I64x\","
                    "\"module_offset\":\"0x%I64x\",\"module\":%S,\"function\":%S,"
                    "\"symbol\":{\"name\":%S,\"source\":\"%s\",\"address\":\"0x%I64x\",\"offset\":\"0x%I64x\"},"
                    "\"debug_info_status\":\"%s\","
                    "\"source\":{\"path\":%S,\"line\":%I64d,\"column\":%I64d,\"is_source\":%s}}",
-                   idx ? "," : "", idx, frame->unwind_count, frame->inline_depth, pc, sp, frame->cfa, voff,
+                   idx ? "," : "", idx, frame->unwind_count, frame->inline_depth, pc, frame->lookup_vaddr, sp, frame->cfa, voff,
                    rd_snapshot_json_string(scratch.arena, module->string), rd_snapshot_json_string(scratch.arena, name),
                    rd_snapshot_json_string(scratch.arena, symbol.name),
                    symbol.kind == D_SymbolNameKind_DebugInfo ? "debug_info" : symbol.kind == D_SymbolNameKind_SymbolTable ? "symbol_table" : "none",

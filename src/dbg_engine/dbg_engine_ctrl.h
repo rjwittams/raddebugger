@@ -26,6 +26,7 @@ struct D_UnwindFrame
   void *regs;
   U8 *reg_valid;
   U64 cfa;
+  U64 lookup_vaddr; // Source/unwind lookup address; the register PC stays raw.
 };
 
 typedef struct D_UnwindFrameNode D_UnwindFrameNode;
@@ -61,6 +62,7 @@ struct D_CallStackFrame
   void *regs;
   U8 *reg_valid;
   U64 cfa;
+  U64 lookup_vaddr;
 };
 
 typedef struct D_CallStack D_CallStack;
@@ -592,7 +594,7 @@ internal U64 *d_unwind_reg_from_macho_reg__macho_x64(X64_RegBlock *regs, MachO_U
 internal B32 d_macho_compact_unwind_x64_mode_is_supported(U32 encoding);
 internal B32 d_macho_compact_unwind_x64_frameless_stack_size_from_encoding(D_Handle process_handle, U64 module_base_vaddr, MachO_UnwindInfoLookupResult *lookup, B32 *is_stale_out, U64 endt_us, U64 *stack_size_out);
 internal B32 d_macho_compact_unwind_x64_cfa_from_encoding(D_Handle process_handle, U64 module_base_vaddr, MachO_UnwindInfoLookupResult *lookup, X64_RegBlock *regs, B32 *is_stale_out, U64 endt_us, U64 *cfa_out);
-internal D_UnwindStepResult d_unwind_step__macho_x64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, X64_RegBlock *regs, U8 *reg_valid, U64 endt_us);
+internal D_UnwindStepResult d_unwind_step__macho_x64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, U64 lookup_pc, X64_RegBlock *regs, U8 *reg_valid, U64 endt_us);
 
 typedef struct D_MachOCompactArm64FrameRegSlot D_MachOCompactArm64FrameRegSlot;
 struct D_MachOCompactArm64FrameRegSlot
@@ -610,7 +612,7 @@ internal B32 d_unwind_arm64_cfa_from_frame_pointer(ARM64_RegBlock *regs, U64 *cf
 internal B32 d_unwind_arm64_cfa_from_link_register(ARM64_RegBlock *regs, U64 *cfa_out);
 internal D_UnwindStepResult d_unwind_step__link_register_arm64(ARM64_RegBlock *regs, U8 *reg_valid);
 internal D_UnwindStepResult d_unwind_step__frame_pointer_arm64(D_Handle process_handle, ARM64_RegBlock *regs, U8 *reg_valid, U64 endt_us);
-internal D_UnwindStepResult d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, ARM64_RegBlock *regs, U8 *reg_valid, B32 prefer_entry_lr, U64 endt_us);
+internal D_UnwindStepResult d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, U64 lookup_pc, ARM64_RegBlock *regs, U8 *reg_valid, B32 prefer_entry_lr, U64 endt_us);
 
 //- rjf: abstracted full unwind
 internal D_Unwind d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us);

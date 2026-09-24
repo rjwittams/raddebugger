@@ -89,7 +89,7 @@ pe_x64_uwnd_reg_code_from_pe_gpr_reg(PE_UnwindGprRegX64 gpr_reg)
 //~ rjf: Unwinding Abstraction Implementation
 
 internal UWND_StepResult
-pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64 tls_vaddr, void *regs_opaque, U8 *reg_valid, U64 *cfa_out)
+pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64 tls_vaddr, U64 lookup_pc, void *regs_opaque, U8 *reg_valid, U64 *cfa_out)
 {
   UWND_StepResult result = {UWND_StepStatus_Error};
   PE_X64_UWND_ModuleUnwindInfo *unwind_info = (PE_X64_UWND_ModuleUnwindInfo *)module_info->unwind_info;
@@ -110,7 +110,7 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
     ////////////////////////////
     //- rjf: unpack context from rip
     //
-    U64 rip_voff = regs->rip - module_info->base_vaddr;
+    U64 rip_voff = lookup_pc - module_info->base_vaddr;
     PE_IntelPdata *first_pdata = pe_x64_uwnd_intel_pdata_from_voff(unwind_info, rip_voff);
     
     ////////////////////////////
@@ -118,9 +118,11 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
     //
     B32 has_pdata_and_in_epilog = 0;
     U64 instruction_data_size_cap = 256;
-    Rng1U64 instruction_data_vaddr_range = r1u64(regs->rip, regs->rip+instruction_data_size_cap);
+    Rng1U64 instruction_data_vaddr_range = r1u64(lookup_pc, lookup_pc+instruction_data_size_cap);
     String8 instruction_data = {0};
-    if(!done && first_pdata)
+    // A biased return-address lookup can point inside a call's operand bytes.
+    // Only an exact instruction PC is suitable for epilog decoding.
+    if(!done && first_pdata && lookup_pc == regs->rip)
     {
       // NOTE(allen): There are restrictions placed on how an epilog is allowed
       // to be formed (https://docs.microsoft.com/en-us/cpp/build/prolog-and-epilog?view=msvc-160)
@@ -925,6 +927,7 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
     if(!done)
     {
       result.status = UWND_StepStatus_Good;
+      result.is_interrupted = xdata_unwind_did_machframe;
       uwnd_reg_mark_valid(arch, caller_valid, X64_RegCode_rip, 0);
       uwnd_reg_mark_valid(arch, caller_valid, X64_RegCode_rsp, 0);
       if(reg_valid) {MemoryCopy(reg_valid, caller_valid, sizeof(*regs));}

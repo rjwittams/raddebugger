@@ -386,10 +386,6 @@ d_step_out_trap_vaddr_from_return_frame(Arch arch, void *regs)
 {
   ARCH_Info *arch_info = arch_info_from_arch(arch);
   U64 result = arch_ip_from_reg_block(arch_info, regs);
-  if(arch_call_return_address_storage_kind(arch) == ArchCallReturnAddressStorageKind_LinkRegister && result != 0)
-  {
-    result += min_instruction_size_from_arch(arch);
-  }
   return result;
 }
 
@@ -1494,8 +1490,7 @@ d_query_cached_rip_from_thread_unwind(D_Entity *thread, U64 unwind_count)
     D_CallStack callstack = d_call_stack_from_thread(access, thread->handle, 1, 0);
     if(callstack.concrete_frames_count != 0)
     {
-      ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
-      result = arch_ip_from_reg_block(arch_info, callstack.concrete_frames[unwind_count%callstack.concrete_frames_count]->regs);
+      result = callstack.concrete_frames[unwind_count%callstack.concrete_frames_count]->lookup_vaddr;
     }
     access_close(access);
   }

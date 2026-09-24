@@ -2162,14 +2162,14 @@ d_macho_compact_unwind_x64_cfa_from_encoding(D_Handle process_handle, U64 module
 }
 
 internal D_UnwindStepResult
-d_unwind_step__macho_x64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, X64_RegBlock *regs, U8 *reg_valid, U64 endt_us)
+d_unwind_step__macho_x64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, U64 lookup_pc, X64_RegBlock *regs, U8 *reg_valid, U64 endt_us)
 {
   U8 caller_valid[sizeof(*regs)];
   uwnd_reg_valid_from_abi(Arch_x64, OperatingSystem_Mac, reg_valid, caller_valid);
   B32 is_stale = 0;
   B32 is_good = 1;
   Temp scratch = scratch_begin(0, 0);
-  U64 rip_voff = regs->rip - module_base_vaddr;
+  U64 rip_voff = lookup_pc - module_base_vaddr;
   String8 unwind_info_data = d_macho_unwind_info_data_from_module(scratch.arena, module_handle);
   MachO_UnwindInfoLookupResult lookup = {0};
   if(!macho_unwind_info_lookup(unwind_info_data, rip_voff, &lookup))
@@ -2483,7 +2483,7 @@ d_unwind_arm64_epilogue(D_Handle process, Rng1U64 function, ARM64_RegBlock *regs
     {
       if(caller.lr == 0 || !lr_valid || !uwnd_reg_is_valid(Arch_arm64, caller_valid, ARM64_RegCode_sp)) {return 0;}
       *cfa_out = caller.sp;
-      caller.pc = caller.lr >= 4 ? caller.lr-4 : caller.lr;
+      caller.pc = caller.lr;
       caller.lr = 0;
       *regs = caller;
       uwnd_reg_mark_valid(Arch_arm64, caller_valid, ARM64_RegCode_pc, 0);
@@ -2653,7 +2653,7 @@ d_unwind_arm64_prefix(D_Handle process, Rng1U64 function, MachO_UnwindInfoLookup
     {
       *cfa_out = cfa;
       caller.sp = cfa;
-      caller.pc = caller.lr >= 4 ? caller.lr-4 : caller.lr;
+      caller.pc = caller.lr;
       caller.lr = 0;
       *regs = caller;
       uwnd_reg_mark_valid(Arch_arm64, caller_valid, ARM64_RegCode_pc, 0);
@@ -2671,7 +2671,7 @@ d_unwind_step__link_register_arm64(ARM64_RegBlock *regs, U8 *reg_valid)
   B32 is_good = 0;
   if(regs->lr != 0 && uwnd_reg_is_valid(Arch_arm64, reg_valid, ARM64_RegCode_x30))
   {
-    U64 caller_pc = regs->lr >= 4 ? regs->lr - 4 : regs->lr;
+    U64 caller_pc = regs->lr;
     if(caller_pc != regs->pc)
     {
       regs->pc = caller_pc;
@@ -2711,7 +2711,7 @@ d_unwind_step__frame_pointer_arm64(D_Handle process_handle, ARM64_RegBlock *regs
         regs->fp = caller_fp;
         regs->lr = caller_lr;
         regs->sp = frame_fp + 16;
-        regs->pc = caller_lr >= 4 ? caller_lr - 4 : caller_lr;
+        regs->pc = caller_lr;
         if(reg_valid)
         {
           // A bare frame chain says nothing about the other saved registers.
@@ -2732,7 +2732,7 @@ d_unwind_step__frame_pointer_arm64(D_Handle process_handle, ARM64_RegBlock *regs
 }
 
 internal D_UnwindStepResult
-d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, ARM64_RegBlock *regs, U8 *reg_valid, B32 prefer_entry_lr, U64 endt_us)
+d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, U64 lookup_pc, ARM64_RegBlock *regs, U8 *reg_valid, B32 prefer_entry_lr, U64 endt_us)
 {
   B32 is_stale = 0;
   B32 is_good = 0;
@@ -2749,7 +2749,7 @@ d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 
   {
     String8 unwind_info_data = d_macho_unwind_info_data_from_module(scratch.arena, module_handle);
     MachO_UnwindInfoLookupResult lookup = {0};
-    if(macho_unwind_info_lookup(unwind_info_data, regs->pc - module_base_vaddr, &lookup))
+    if(macho_unwind_info_lookup(unwind_info_data, lookup_pc - module_base_vaddr, &lookup))
     {
       switch(lookup.encoding & MACHO_UNWIND_ARM64_MODE_MASK)
       {
@@ -2759,7 +2759,7 @@ d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 
           if(regs->lr != 0 && uwnd_reg_is_valid(Arch_arm64, reg_valid, ARM64_RegCode_x30) &&
              uwnd_reg_is_valid(Arch_arm64, reg_valid, ARM64_RegCode_sp))
           {
-            U64 caller_pc = regs->lr >= 4 ? regs->lr - 4 : regs->lr;
+            U64 caller_pc = regs->lr;
             if(caller_pc != regs->pc)
             {
               regs->pc = caller_pc;
@@ -2817,7 +2817,7 @@ d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 
                 uwnd_reg_mark_valid(Arch_arm64, caller_valid, ARM64_RegCode_x29, 0);
                 regs->lr = caller_lr;
                 regs->sp = frame_fp + 16;
-                regs->pc = caller_lr >= 4 ? caller_lr - 4 : caller_lr;
+                regs->pc = caller_lr;
                 is_good = 1;
               }
             }
@@ -2906,10 +2906,12 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
   D_UnwindFrameNode *first_frame_node = 0;
   D_UnwindFrameNode *last_frame_node = 0;
   U64 frame_node_count = 0;
+  B32 pc_is_return_address = 0;
   if(regs_block_good)
   {
     D_UnwindFrameNode *frame_node = push_array(scratch.arena, D_UnwindFrameNode, 1);
     D_UnwindFrame *f = &frame_node->v;
+    f->lookup_vaddr = arch_ip_from_reg_block(arch_info, regs_block);
     f->regs = push_array_no_zero(arena, U8, arch_reg_block_size);
     MemoryCopy(f->regs, regs_block, arch_reg_block_size);
     f->reg_valid = push_array_no_zero(arena, U8, arch_reg_block_size);
@@ -2927,6 +2929,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
     for(;!unwind.flags && frame_node_count < 256;)
     {
       U64 start_ip = arch_ip_from_reg_block(arch_info, regs_block);
+      U64 lookup_pc = uwnd_lookup_vaddr_from_pc(arch, start_ip, pc_is_return_address);
       U64 start_sp = arch_sp_from_reg_block(arch_info, regs_block);
       
       //- rjf: cancel on zero rip (except the top frame)
@@ -2939,7 +2942,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
       Access *access = access_open();
       
       //- rjf: ip -> module / unpack
-      D_Entity *module_entity = d_module_from_process_vaddr(process_entity, start_ip);
+      D_Entity *module_entity = d_module_from_process_vaddr(process_entity, lookup_pc);
       D_ModuleInfo *module_info = d_info_from_module(access, module_entity->handle);
       UWND_Unwinder unwinder = module_info->unwinder;
       UWND_ModuleInfo unwinder_module_info = {module_entity->vaddr_range.min, module_info->unwind_info, process_entity->os};
@@ -2950,6 +2953,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
       
       //- rjf: do one unwind step
       B32 step_is_good = 0;
+      B32 caller_is_interrupted = 0;
       B32 stop_after_step = 0;
       for(;!unwind.flags && !step_is_good && !stop_after_step;)
       {
@@ -2970,7 +2974,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
           X64_RegBlock *regs_x64 = regs_block;
           MachO_UnwindInfoLookupResult lookup = {0};
           B32 compact_is_stale = 0;
-          B32 compact_lookup_good = macho_unwind_info_lookup(module_info->macho_unwind_info_data, start_ip - module_entity->vaddr_range.min, &lookup);
+          B32 compact_lookup_good = macho_unwind_info_lookup(module_info->macho_unwind_info_data, lookup_pc - module_entity->vaddr_range.min, &lookup);
           B32 compact_dwarf = (compact_lookup_good &&
                                (lookup.encoding & MACHO_UNWIND_X64_MODE_MASK) == MACHO_UNWIND_X64_MODE_DWARF);
           B32 compact_supported = compact_lookup_good && d_macho_compact_unwind_x64_mode_is_supported(lookup.encoding);
@@ -2994,7 +2998,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
                   compact_supported &&
                   compact_cfa_good)
           {
-            D_UnwindStepResult step = d_unwind_step__macho_x64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, regs_x64, reg_valid, endt_us);
+            D_UnwindStepResult step = d_unwind_step__macho_x64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, lookup_pc, regs_x64, reg_valid, endt_us);
             if(step.flags == 0)
             {
               last_frame_node->v.cfa = cfa;
@@ -3017,16 +3021,16 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
         {
           ARM64_RegBlock *regs_arm64 = regs_block;
           MachO_UnwindInfoLookupResult lookup = {0};
-          U64 pc_voff = start_ip - module_entity->vaddr_range.min;
+          U64 pc_voff = lookup_pc - module_entity->vaddr_range.min;
           B32 compact_lookup_good = macho_unwind_info_lookup(module_info->macho_unwind_info_data, pc_voff, &lookup);
           Rng1U64 function_voff_range = d_macho_function_start_voff_range_from_module_voff(module_entity->handle, pc_voff);
           B32 compact_dwarf = (compact_lookup_good &&
                                (lookup.encoding & MACHO_UNWIND_ARM64_MODE_MASK) == MACHO_UNWIND_ARM64_MODE_DWARF);
           B32 compact_supported = compact_lookup_good && d_macho_compact_unwind_arm64_mode_is_supported(lookup.encoding);
           B32 compact_cfa_good = compact_supported && d_macho_compact_unwind_arm64_cfa_from_encoding(&lookup, regs_arm64, &cfa);
-          B32 compact_body = frame_node_count != 1;
+          B32 compact_body = pc_is_return_address;
           B32 instruction_row = 0, instruction_stale = 0;
-          if(frame_node_count == 1 && compact_supported &&
+          if(!pc_is_return_address && compact_supported &&
              function_voff_range.max > function_voff_range.min)
           {
             Rng1U64 function = r1u64(module_entity->vaddr_range.min + function_voff_range.min,
@@ -3062,12 +3066,12 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
                    compact_cfa_good) ||
                   d_unwind_arm64_cfa_from_frame_pointer(regs_arm64, &cfa)))
           {
-            D_UnwindStepResult step = d_unwind_step__macho_arm64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, regs_arm64, reg_valid, 0, endt_us);
+            D_UnwindStepResult step = d_unwind_step__macho_arm64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, lookup_pc, regs_arm64, reg_valid, 0, endt_us);
             if(step.flags == 0)
             {
               last_frame_node->v.cfa = cfa;
               step_is_good = 1;
-              U64 new_ip = arch_ip_from_reg_block(arch_info, regs_block);
+              U64 new_ip = uwnd_lookup_vaddr_from_pc(arch, arch_ip_from_reg_block(arch_info, regs_block), 1);
               D_Entity *new_module_entity = d_module_from_process_vaddr(process_entity, new_ip);
               stop_after_step = (new_ip != 0 && new_module_entity != module_entity);
             }
@@ -3085,7 +3089,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
         if(!unwind.flags && !step_is_good)
         {
           // rjf: try step
-          UWND_StepResult step = uwnd_step(step_unwinder, arch, &memory_map, &step_unwinder_module_info, tls_vaddr, regs_block, reg_valid, &cfa);
+          UWND_StepResult step = uwnd_step(step_unwinder, arch, &memory_map, &step_unwinder_module_info, tls_vaddr, lookup_pc, regs_block, reg_valid, &cfa);
           // rjf: if the step failed -> restore original register values
           if(step.status != UWND_StepStatus_Good)
           {
@@ -3130,6 +3134,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
           // then exit the step loop.
           else if(step.status == UWND_StepStatus_Good)
           {
+            caller_is_interrupted = step.is_interrupted;
             last_frame_node->v.cfa = cfa;
             step_is_good = 1;
           }
@@ -3148,6 +3153,8 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
       {
         D_UnwindFrameNode *frame_node = push_array(scratch.arena, D_UnwindFrameNode, 1);
         D_UnwindFrame *f = &frame_node->v;
+        pc_is_return_address = !caller_is_interrupted;
+        f->lookup_vaddr = uwnd_lookup_vaddr_from_pc(arch, arch_ip_from_reg_block(arch_info, regs_block), pc_is_return_address);
         f->regs = push_array_no_zero(arena, U8, arch_reg_block_size);
         MemoryCopy(f->regs, regs_block, arch_reg_block_size);
         f->reg_valid = push_array_no_zero(arena, U8, arch_reg_block_size);
@@ -3222,7 +3229,7 @@ d_call_stack_from_unwind(Arena *arena, D_Entity *process, D_Unwind *base_unwind)
       // rjf: unpack
       ARCH_Info *arch_info = arch_info_from_arch(arch);
       D_UnwindFrame *src = &base_unwind->frames.v[base_frame_idx];
-      U64 rip_vaddr = arch_ip_from_reg_block(arch_info, src->regs);
+      U64 rip_vaddr = src->lookup_vaddr;
       D_Entity *module = d_module_from_process_vaddr(process, rip_vaddr);
       U64 rip_voff = d_voff_from_vaddr(module, rip_vaddr);
       DI_Key dbgi_key = d_dbgi_key_from_module(module);
@@ -3248,6 +3255,7 @@ d_call_stack_from_unwind(Arena *arena, D_Entity *process, D_Unwind *base_unwind)
         dst_inline->v.regs         = src->regs;
         dst_inline->v.reg_valid    = src->reg_valid;
         dst_inline->v.cfa          = src->cfa;
+        dst_inline->v.lookup_vaddr = src->lookup_vaddr;
         frame_count += 1;
         inline_frame_count += 1;
       }
@@ -3259,6 +3267,7 @@ d_call_stack_from_unwind(Arena *arena, D_Entity *process, D_Unwind *base_unwind)
       dst_base->v.regs         = src->regs;
       dst_base->v.reg_valid    = src->reg_valid;
       dst_base->v.cfa          = src->cfa;
+      dst_base->v.lookup_vaddr = src->lookup_vaddr;
       frame_count += 1;
       
       // rjf: hook up inline frames to point to concrete frame, and to account for inline depth
@@ -8161,7 +8170,7 @@ d_call_stack_tree_artifact_create(String8 key, B32 *cancel_signal, AC_Status *st
       D_CallStackTreeNode *thread_node = tree->root;
       for EachIndex(frame_idx, call_stack.frames_count)
       {
-        U64 vaddr = arch_ip_from_reg_block(arch_info, call_stack.frames[frame_idx].regs);
+        U64 vaddr = call_stack.frames[frame_idx].lookup_vaddr;
         U64 depth = call_stack.frames[frame_idx].inline_depth;
         D_CallStackTreeNode *next_node = &d_call_stack_tree_node_nil;
         for(D_CallStackTreeNode *child = thread_node->first; child != &d_call_stack_tree_node_nil; child = child->next)

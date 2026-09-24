@@ -157,7 +157,7 @@ rd_debug_eval(Arena *arena, String8 request)
         {
           D_CallStackFrame *frame = &stack->frames[frame_idx];
           ARCH_Info *arch = arch_info_from_arch(thread->arch);
-          U64 pc = arch_ip_from_reg_block(arch, frame->regs);
+          U64 pc = frame->lookup_vaddr;
           D_Entity *module = d_module_from_process_vaddr(process, pc);
           U64 voff = d_voff_from_vaddr(module, pc);
           RDI_Parsed *rdi = di_rdi_from_key(access, d_dbgi_key_from_module(module), 1, endt_us);

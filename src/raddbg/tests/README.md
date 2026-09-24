@@ -285,6 +285,14 @@ tuple, not permanent handles. PC/SP/CFA and offsets are hexadecimal strings;
 zero CFA means the engine did not supply one. These fields make no claim that
 arbitrary caller registers are available.
 
+`pc` is the raw saved register value. `lookup_pc` identifies the calling
+instruction for ordinary caller frames (PC minus 4 on ARM64, minus 1 on x64);
+live and interrupted contexts keep the exact PC. Module offsets, symbols,
+source locations and evaluation scopes use `lookup_pc`. Register expressions
+and `debug_eval`'s `frame_pc` identity check use `pc`; Step Out also resumes at
+the raw return address. Inline frames share both addresses with their physical
+frame.
+
 Source paths preserve recorded case and use RAD's debug-info-relative path
 resolution. Missing inline line tables produce missing source, not a shifted
 location from another inline depth. Empty function/path fields mean no
