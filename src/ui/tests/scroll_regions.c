@@ -103,11 +103,13 @@ scroll_region_diagnostics(ScrollTestWindow *ws)
     for(U32 frame = 0; frame < 3; frame += 1)
     {
       UI_EventList events = {0};
-      UI_EventNode wheel = {.v = {.kind = UI_EventKind_Scroll, .pos = {50, 50}, .delta_2f32 = {0, 5}, .scroll_is_precise = 1}};
+      UI_EventNode wheel = {.v = {.kind = UI_EventKind_Scroll, .pos = {350, 250}, .delta_2f32 = {0, 5}, .scroll_is_precise = 1}};
       if(frame == 2) { events.first = events.last = &wheel; events.count = 1; }
       UI_IconInfo icons = {0};
       UI_AnimationInfo animation = {0};
+      animation.scroll_animation_rate = animation.hot_animation_rate = 1.f;
       ui_begin_build(ws->os, &events, &icons, ws->theme, &animation, 1.f/60, 1.f/60);
+      ui_state->mouse = v2f32(350, 250);
       UI_Font(fnt_tag_from_path(str8_lit("data/segoeui.ttf"))) UI_FontSize(16)
       {
         UI_ScrollListParams list = {0};
@@ -116,8 +118,15 @@ scroll_region_diagnostics(ScrollTestWindow *ws)
         list.item_range = r1s64(0, 100);
         list.precise_scroll = 1;
         Rng1S64 rows = {0};
+        ui_set_next_fixed_x(300);
+        ui_set_next_fixed_y(200);
         ui_scroll_list_begin(&list, &pt, 0, 0, &rows, 0);
         UI_Box *content = ui_top_parent();
+        if(frame == 1)
+        {
+          UI_Key bar_key = ui_key_from_stringf(content->key, "scroll_region_bar_%i", Axis2_Y);
+          ScrollCheck(!ui_box_is_nil(ui_box_from_key(bar_key)), "hovering list shows its scrollbar");
+        }
         ScrollCheck(content->view_off.y == 10 && rows.min == 4, "list keeps fractional row offset");
         ui_scroll_list_end();
         ui_end_build();
