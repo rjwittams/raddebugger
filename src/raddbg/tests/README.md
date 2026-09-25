@@ -132,6 +132,13 @@ serialized clients. `Client.evaluate(stop, frame, expression)` constructs the
 request from a `debug_snapshot` result; frame is a logical frame ID in that
 snapshot. The context is valid only for the same RAD instance.
 
+Send `debug_eval` as the sole command, with the entire request in one shell
+argument. The receiver passes that payload directly to the Metadesk parser:
+spaces, minus signs, slashes and semicolons inside `expr` are data, not CLI
+options or command separators. This does not change the legacy `eval` command
+or the legacy text-command parser. Semicolon batching is not supported for
+`debug_eval`.
+
 Required fields are `run_gen`, `stop_count`, `mem_gen`, `reg_gen`,
 `process_handle`, `thread_id`, `frame`, `frame_pc`, `unwind_index`,
 `inline_depth` and `expr`. The first four and process/thread identity come

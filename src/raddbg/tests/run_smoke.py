@@ -380,7 +380,9 @@ def run_case(a, case):
         assert client.value('input') == '20'
         assert client.value('doubled') == '40'
         if case == 'c-eval':
-            for frame, expr, expected in ((1, 'seed', 20), (0, 'doubled', 40), (1, 'seed-20', 0)):
+            for frame, expr, expected in ((1, 'seed', 20), (0, 'doubled', 40), (1, 'seed-20', 0),
+                                          (0, 'doubled -1 + input', 59), (1, 'seed - 20', 0),
+                                          (0, 'doubled / 2', 20), (0, "';'", 59)):
                 value = client.evaluated(stopped, frame, expr)
                 assert value['status'] == 'ready', value
                 assert int.from_bytes(bytes.fromhex(value['value']['bytes']), 'little', signed=True) == expected, value
