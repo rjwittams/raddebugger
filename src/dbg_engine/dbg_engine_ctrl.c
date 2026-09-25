@@ -6999,10 +6999,10 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
           log_infof("sp_check_value = 0x%I64x\n", sp_check_value);
         }
       }
-      D_TrapFlags pre_single_step_trap_flags = hit_trap_flags;
       
       //- rjf: trap net logic: single step after hit
       B32 single_step_stop = 0;
+      D_TrapFlags post_step_trap_flags = 0;
       D_EventCause single_step_stop_cause = D_EventCause_Null;
       if(!hard_stop && use_trap_net_logic)
       {
@@ -7046,21 +7046,11 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
 
           if(!single_step_stop)
           {
-            D_TrapFlags post_step_trap_flags = 0;
             for(D_TrapNode *node = msg->traps.first; node != 0; node = node->next)
             {
               if(node->v.vaddr == thread_post_rip)
               {
                 post_step_trap_flags |= node->v.flags;
-              }
-            }
-            if(post_step_trap_flags != 0)
-            {
-              hit_trap_flags |= post_step_trap_flags;
-              if(!(pre_single_step_trap_flags & D_TrapFlag_SaveStackPointerBefore))
-              {
-                U64 sp = d_sp_from_thread(target_thread);
-                stack_pointer_check_passes = ((hit_trap_flags & D_TrapFlag_IgnoreStackPointerCheck) || (sp == sp_check_value));
               }
             }
           }
@@ -7098,7 +7088,13 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       B32 trap_net_stop = 0;
       if(!hard_stop && use_trap_net_logic)
       {
-        if(hit_trap_flags & D_TrapFlag_EndStepping) LogInfoNamedBlockF("trap_net__end_step")
+        // A newly reached trap may stop here, but its instruction actions have not run.
+        // Leave traps requiring those actions to the next iteration of the run loop.
+        B32 post_step_stop = ((post_step_trap_flags & D_TrapFlag_EndStepping) &&
+                             !(post_step_trap_flags & ~(D_TrapFlag_EndStepping|D_TrapFlag_IgnoreStackPointerCheck)) &&
+                             ((post_step_trap_flags & D_TrapFlag_IgnoreStackPointerCheck) ||
+                              d_sp_from_thread(target_thread) == sp_check_value));
+        if((hit_trap_flags & D_TrapFlag_EndStepping) || post_step_stop) LogInfoNamedBlockF("trap_net__end_step")
         {
           trap_net_stop = 1;
           use_trap_net_logic = 0;

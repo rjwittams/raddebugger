@@ -422,6 +422,20 @@ def run_case(a, case):
         assert stopped['process_count'] == 0, stopped
         assert stopped['last_process_end'] == dict(sequence=end_sequence+1, process_id=target_pid,
                                                   exit_code=37 if case == 'c-exit-37' else 0), stopped
+        if case == 'c':
+            # Step over the whole call as well as stepping into and out of it above.
+            client.stopped('restart')
+            stopped = client.stopped('step_over_line')
+            call_line = next(i for i, line in enumerate(source.read_text().splitlines(), 1)
+                             if 'result = leaf(seed)' in line)
+            frame = stopped['stack']['frames'][0]
+            assert frame['function'] == 'main' and frame['source']['line'] == call_line, stopped
+            stopped = client.stopped('step_over_line')
+            frame = stopped['stack']['frames'][0]
+            assert frame['function'] == 'main' and frame['source']['line'] == call_line+1, stopped
+            assert client.value('result') == '41'
+            ended = client.stopped('run')
+            assert ended['process_count'] == 0 and ended['last_process_end']['exit_code'] == 0, ended
         if case == 'c-detach':
             stopped = client.stopped('restart')
             check_loader_frame(stopped)
