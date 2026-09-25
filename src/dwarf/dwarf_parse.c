@@ -1250,6 +1250,8 @@ dw2_read_offset_table(String8 data, U64 off, DW_SectionKind section_kind, DW2_Of
         off += str8_deserial_read_struct(data, off, &offset_count);
       }
       if(entry_size == 0 || off > unit_data_off_opl ||
+         (section_kind == DW_SectionKind_Addr &&
+          (addr_size == 0 || addr_size > sizeof(U64) || segment_selector_size > sizeof(U64))) ||
          (is_list && offset_count > (unit_data_off_opl-off)/entry_size))
       {
         return unit_data_off_opl-start_off;
