@@ -200,6 +200,7 @@ rd_debug_eval(Arena *arena, String8 request)
             base.thread_arch = thread->arch;
             base.thread_unwind_count = frame->unwind_count;
             base.debug_info_match_endt_us = endt_us;
+            base.debug_info_match_stale_out = &read.pending;
             base.space_read = rd_debug_eval_space_read;
             D_EntityArray modules = d_entity_array_from_kind(D_EntityKind_Module);
             B32 other_debug_info_pending = 0;

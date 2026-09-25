@@ -1952,7 +1952,7 @@ di_match_from_string(String8 string, U32 match_index, U32 unit_idx, B32 allow_ot
     String8 key = str8_list_join(scratch.arena, &key_parts, 0);
     U64 dbgi_count = di_load_count();
     B32 wide = (dbgi_count > 256 && allow_other_dbgis);
-    AC_Artifact artifact = ac_artifact_from_key(access, key, di_match_artifact_create, 0, endt_us, .flags = wide ? AC_Flag_Wide : 0, .gen = di_load_gen(), .evict_threshold_us = wide ? 20000000 : 10000000);
+    AC_Artifact artifact = ac_artifact_from_key(access, key, di_match_artifact_create, 0, endt_us, .flags = wide ? AC_Flag_Wide : 0, .gen = di_load_gen(), .evict_threshold_us = wide ? 20000000 : 10000000, .stale_out = &result.stale);
     result.key.u64[0]   = artifact.u64[0];
     result.key.u64[1]   = artifact.u64[1];
     result.section_kind = artifact.u64[2];
