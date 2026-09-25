@@ -202,6 +202,7 @@ rd_debug_eval(Arena *arena, String8 request)
             base.debug_info_match_endt_us = endt_us;
             base.space_read = rd_debug_eval_space_read;
             D_EntityArray modules = d_entity_array_from_kind(D_EntityKind_Module);
+            B32 other_debug_info_pending = 0;
             base.modules = push_array(scratch.arena, E_Module, modules.count);
             base.dbg_infos = push_array(scratch.arena, E_DbgInfo, modules.count);
             E_String2NumMap module_names = e_string2num_map_make(scratch.arena, 64);
@@ -218,9 +219,12 @@ rd_debug_eval(Arena *arena, String8 request)
               em->arch = m->arch; em->vaddr_range = m->vaddr_range; em->space = process_space;
               em->name = m->string; em->dbg_info_num = num+1;
               ed->dbgi_key = d_dbgi_key_from_module(m);
-              ed->rdi = m == module ? rdi : di_rdi_from_key(access, ed->dbgi_key, 1, endt_us);
+              ed->rdi = m == module ? rdi : di_rdi_from_key(access, ed->dbgi_key, 0, 0);
               ed->name = d_entity_child_from_kind(m, D_EntityKind_DebugInfoPath)->string;
-              if(ed->rdi->raw_data_size == 0 && di_load_status_from_key(ed->dbgi_key) == DI_LoadStatus_Pending) {read.pending = 1;}
+              if(ed->rdi->raw_data_size == 0 && di_load_status_from_key(ed->dbgi_key) == DI_LoadStatus_Pending)
+              {
+                other_debug_info_pending = 1;
+              }
               e_string2num_map_insert(scratch.arena, &module_names, m->string, num+1);
               e_string2num_map_insert(scratch.arena, &module_names, str8_skip_last_slash(m->string), num+1);
               e_string2num_map_insert(scratch.arena, &info_names, ed->name, num+1);
@@ -245,6 +249,9 @@ rd_debug_eval(Arena *arena, String8 request)
             B32 scalar = size != 0 && size <= sizeof(E_Value) &&
               (e_type_kind_is_basic_or_enum(kind) || kind == E_TypeKind_Ptr || kind == E_TypeKind_Bitfield);
             if(scalar && eval.code == E_InterpretationCode_Good && eval.msgs.count == 0) {eval = e_value_eval_from_eval(eval);}
+            // A successful evaluation need not wait for unrelated modules. A
+            // failed evaluation may still need their symbols or types.
+            read.pending |= other_debug_info_pending && (eval.msgs.count != 0 || eval.code != E_InterpretationCode_Good);
             status = str8_lit("error"); reason = str8_lit("Expression did not produce a value.");
             if(eval.msgs.first) {reason = eval.msgs.first->text;}
             if(eval.code != E_InterpretationCode_Good) {reason = e_interpretation_code_display_strings[eval.code];}
