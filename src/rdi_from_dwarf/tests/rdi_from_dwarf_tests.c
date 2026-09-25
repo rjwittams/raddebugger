@@ -114,6 +114,78 @@ Test(d2r_line_extended_opcode)
   }
 }
 
+Test(d2r_inline_sequence_end)
+{
+  // A row at end_sequence has no address range. It must not cover the gap
+  // before the next sequence when inline caller/body tables are constructed.
+  U8 abbrev[] = {1,0x11,1, 3,8, 0x1b,8, 0x10,0x17, 0x11,1, 0x12,6, 0,0,
+                 2,0x2e,1, 3,8, 0x11,1, 0x12,6, 0,0,
+                 3,0x1d,0, 3,8, 0x11,1, 0x12,6, 0x58,0x0b, 0x59,0x0b, 0,0, 0};
+  U8 info[] = {0,0,0,0, 4,0, 0,0,0,0, 8, 1,
+               'm','a','i','n','.','c',0, '/','s','r','c',0,
+               0,0,0,0, 0,0x10,0,0,0,0,0,0, 0,0x20,0,0,
+               2,'f',0, 0,0x10,0,0,0,0,0,0, 8,0,0,0,
+               3,'g',0, 0,0x10,0,0,0,0,0,0, 4,0,0,0, 1,40, 0,0};
+  U32 info_size = sizeof(info)-4;
+  MemoryCopy(info, &info_size, 4);
+  U8 header[] = {0,0,0,0, 4,0, 0,0,0,0, 1,1,1,0xfb,14,13,
+                 0,1,1,1,1,0,0,0,1,0,0,1, 0,
+                 'm','a','i','n','.','c',0, 0,0,0, 0};
+  U32 header_size = sizeof(header)-10;
+  MemoryCopy(header+6, &header_size, 4);
+  U8 first[] = {0,9,2, 0,0x10,0,0,0,0,0,0, 1, 3,1, 2,4, 1, 3,1, 2,4, 1, 0,1,1};
+  U8 second[] = {0,9,2, 0,0x20,0,0,0,0,0,0, 1, 3,1, 2,4, 1, 2,4, 0,1,1};
+  String8List parts = {0};
+  str8_list_push(arena, &parts, str8_array_fixed(header));
+  str8_list_push(arena, &parts, str8_array_fixed(first));
+  str8_list_push(arena, &parts, str8_array_fixed(second));
+  String8 lines = str8_list_join(arena, &parts, 0);
+  U32 line_size = lines.size-4;
+  MemoryCopy(lines.str, &line_size, 4);
+  RDIM_BinarySectionNode section = {0};
+  section.v.voff_first = 0x1000;
+  section.v.voff_opl = 0x3000;
+  D2R_ConvertParams params = {0};
+  params.arch = Arch_x64;
+  params.path_style = PathStyle_UnixAbsolute;
+  params.subset_flags = RDIM_SubsetFlag_All;
+  params.deterministic = 1;
+  params.binary_sections.first = params.binary_sections.last = &section;
+  params.binary_sections.count = 1;
+  params.raw.sec[DW_SectionKind_Info].data = str8_array_fixed(info);
+  params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+  params.raw.sec[DW_SectionKind_Line].data = lines;
+  U64 broadcast = 0;
+  LaneCtx restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
+  Arena *convert_arena = arena_alloc();
+  RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+  lane_ctx(restore);
+  TestCheck(result.units.total_count == 1);
+  RDIM_Unit *unit = &result.units.first->v[0];
+  TestCheck(unit->inline_sites.total_count == 1);
+  RDIM_LineTable *table = unit->line_table;
+  U64 seq_idx = 0;
+  for EachNode(n, RDIM_LineSequenceNode, table->first_seq)
+  {
+    RDIM_LineSequence *seq = &n->v;
+    test_outf("sequence %I64u: %I64u rows, range [%I64x, %I64x)\n",
+              seq_idx, seq->line_count, seq->voffs[0], seq->voffs[seq->line_count]);
+    TestCheck(seq->voffs[seq->line_count] == (seq_idx == 0 ? 0x1008 : 0x2008));
+    TestCheck(seq->line_count == 2);
+    TestCheck(seq->voffs[0] == (seq_idx == 0 ? 0x1000 : 0x2000));
+    TestCheck(seq->voffs[1] == (seq_idx == 0 ? 0x1004 : 0x2004));
+    TestCheck(seq->line_nums[0] == (seq_idx == 0 ? 40 : 1));
+    TestCheck(seq->line_nums[1] == 2);
+    seq_idx += 1;
+  }
+  TestCheck(table->seq_count == 2);
+  RDIM_LineTable *inline_table = unit->inline_sites.first->v[0].line_table;
+  TestCheck(inline_table->seq_count == 1 && inline_table->line_count == 1);
+  RDIM_LineSequence *body = &inline_table->first_seq->v;
+  TestCheck(body->voffs[0] == 0x1000 && body->voffs[1] == 0x1004 && body->line_nums[0] == 1);
+  arena_release(convert_arena);
+}
+
 Test(d2r_sparse_units)
 {
   // Keep line decoding and empty child lists independently testable.
