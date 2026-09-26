@@ -85,7 +85,11 @@ def main():
         cases += ['language-'+x for x in language_basics.LANGUAGES]
     statuses = [run_case(a, case)['status'] for case in cases]
     # An explicitly requested unsupported case is not a passing test.
-    return 1 if 'fail' in statuses else 2 if 'uncovered' in statuses else 0
+    if 'fail' in statuses:
+        return 1
+    if 'uncovered' in statuses or ('skipped' in statuses and a.case not in ('all', 'languages')):
+        return 2
+    return 0
 
 
 def run_case(a, case):
@@ -94,7 +98,7 @@ def run_case(a, case):
     record = dict(status='running', case=case, host=platform.node(), os=platform.platform(),
                   arch=platform.machine(), debugger=str(a.debugger), commands=[])
     session = 'rad-smoke-' + uuid.uuid4().hex[:10]
-    launched = False
+    launch_attempted = False
     client = None
     def run(command, **kwargs):
         record['commands'].append([str(x) for x in command])
@@ -113,16 +117,16 @@ def run_case(a, case):
         return result.stdout
     try:
         if case in ELF_CASES and platform.system() != 'Linux':
-            record.update(status='uncovered', reason='Requires the Linux ELF module loader')
+            record.update(status='skipped', reason='Requires the Linux ELF module loader')
             return record
         if case in ARM_CASES and (platform.system() != 'Darwin' or platform.machine() != 'arm64'):
-            record.update(status='uncovered', reason='Requires a native macOS ARM64 debugger and target')
+            record.update(status='skipped', reason='Requires a native macOS ARM64 debugger and target')
             return record
         if case.startswith('c-assert') and os.name == 'nt':
-            record.update(status='uncovered', reason='Fixture requires __builtin_trap; the Windows runner uses MSVC')
+            record.update(status='skipped', reason='Fixture requires __builtin_trap; the Windows runner uses MSVC')
             return record
         if case == 'symbol-library' and platform.system() != 'Darwin':
-            record.update(status='uncovered', reason='Mach-O name-only symbol provider; ELF/PE providers not implemented')
+            record.update(status='skipped', reason='Mach-O name-only symbol provider; ELF/PE providers not implemented')
             return record
         record['debugger_sha256'] = sha(a.debugger)
         record['sender_sha256'] = sha(a.sender)
@@ -213,9 +217,10 @@ def run_case(a, case):
                            + breakpoint, encoding='utf-8')
         argv = [str(a.debugger), '--user:'+str(output/'test.user'), '--project:'+str(project), '--logs:'+str(output/'logs')]
         command = subprocess.list2cmdline(argv) if os.name == 'nt' else shlex.join(argv)
+        # The server may create the session before the launch command times out.
+        launch_attempted = True
         run(['cleat', 'launch', session, '--tag', 'project=raddbg', '--tag', 'purpose=test',
              '--cwd', str(output), '--cmd', command], timeout=20)
-        launched = True
         # Unix cleat launches RAD directly; Windows cleat may use a shell.
         info = run(['cleat', 'inspect', session, '--json'], timeout=10)
         record['cleat_inspect'] = json.loads(info)
@@ -460,7 +465,7 @@ def run_case(a, case):
                 stopped = client.stopped('restart')
                 assert stopped['last_process_end'] == detached_end, stopped
         record['status'] = 'pass'
-    except FileNotFoundError as error:
+    except language_basics.Uncovered as error:
         record.update(status='uncovered', reason=str(error))
     except Exception as error:
         record['status'] = 'fail'
@@ -485,7 +490,7 @@ def run_case(a, case):
             except Exception as error:
                 record['cleanup_error'] = repr(error)
                 record['status'] = 'fail'
-        if launched:
+        if launch_attempted:
             try:
                 run(['cleat', 'capture', session], timeout=10)
             except Exception as error:

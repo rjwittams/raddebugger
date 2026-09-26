@@ -16,7 +16,7 @@ the lookup only considers the owned session leader and its direct children.
 Linux fixture builds use Clang. `c-elf-exec` and `c-elf-pie` run the ordinary
 C stepping/evaluation checks with explicitly non-PIE and PIE executables.
 They verify the resulting ELF type before launching; other hosts report
-these Linux-loader cases as uncovered. Their `-no-index` variants omit the
+these Linux-loader cases as skipped. Their `-no-index` variants omit the
 optional `.eh_frame_hdr` count/table encodings in the generated executable,
 leaving its unwind records intact, then run the same C assertions. These
 check ELF unwind-index synthesis for both executable types.
@@ -41,11 +41,23 @@ cannot hold a pipe open indefinitely. `result.json` includes failure and
 cleanup details, plus a best-effort `state` query on failure. A dirty source tree is recorded, not silently
 identified as its HEAD commit. Binary hashes identify the executable tested;
 the runner does not prove that a supplied binary matches the current source.
+Cleanup attempts to kill the uniquely named owned cleat session even when
+launch times out. A failed cleanup is retained alongside the original error;
+the runner does not claim that the session was removed in that case.
 
-Exit status is 0 for passed cases, 1 for failure, and 2 for uncovered cases
-(missing tool or unsupported host). `all` runs the built-in cases and adds the
-language cases when `--examples` is supplied; ARM64-only cases
-remain visibly uncovered on other hosts. Use `--case c`, `c-exit-37`, or
+Runner failure-path tests need only Python, with external commands simulated:
+
+```sh
+python3 -m unittest discover -s src/raddbg/tests -p 'test_*.py'
+```
+
+Exit status is 1 if any case fails, 2 for uncovered optional language tools or
+an explicitly requested platform-inapplicable case, and 0 otherwise. Platform
+exclusions are recorded as `skipped`, not `pass`; batch runs tolerate those skips.
+Missing required files or tools (including RAD, cleat and the C compiler) fail.
+`all` runs the built-in cases and adds the language cases when `--examples` is
+supplied; ARM64-only cases remain visibly skipped on other hosts.
+Use `--case c`, `c-exit-37`, or
 `c-detach` for the portable C checks. `c-memory` also checks that an unmapped
 scalar, an unmapped pointer slot and arithmetic requiring an unmapped read
 render as `<unavailable>`, while a valid local and a zero-valued expression
@@ -86,8 +98,8 @@ in a header and its call inside a lexical block. It checks each frame's
 source file/line, inline depth and shared physical registers, then normal exit.
 Both cases pass on macOS ARM64 and Linux x64 with Clang/DWARF, and on Windows
 x64 with MSVC/PDB. `all` contains 25 built-in cases; the eleven ARM64-only cases remain
-uncovered on other hosts. The Mach-O `symbol-library` case is also uncovered
-on Linux and Windows; the four ELF cases are uncovered outside Linux.
+skipped on other hosts. The Mach-O `symbol-library` case is also skipped
+on Linux and Windows; the four ELF cases are skipped outside Linux.
 Supplying `--examples` adds the five language cases, for 30 total.
 These results do not cover Intel Mac live debugging.
 
@@ -206,7 +218,7 @@ require the stopped PC to point at Clang's `BRK #1`, since an instruction
 after the trap can still share its source line. Only the unoptimized case
 checks the parameter value: the optimized fixture exposes a separate missing
 parameter-location result, despite LLDB and the raw x0 register showing 20.
-The Windows/MSVC runner reports these two cases as uncovered. Continuing
+The Windows/MSVC runner reports these two cases as skipped. Continuing
 after this noreturn builtin is not valid target behavior; use `line_step.S`
 and `line_step_ipc.py --case over` to check resumption after a returning trap.
 

@@ -9,6 +9,10 @@ import sys
 LANGUAGES = ['c', 'cpp', 'rust', 'odin', 'zig']
 
 
+class Uncovered(Exception):
+    """The examples builder explicitly reported unavailable language coverage."""
+
+
 def build(examples, language, output, run, record):
     if examples is None:
         raise FileNotFoundError('Language cases require --examples pointing to raddebugger_examples')
@@ -24,12 +28,12 @@ def build(examples, language, output, run, record):
             metadata = json.loads((output/'build.json').read_text())
             if metadata.get('status') == 'uncovered':
                 record['language_build'] = metadata
-                raise FileNotFoundError(metadata['reason']) from error
+                raise Uncovered(metadata['reason']) from error
         raise
     metadata = json.loads((output/'build.json').read_text())
     record['language_build'] = metadata
     if metadata.get('status') == 'uncovered':
-        raise FileNotFoundError(metadata['reason'])
+        raise Uncovered(metadata['reason'])
     return metadata
 
 
