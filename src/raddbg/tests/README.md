@@ -56,7 +56,11 @@ Cases cover source breakpoint identity/path, restart, Over/Into/Out, leaf and
 caller locals, frame selection, exit 0 and exit 37, and detach after a previous
 normal exit. On macOS the basic C cases also require one startup frame mapped
 to `/usr/lib/dyld` at the first stop and after stepping; the detach case checks
-it again after restart. This checks module discovery, not a symbol-name fallback.
+it again after restart. On Windows and macOS, the detach case then launches a
+new target and checks that no delayed process-end event overwrites the detach
+record. Linux is excluded from this last assertion pending its backend detach
+cleanup fix; the immediate detach identity and unknown exit-code checks still run.
+The dyld check covers module discovery, not a symbol-name fallback.
 The ARM64 cases check compact/EH-frame instruction boundaries, plus cold
 TLS red-zone preservation. `unwind-shrink-wrap` adds a conditional early
 return before the frame-record prologue and checks every fall-through

@@ -5977,7 +5977,7 @@ d_ctrl_thread__detach(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   B32 detach_worked = dmn_ctrl_detach(ctrl_ctx, process);
   
   //- consume synthetic process-removal events
-#if OS_MAC
+#if OS_MAC || OS_WINDOWS
   if(detach_worked)
   {
     DMN_RunCtrls run_ctrls = {0};
@@ -6003,7 +6003,7 @@ d_ctrl_thread__detach(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   //- rjf: record stop
   {
     D_EventList evts = {0};
-#if !OS_MAC
+#if OS_LINUX
     if(detach_worked)
     {
       D_Event *end_event = d_event_list_push(scratch.arena, &evts);

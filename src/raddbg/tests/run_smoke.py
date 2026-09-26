@@ -454,6 +454,11 @@ def run_case(a, case):
             assert stopped['last_process_end']['sequence'] == end_sequence+1, stopped
             assert stopped['last_process_end']['exit_code'] is None, stopped
             assert stopped['last_process_end']['process_id'] == detached_pid, stopped
+            # Linux still retains detached backend records; track that separately.
+            if sys.platform != 'linux':
+                detached_end = stopped['last_process_end']
+                stopped = client.stopped('restart')
+                assert stopped['last_process_end'] == detached_end, stopped
         record['status'] = 'pass'
     except FileNotFoundError as error:
         record.update(status='uncovered', reason=str(error))
