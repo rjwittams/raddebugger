@@ -441,6 +441,7 @@ def run_case(a, case):
         if case == 'c-detach':
             stopped = client.stopped('restart')
             check_loader_frame(stopped)
+            detached_pid = stopped['process_id']
             end_sequence = stopped['last_process_end']['sequence']
             client.command(['detach', 'query:control.'+stopped['process_handle']])
             deadline = time.monotonic()+10
@@ -452,6 +453,7 @@ def run_case(a, case):
             assert stopped['process_count'] == 0, stopped
             assert stopped['last_process_end']['sequence'] == end_sequence+1, stopped
             assert stopped['last_process_end']['exit_code'] is None, stopped
+            assert stopped['last_process_end']['process_id'] == detached_pid, stopped
         record['status'] = 'pass'
     except FileNotFoundError as error:
         record.update(status='uncovered', reason=str(error))

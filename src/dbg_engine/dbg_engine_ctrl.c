@@ -6010,6 +6010,7 @@ d_ctrl_thread__detach(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       end_event->kind   = D_EventKind_EndProc;
       end_event->msg_id = msg->msg_id;
       end_event->entity = msg->entity;
+      end_event->entity_id = d_entity_from_handle(msg->entity)->id;
     }
 #endif
     D_Event *event = d_event_list_push(scratch.arena, &evts);
