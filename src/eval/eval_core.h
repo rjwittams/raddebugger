@@ -817,6 +817,7 @@ struct E_BaseCtx
   E_String2NumMap *dbg_info_from_name_map;
   U64 debug_info_match_endt_us;
   B32 *debug_info_match_stale_out; // ORs in staleness from every lookup used during evaluation.
+  DI_KeyArray *debug_info_match_scope; // Null searches all loaded debug info; an empty scope searches none.
   
   // rjf: modules
   E_Module *modules;

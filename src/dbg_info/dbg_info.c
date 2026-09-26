@@ -1633,6 +1633,8 @@ di_match_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_out,
   B32 allow_other_dbgis = 0;
   String8 name = {0};
   DI_Key preferred_key = {0};
+  B32 scoped = 0;
+  DI_KeyArray dbgi_keys = {0};
   {
     U64 key_read_off = 0;
     key_read_off += str8_deserial_read_struct(key, key_read_off, &index);
@@ -1642,6 +1644,13 @@ di_match_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_out,
     key_read_off += str8_deserial_read_struct(key, key_read_off, &name.size);
     name.str = push_array_no_zero(scratch.arena, U8, name.size);
     key_read_off += str8_deserial_read(key, key_read_off, name.str, name.size, 1);
+    key_read_off += str8_deserial_read_struct(key, key_read_off, &scoped);
+    if(scoped)
+    {
+      key_read_off += str8_deserial_read_struct(key, key_read_off, &dbgi_keys.count);
+      dbgi_keys.v = push_array_no_zero(scratch.arena, DI_Key, dbgi_keys.count);
+      key_read_off += str8_deserial_read(key, key_read_off, dbgi_keys.v, sizeof(DI_Key)*dbgi_keys.count, 1);
+    }
   }
   
   //- rjf: find split point between container part of name & "leaf"
@@ -1715,8 +1724,8 @@ di_match_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_out,
     fully_qualified_name = str8_list_join(scratch.arena, &parts, &join);
   }
   
-  //- rjf: get all loaded keys
-  DI_KeyArray dbgi_keys = di_push_all_loaded_keys(scratch.arena);
+  // Unscoped callers search all loaded debug info; scoped callers supply the candidates.
+  if(!scoped) {dbgi_keys = di_push_all_loaded_keys(scratch.arena);}
   
   //- rjf: take cancellation signal
   B32 cancelled = 0;
@@ -1936,7 +1945,7 @@ di_match_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_out,
 }
 
 internal DI_Match
-di_match_from_string(String8 string, U32 match_index, U32 unit_idx, B32 allow_other_dbgis, DI_Key preferred_dbgi_key, U64 endt_us)
+di_match_from_string(String8 string, U32 match_index, U32 unit_idx, B32 allow_other_dbgis, DI_Key preferred_dbgi_key, U64 endt_us, DI_KeyArray *scope)
 {
   DI_Match result = {0};
   Access *access = access_open();
@@ -1949,8 +1958,15 @@ di_match_from_string(String8 string, U32 match_index, U32 unit_idx, B32 allow_ot
     str8_list_push(scratch.arena, &key_parts, str8_struct(&preferred_dbgi_key));
     str8_list_push(scratch.arena, &key_parts, str8_struct(&string.size));
     str8_list_push(scratch.arena, &key_parts, string);
+    B32 scoped = (scope != 0);
+    str8_list_push(scratch.arena, &key_parts, str8_struct(&scoped));
+    if(scoped)
+    {
+      str8_list_push(scratch.arena, &key_parts, str8_struct(&scope->count));
+      str8_list_push(scratch.arena, &key_parts, str8((U8 *)scope->v, sizeof(DI_Key)*scope->count));
+    }
     String8 key = str8_list_join(scratch.arena, &key_parts, 0);
-    U64 dbgi_count = di_load_count();
+    U64 dbgi_count = scoped ? scope->count : di_load_count();
     B32 wide = (dbgi_count > 256 && allow_other_dbgis);
     AC_Artifact artifact = ac_artifact_from_key(access, key, di_match_artifact_create, 0, endt_us, .flags = wide ? AC_Flag_Wide : 0, .gen = di_load_gen(), .evict_threshold_us = wide ? 20000000 : 10000000, .stale_out = &result.stale);
     result.key.u64[0]   = artifact.u64[0];

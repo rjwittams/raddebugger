@@ -203,6 +203,9 @@ rd_debug_eval(Arena *arena, String8 request)
             base.debug_info_match_stale_out = &read.pending;
             base.space_read = rd_debug_eval_space_read;
             D_EntityArray modules = d_entity_array_from_kind(D_EntityKind_Module);
+            DI_KeyArray match_scope = {0};
+            match_scope.v = push_array(scratch.arena, DI_Key, modules.count);
+            base.debug_info_match_scope = &match_scope;
             B32 other_debug_info_pending = 0;
             base.modules = push_array(scratch.arena, E_Module, modules.count);
             base.dbg_infos = push_array(scratch.arena, E_DbgInfo, modules.count);
@@ -220,6 +223,7 @@ rd_debug_eval(Arena *arena, String8 request)
               em->arch = m->arch; em->vaddr_range = m->vaddr_range; em->space = process_space;
               em->name = m->string; em->dbg_info_num = num+1;
               ed->dbgi_key = d_dbgi_key_from_module(m);
+              match_scope.v[match_scope.count++] = ed->dbgi_key;
               ed->rdi = m == module ? rdi : di_rdi_from_key(access, ed->dbgi_key, 0, 0);
               ed->name = d_entity_child_from_kind(m, D_EntityKind_DebugInfoPath)->string;
               if(ed->rdi->raw_data_size == 0 && di_load_status_from_key(ed->dbgi_key) == DI_LoadStatus_Pending)
