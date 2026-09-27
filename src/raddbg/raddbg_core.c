@@ -1,8 +1,6 @@
 // Copyright (c) Epic Games Tools
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
-#include "raddbg_default_bindings.h"
-
 #undef LAYER_COLOR
 #define LAYER_COLOR 0xf0a215ff
 
@@ -10,8 +8,6 @@
 //~ rjf: Generated Code
 
 #include "generated/raddbg.meta.c"
-#include "raddbg_debug_snapshot.c"
-#include "raddbg_debug_eval.c"
 
 ////////////////////////////////
 //~ rjf: Registers Type Functions

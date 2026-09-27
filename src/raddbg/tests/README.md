@@ -261,7 +261,8 @@ debug-info cases, and other GUI workflows need separate coverage. `eval` still u
 selected GUI frame and rendered value text. Unwinding now carries byte-level
 register validity through the shared register-read path used by evaluation
 and GUI value formatting. Unknown bytes render as unavailable; a recovered
-zero remains a known value. Frame-explicit evaluation remains follow-up work.
+zero remains a known value. `debug_eval` provides the read-only frame-explicit
+scalar evaluation described above; legacy `eval` still uses the selected GUI frame.
 
 The lower-level `eh_frame_register_availability_rules` torture case exercises
 20 ARM64/x64 combinations: same-value and undefined rules, register transfers,

@@ -2404,26 +2404,6 @@ d_unwind_arm64_cfa_from_frame_pointer(ARM64_RegBlock *regs, U64 *cfa_out)
   return result;
 }
 
-internal B32
-d_unwind_arm64_cfa_from_link_register(ARM64_RegBlock *regs, U64 *cfa_out)
-{
-  B32 result = 0;
-  if(regs->lr != 0)
-  {
-    *cfa_out = regs->sp;
-    result = 1;
-  }
-  return result;
-}
-
-typedef struct D_ARM64StackInst D_ARM64StackInst;
-struct D_ARM64StackInst
-{
-  B32 adjust, pair, load, vector;
-  U32 dst, base, reg[2], mode;
-  S64 offset;
-};
-
 internal U32
 d_arm64_gpr_index_from_reg_code(ARCH_RegCode code)
 {
@@ -2666,33 +2646,6 @@ d_unwind_arm64_prefix(D_Handle process, Rng1U64 function, MachO_UnwindInfoLookup
 }
 
 internal D_UnwindStepResult
-d_unwind_step__link_register_arm64(ARM64_RegBlock *regs, U8 *reg_valid)
-{
-  B32 is_good = 0;
-  if(regs->lr != 0 && uwnd_reg_is_valid(Arch_arm64, reg_valid, ARM64_RegCode_x30))
-  {
-    U64 caller_pc = regs->lr;
-    if(caller_pc != regs->pc)
-    {
-      regs->pc = caller_pc;
-      regs->lr = 0;
-      if(reg_valid)
-      {
-        U8 caller_valid[sizeof(*regs)];
-        uwnd_reg_valid_from_abi(Arch_arm64, OperatingSystem_Mac, reg_valid, caller_valid);
-        uwnd_reg_mark_valid(Arch_arm64, caller_valid, ARM64_RegCode_pc, 0);
-        MemoryCopy(reg_valid, caller_valid, sizeof(*regs));
-      }
-      is_good = 1;
-    }
-  }
-
-  D_UnwindStepResult result = {0};
-  if(!is_good) {result.flags |= D_UnwindFlag_Error;}
-  return result;
-}
-
-internal D_UnwindStepResult
 d_unwind_step__frame_pointer_arm64(D_Handle process_handle, ARM64_RegBlock *regs, U8 *reg_valid, U64 endt_us)
 {
   B32 is_good = 0;
@@ -2732,7 +2685,7 @@ d_unwind_step__frame_pointer_arm64(D_Handle process_handle, ARM64_RegBlock *regs
 }
 
 internal D_UnwindStepResult
-d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, U64 lookup_pc, ARM64_RegBlock *regs, U8 *reg_valid, B32 prefer_entry_lr, U64 endt_us)
+d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, U64 lookup_pc, ARM64_RegBlock *regs, U8 *reg_valid, U64 endt_us)
 {
   B32 is_stale = 0;
   B32 is_good = 0;
@@ -2740,12 +2693,6 @@ d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 
   U8 caller_valid[sizeof(*regs)];
   uwnd_reg_valid_from_abi(Arch_arm64, OperatingSystem_Mac, reg_valid, caller_valid);
 
-  if(prefer_entry_lr)
-  {
-    D_UnwindStepResult lr_result = d_unwind_step__link_register_arm64(regs, reg_valid);
-    is_good = !(lr_result.flags & D_UnwindFlag_Error);
-  }
-  if(!is_good)
   {
     String8 unwind_info_data = d_macho_unwind_info_data_from_module(scratch.arena, module_handle);
     MachO_UnwindInfoLookupResult lookup = {0};
@@ -3066,7 +3013,7 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
                    compact_cfa_good) ||
                   d_unwind_arm64_cfa_from_frame_pointer(regs_arm64, &cfa)))
           {
-            D_UnwindStepResult step = d_unwind_step__macho_arm64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, lookup_pc, regs_arm64, reg_valid, 0, endt_us);
+            D_UnwindStepResult step = d_unwind_step__macho_arm64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, lookup_pc, regs_arm64, reg_valid, endt_us);
             if(step.flags == 0)
             {
               last_frame_node->v.cfa = cfa;
@@ -4334,8 +4281,9 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
                   code_symbols = macho_code_symbols(arena, data, &bin, symbols, strings);
                 }
               }
-              // Shared-cache tables can refer to a cache-wide string pool.
-              // A bounded file fallback must match the loaded UUID and CPU.
+              // Large shared-cache string pools exceed the read limit above.
+              // This fallback needs an on-disk image matching the UUID and CPU;
+              // it cannot recover symbols for cache-only images.
               if(code_symbols.count == 0)
               {
                 FileProperties props = properties_from_file_path(module_path);
