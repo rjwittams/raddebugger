@@ -10,8 +10,10 @@ usage: ./build_macos_release.sh
 Builds both arm64 and x86_64 slices on one Mac, combines them into a
 Universal 2 RAD Debugger app, and packages it in a signed disk image.
 An accompanying universal dSYM archive is retained for crash diagnosis.
+Set RADDBG_RELEASE_ARCH=arm64 for an Apple Silicon-only test package.
 
 Environment:
+  RADDBG_RELEASE_ARCH              universal (default) or arm64 (arm64 host only).
   RADDBG_RELEASE_CODESIGN_IDENTITY  Developer ID Application identity.
   RADDBG_RELEASE_ADHOC=1            Permit an ad-hoc test build instead.
   RADDBG_MACOS_DEPLOYMENT_TARGET    Minimum macOS version (default: 14.0).
@@ -65,6 +67,8 @@ repo_root=$(git rev-parse --show-toplevel)
 [[ "$repo_root" == "$PWD" ]] || fail "run this script from its RAD Debugger repository"
 
 deployment_target=${RADDBG_MACOS_DEPLOYMENT_TARGET:-14.0}
+release_arch=${RADDBG_RELEASE_ARCH:-universal}
+[[ "$release_arch" == "universal" || "$release_arch" == "arm64" ]] || fail "RADDBG_RELEASE_ARCH must be universal or arm64"
 [[ "$deployment_target" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || fail "invalid deployment target: $deployment_target"
 bundle_identifier=${RADDBG_RELEASE_BUNDLE_IDENTIFIER:-org.changedirection.raddbg}
 [[ "$bundle_identifier" =~ ^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$ ]] || fail "invalid bundle identifier: $bundle_identifier"
@@ -104,13 +108,19 @@ else
 fi
 
 release_root="$repo_root/build/release"
+release_arches=(arm64 x86_64)
+if [[ "$release_arch" == "arm64" ]]; then
+  [[ "$host_arch" == "arm64" ]] || fail "arm64-only packaging currently requires an arm64 host"
+  release_root="$repo_root/build/release-arm64"
+  release_arches=(arm64)
+fi
 stage_root="$release_root/stage"
 app="$release_root/RAD Debugger.app"
 app_executable="$app/Contents/MacOS/raddbg"
-universal_dsym="$release_root/raddbg.dSYM"
+release_dsym="$release_root/raddbg.dSYM"
 dmg_root="$release_root/dmg-root"
 
-[[ "$release_root" == "$repo_root/build/release" ]] || fail "refusing unexpected release output path: $release_root"
+[[ "$release_root" == "$repo_root/build/release" || "$release_root" == "$repo_root/build/release-arm64" ]] || fail "refusing unexpected release output path: $release_root"
 rm -rf "$release_root"
 mkdir -p "$stage_root"
 
@@ -148,28 +158,36 @@ build_slice()
 
 # The first slice matches the host so its metagen executable can run natively.
 build_slice "$host_arch" 1
-build_slice "$other_arch" 0
+if [[ "$release_arch" == "universal" ]]; then
+  build_slice "$other_arch" 0
+fi
 
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp src/mac/raddbg_Info.plist "$app/Contents/Info.plist"
 cp src/mac/raddbg.icns "$app/Contents/Resources/raddbg.icns"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $bundle_identifier" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string $deployment_target" "$app/Contents/Info.plist"
-lipo -create \
-  "$stage_root/arm64/raddbg" \
-  "$stage_root/x86_64/raddbg" \
-  -output "$app_executable"
+if [[ "$release_arch" == "universal" ]]; then
+  lipo -create \
+    "$stage_root/arm64/raddbg" \
+    "$stage_root/x86_64/raddbg" \
+    -output "$app_executable"
+else
+  install -m 755 "$stage_root/arm64/raddbg" "$app_executable"
+fi
 chmod +x "$app_executable"
 
-# Preserve both relocation maps, then replace the thin DWARF image with a
-# universal image containing UUIDs matching both executable slices.
-ditto "$stage_root/arm64/raddbg.dSYM" "$universal_dsym"
-ditto "$stage_root/x86_64/raddbg.dSYM/Contents/Resources/Relocations" \
-      "$universal_dsym/Contents/Resources/Relocations"
-lipo -create \
-  "$stage_root/arm64/raddbg.dSYM/Contents/Resources/DWARF/raddbg" \
-  "$stage_root/x86_64/raddbg.dSYM/Contents/Resources/DWARF/raddbg" \
-  -output "$universal_dsym/Contents/Resources/DWARF/raddbg"
+# Start with the arm64 symbols; universal packages retain both relocation maps
+# and combine the DWARF images with UUIDs matching both executable slices.
+ditto "$stage_root/arm64/raddbg.dSYM" "$release_dsym"
+if [[ "$release_arch" == "universal" ]]; then
+  ditto "$stage_root/x86_64/raddbg.dSYM/Contents/Resources/Relocations" \
+      "$release_dsym/Contents/Resources/Relocations"
+  lipo -create \
+    "$stage_root/arm64/raddbg.dSYM/Contents/Resources/DWARF/raddbg" \
+    "$stage_root/x86_64/raddbg.dSYM/Contents/Resources/DWARF/raddbg" \
+    -output "$release_dsym/Contents/Resources/DWARF/raddbg"
+fi
 
 codesign_args=(--force --options runtime --sign "$release_identity" --entitlements "$release_entitlements")
 if [[ "$release_identity" != "-" ]]; then
@@ -177,13 +195,13 @@ if [[ "$release_identity" != "-" ]]; then
 fi
 codesign "${codesign_args[@]}" "$app"
 
-lipo "$app_executable" -verify_arch arm64 x86_64
-lipo "$universal_dsym/Contents/Resources/DWARF/raddbg" -verify_arch arm64 x86_64
+lipo "$app_executable" -verify_arch "${release_arches[@]}"
+lipo "$release_dsym/Contents/Resources/DWARF/raddbg" -verify_arch "${release_arches[@]}"
 codesign --verify --strict --verbose=2 "$app"
 
 app_uuids=$(dwarfdump --uuid "$app_executable")
-dsym_uuids=$(dwarfdump --uuid "$universal_dsym")
-for arch in arm64 x86_64; do
+dsym_uuids=$(dwarfdump --uuid "$release_dsym")
+for arch in "${release_arches[@]}"; do
   app_uuid=$(printf '%s\n' "$app_uuids" | awk -v arch="$arch" '$0 ~ "\\(" arch "\\)" {print $2}')
   dsym_uuid=$(printf '%s\n' "$dsym_uuids" | awk -v arch="$arch" '$0 ~ "\\(" arch "\\)" {print $2}')
   [[ -n "$app_uuid" && "$app_uuid" == "$dsym_uuid" ]] || fail "$arch executable and dSYM UUIDs do not match"
@@ -191,8 +209,12 @@ done
 
 release_product_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
 [[ "$release_product_version" =~ ^[0-9]+(\.[0-9]+)*$ ]] || fail "invalid app product version: $release_product_version"
-dmg="$release_root/RAD-Debugger-${release_product_version}-macOS-universal.dmg"
-dsym_archive="$release_root/RAD-Debugger-macOS-universal-dSYM.zip"
+package_arch=$release_arch
+if [[ "$release_arch" == "arm64" ]]; then
+  package_arch="arm64-${release_commit:0:8}"
+fi
+dmg="$release_root/RAD-Debugger-${release_product_version}-macOS-${package_arch}.dmg"
+dsym_archive="$release_root/RAD-Debugger-macOS-${package_arch}-dSYM.zip"
 
 mkdir -p "$dmg_root"
 ditto "$app" "$dmg_root/RAD Debugger.app"
@@ -212,14 +234,14 @@ codesign "${dmg_codesign_args[@]}" "$dmg"
 hdiutil verify "$dmg"
 codesign --verify --strict --verbose=2 "$dmg"
 
-ditto -c -k --keepParent "$universal_dsym" "$dsym_archive"
+ditto -c -k --keepParent "$release_dsym" "$dsym_archive"
 
 require_tracked_files_clean "release build changed tracked files"
 
 echo "[release] commit: $release_commit ($release_version)"
 echo "[release] bundle identifier: $bundle_identifier"
 echo "[release] app: $app"
-echo "[release] dSYM: $universal_dsym"
+echo "[release] dSYM: $release_dsym"
 echo "[release] disk image: $dmg"
 echo "[release] support symbols: $dsym_archive"
 if [[ "$release_identity" == "-" ]]; then
