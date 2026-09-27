@@ -6,6 +6,8 @@ Pass the executable as --target; llvm-nm supplies only the address of the
 assembly leaf, not the expected unwind results. This restarts the target.
 """
 import argparse
+import json
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -22,6 +24,7 @@ p.add_argument('--shrink-wrap', action='store_true')
 p.add_argument('--body-only', action='store_true')
 p.add_argument('--early-return', action='store_true')
 p.add_argument('--broken-frame', action='store_true')
+p.add_argument('--result', type=Path, help='Write the broken-frame observation as JSON')
 a = p.parse_args()
 client = Client(a.sender, a.pid)
 
@@ -77,8 +80,12 @@ try:
             assert broken['stack']['status'] in ('pending', 'error'), broken
             assert broken['stack']['frames'] == [], broken
             time.sleep(.05)
-        print('PASS: unreadable stack is explicitly '+broken['stack']['status'])
-        sys.exit(0)
+        observation = dict(stack_status=broken['stack']['status'], frame_count=len(broken['stack']['frames']))
+        if a.result:
+            a.result.write_text(json.dumps(observation)+'\n', encoding='utf-8')
+        pending = observation['stack_status'] == 'pending'
+        print(('UNCOVERED' if pending else 'PASS')+': unreadable stack is explicitly '+observation['stack_status'])
+        sys.exit(2 if pending else 0)
     # Expected from the explicit assembly: allocation, body, then restoration.
     sizes = (0, 16, 16, 48, 48, 48, 48, 48, 16, 0) if a.frame_record else (0, 16, 16, 16, 16, 16, 0)
     boundaries = list(enumerate(sizes))

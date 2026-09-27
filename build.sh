@@ -16,6 +16,12 @@ if [[ "${asan:-0}" == "1" ]]; then
   cc_sanitize="-fsanitize=address"
 fi
 
+cc_division_checks=""
+if [[ "${division_checks:-0}" == "1" ]]; then
+  echo "[integer division checks enabled]"
+  cc_division_checks="-fsanitize=integer-divide-by-zero -fno-sanitize-recover=integer-divide-by-zero"
+fi
+
 # --- Get Current Git Commit Id -----------------------------------------------
 git_hash=$(git describe --always --dirty)
 git_hash_full=$(git rev-parse HEAD)
@@ -28,8 +34,8 @@ cc_host_flags=""
 if [[ "$target_arch" == "x86_64" || "$target_arch" == "amd64" ]]; then
   cc_host_flags="-mcx16 -msse2"
 fi
-cc_cflags_gcc=""
-cc_cflags_clang=${cc_sanitize}" -fdiagnostics-absolute-paths -Wno-for-loop-analysis  -Wno-incompatible-pointer-types-discards-qualifiers -Wno-initializer-overrides -Wno-compare-distinct-pointer-types -Wno-single-bit-bitfield-constant-conversion -Wno-deprecated-declarations -Wno-writable-strings -Wno-unknown-warning-option -Wno-deprecated-register -Wno-unused-local-typedef"
+cc_cflags_gcc="$cc_division_checks"
+cc_cflags_clang="$cc_sanitize $cc_division_checks -fdiagnostics-absolute-paths -Wno-for-loop-analysis  -Wno-incompatible-pointer-types-discards-qualifiers -Wno-initializer-overrides -Wno-compare-distinct-pointer-types -Wno-single-bit-bitfield-constant-conversion -Wno-deprecated-declarations -Wno-writable-strings -Wno-unknown-warning-option -Wno-deprecated-register -Wno-unused-local-typedef"
 if [[ "$host_os" == "Darwin" ]]; then
   cc_cflags_clang="$cc_cflags_clang -x objective-c"
 fi

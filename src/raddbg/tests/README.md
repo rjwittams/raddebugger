@@ -51,7 +51,23 @@ Runner failure-path tests need only Python, with external commands simulated:
 python3 -m unittest discover -s src/raddbg/tests -p 'test_*.py'
 ```
 
-Exit status is 1 if any case fails, 2 for uncovered optional language tools or
+For the native sparse-DWARF regression, use fail-fast integer division checks:
+
+```sh
+bash build.sh torture no_meta division_checks
+cd build
+./torture d2r_sparse_units
+```
+
+Use Bash 4.2 or newer, as required by `build.sh`. `division_checks` enables
+`-fsanitize=integer-divide-by-zero` without recovery for Clang/GCC builds.
+On ARM64, the ordinary `d2r_sparse_units` test can pass with the divisor guards
+removed because hardware division by zero returns zero. The instrumented run
+is required to validate those guards. This is a focused sanitizer mode, not
+a general undefined-behaviour check. Rebuilding without `division_checks`
+replaces the instrumented executable with a normal build.
+
+Exit status is 1 if any case fails, 2 for uncovered results or
 an explicitly requested platform-inapplicable case, and 0 otherwise. Platform
 exclusions are recorded as `skipped`, not `pass`; batch runs tolerate those skips.
 Missing required files or tools (including RAD, cleat and the C compiler) fail.
@@ -83,9 +99,12 @@ arbitrary control flow or every compiler's shrink-wrapping pattern. `caller-regi
 checks that an unavailable caller x0 stays unavailable in arithmetic, while
 the stopped x0 remains readable. It also checks partial SIMD availability:
 the caller's low q8 lane is readable, but its upper lane and whole q8 are not. The
-`unwind-unavailable` case deliberately damages the stack: it requires an
-explicit pending/error result with no apparently valid frames. It does not
-require the existing memory cache to settle an unreadable stack as an error.
+`unwind-unavailable` case deliberately damages the stack. An explicit error
+with no frames passes; a stack still pending after the observation interval
+is uncovered (exit 2), not a pass. Both the probe's `unreadable-stack.json` and
+the runner's `result.json` retain the final stack status and frame count.
+Apparently valid frames fail. This does not fix the memory cache's handling
+of unreadable stacks or prove that a pending result will eventually settle.
 
 These are small C/assembly checks, not the planned five-language regression
 matrix. `c-inline` builds an optimized, forced-inline wrapper around a

@@ -354,9 +354,21 @@ def run_case(a, case):
             if 'EARLY_RETURN' in defines:
                 options.append('--early-return')
             if case == 'unwind-unavailable':
-                options.append('--broken-frame')
-            run([sys.executable, str(HERE/script), str(a.sender), str(pid), '--target', str(target), *options],
-                env=dict(os.environ, RAD_IPC_TRACE=str(output/'ipc.jsonl')), timeout=180)
+                options += ['--broken-frame', '--result', str(output/'unreadable-stack.json')]
+            try:
+                run([sys.executable, str(HERE/script), str(a.sender), str(pid), '--target', str(target), *options],
+                    env=dict(os.environ, RAD_IPC_TRACE=str(output/'ipc.jsonl')), timeout=180)
+            except subprocess.CalledProcessError as error:
+                if case != 'unwind-unavailable' or error.returncode != 2:
+                    raise
+            if case == 'unwind-unavailable':
+                observation = json.loads((output/'unreadable-stack.json').read_text())
+                record['unreadable_stack'] = observation
+                assert observation['frame_count'] == 0, observation
+                assert observation['stack_status'] in ('pending', 'error'), observation
+                if observation['stack_status'] == 'pending':
+                    record.update(status='uncovered', reason='Unreadable stack remained pending; terminal error not observed')
+                    return record
             record['status'] = 'pass'
             return record
         stopped = client.stopped('restart')

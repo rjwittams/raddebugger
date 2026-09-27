@@ -140,6 +140,46 @@ class SmokeRunnerTests(unittest.TestCase):
         self.assertIn('TimeoutExpired', records[0]['error'])
         self.assertIn('CalledProcessError', records[0]['session_cleanup_error'])
 
+    def unreadable_stack(self, stack_status):
+        self.debugger.write_bytes(b'debugger')
+        def pending_stack(command, **kwargs):
+            if command[0] == 'powershell':
+                kwargs['stdout'].write(json.dumps({'ProcessId': 123, 'ExecutablePath': str(self.debugger.resolve())}))
+                return subprocess.CompletedProcess(command, 0)
+            if command[0] == str(self.debugger.resolve()):
+                snapshot = dict(version=1, status='ready', process_count=0, build={})
+                return subprocess.CompletedProcess(command, 0, stdout=json.dumps(snapshot), stderr='')
+            if command[:2] == ['cleat', 'inspect']:
+                kwargs['stdout'].write(json.dumps({'process': {'leader_pid': 123}}))
+                return subprocess.CompletedProcess(command, 0)
+            if command[0] == 'cleat' and '--help' not in command:
+                return subprocess.CompletedProcess(command, 0)
+            if command[0] == sys.executable:
+                if '--result' in command:
+                    Path(command[command.index('--result')+1]).write_text(json.dumps(
+                        {'stack_status': stack_status, 'frame_count': 0}))
+                return subprocess.CompletedProcess(command, 2 if stack_status == 'pending' else 0)
+            return self.external_command(command, **kwargs)
+        with patch('platform.system', return_value='Darwin'), \
+             patch('platform.machine', return_value='arm64'), \
+             patch('subprocess.run', side_effect=pending_stack):
+            return self.invoke('unwind-unavailable', '--compiler', 'fixture-compiler')
+
+    def test_unreadable_stack_pending_is_uncovered_not_passed(self):
+        status, records = self.unreadable_stack('pending')
+        self.assertEqual(status, 2, records)
+        self.assertEqual(records[0]['status'], 'uncovered')
+        self.assertEqual(records[0]['unreadable_stack']['stack_status'], 'pending')
+
+    def test_unreadable_stack_error_is_passed_and_recorded(self):
+        status, records = self.unreadable_stack('error')
+        self.assertEqual(status, 0, records)
+        self.assertEqual(records[0]['unreadable_stack']['stack_status'], 'error')
+
+    def test_unreadable_stack_ready_is_failure(self):
+        status, records = self.unreadable_stack('ready')
+        self.assertEqual(status, 1, records)
+
 
 if __name__ == '__main__':
     unittest.main()
