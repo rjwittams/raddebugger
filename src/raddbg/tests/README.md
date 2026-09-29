@@ -367,3 +367,19 @@ Names must terminate within 4096 bytes. Same-address aliases use bytewise
 name order. There is no ELF/PE export provider, export-trie parser, shared-cache
 local-symbol extraction or symbol download in this change. A library stripped
 of all usable names can still display an address. RDI layout is unchanged.
+
+## Automatic GUI stop navigation
+
+On macOS, run `python3 src/raddbg/tests/stop_navigation.py --debugger build/raddbg`.
+This requires the graphical debugger, clang, dsymutil and cleat. It creates an
+isolated three-file target and configuration, then checks breakpoint and assert
+stops across five restarts. IPC verifies the stop's function/file/line;
+`write_user_data` verifies that the exported selected source tab names the
+stopped file without an explicit Find Thread command. Caller-frame selection
+and local evaluation are checked before restarting. Artifacts remain in the
+printed temporary directory; the owned debugger and target are closed.
+
+This catches lost asynchronous navigation retries that stack-only tests miss.
+It does not inspect rendered pixels or prove the visible cursor line, and it
+does not force every unwind/debug-info completion ordering. Use physical GUI
+checks alongside it. It is not a reproducer for an empty call stack.
