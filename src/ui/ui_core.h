@@ -247,6 +247,15 @@ struct UI_AnimationInfo
 };
 
 ////////////////////////////////
+//~ Scrollbar Style
+
+typedef enum UI_ScrollBarStyle
+{
+  UI_ScrollBarStyle_Classic,
+  UI_ScrollBarStyle_Overlay,
+} UI_ScrollBarStyle;
+
+////////////////////////////////
 //~ rjf: Scroll Positions
 
 typedef struct UI_ScrollPt UI_ScrollPt;
@@ -710,6 +719,7 @@ struct UI_State
   UI_IconInfo icon_info;
   UI_Theme *theme;
   UI_AnimationInfo animation_info;
+  UI_ScrollBarStyle scroll_bar_style;
   WM_Window window;
   UI_EventList *events;
   Vec2F32 mouse;
@@ -832,6 +842,10 @@ internal UI_State *ui_get_selected_state(void);
 //~ rjf: Implicit State Accessors/Mutators
 
 //- rjf: per-frame info
+// Scrollbar style belongs to the selected UI state; new states use classic.
+internal void ui_set_active_scroll_bar_style(UI_ScrollBarStyle style);
+internal UI_ScrollBarStyle ui_active_scroll_bar_style(void);
+
 internal Arena *           ui_build_arena(void);
 internal WM_Window         ui_window(void);
 internal Vec2F32           ui_mouse(void);
