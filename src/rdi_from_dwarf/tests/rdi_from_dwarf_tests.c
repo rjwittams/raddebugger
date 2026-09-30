@@ -62,6 +62,13 @@ Test(d2r_line_extended_opcode)
     {str8_lit("padded-known-opcode"), str8_lit("\0\3\4\7\0"),          2},
     {str8_lit("zero-extent"),         str8_lit("\0\0"),                  1},
     {str8_lit("oversized-extent"),    str8_lit("\0\377\177\0"),         1},
+    // Each intervening sequence must reset the VM even if it has no source row.
+    // set_address 0x1800; advance_line -1; copy; advance_pc 4; end_sequence.
+    {str8_lit("line-zero-sequence"),  str8_lit("\0\11\2\0\30\0\0\0\0\0\0\3\177\1\2\4\0\1\1"), 2},
+    // set_address 0x1800; advance_pc 4; end_sequence (no copy).
+    {str8_lit("empty-sequence"),      str8_lit("\0\11\2\0\30\0\0\0\0\0\0\2\4\0\1\1"), 2},
+    // set_address 0; copy; end_sequence, followed by the real second sequence.
+    {str8_lit("zero-address-sequence"), str8_lit("\0\11\2\0\0\0\0\0\0\0\0\1\0\1\1"), 2},
   };
   for(U64 version = 4; version <= 5; version += 1) for EachElement(case_idx, cases)
   {
@@ -70,12 +77,15 @@ Test(d2r_line_extended_opcode)
     str8_list_push(arena, &parts, version == 5 ? str8_array_fixed(header5) : str8_array_fixed(header));
     str8_list_push(arena, &parts, str8_array_fixed(set_file));
     str8_list_push(arena, &parts, str8_array_fixed(first));
+    str8_list_push(arena, &parts, str8_array_fixed(set_file));
     str8_list_push(arena, &parts, cases[case_idx].data);
     str8_list_push(arena, &parts, str8_array_fixed(set_file));
     str8_list_push(arena, &parts, str8_array_fixed(second));
     String8 lines = str8_list_join(arena, &parts, 0);
     U32 unit_size = lines.size - 4;
     MemoryCopy(lines.str, &unit_size, 4);
+    // Preserve the exact input for independent llvm-dwarfdump checks.
+    TestCheck(t_write_file(str8f(arena, "v%I64u-%S.line", version, cases[case_idx].name), lines));
     RDIM_BinarySectionNode section = {0};
     section.v.voff_first = 0x1000;
     section.v.voff_opl = 0x3000;
@@ -97,6 +107,16 @@ Test(d2r_line_extended_opcode)
     TestCheck(result.units.total_count == 1);
     RDIM_LineTable *table = result.units.first->v[0].line_table;
     test_outf("DWARF %I64u, %S: %I64u sequences, %I64u lines\n", version, cases[case_idx].name, table->seq_count, table->line_count);
+    if(table->line_count != 2*cases[case_idx].sequences)
+    {
+      for EachNode(n, RDIM_LineSequenceNode, table->first_seq)
+      {
+        for EachIndex(idx, n->v.line_count)
+        {
+          test_outf("  voff 0x%I64x: line %u\n", n->v.voffs[idx], n->v.line_nums[idx]);
+        }
+      }
+    }
     TestCheck(table->seq_count == cases[case_idx].sequences && table->line_count == 2*cases[case_idx].sequences);
     U64 seq_idx = 0;
     for EachNode(n, RDIM_LineSequenceNode, table->first_seq)
@@ -219,6 +239,7 @@ Test(d2r_sparse_units)
       lines[sizeof(lines)-5] = 8;
     }
     if(test_case == 3) lines[11] = 0; // Invalid max_ops_per_inst.
+    if(test_case == 4) {TestCheck(t_write_file(str8_lit("empty.line"), str8_array_fixed(lines)));}
     D2R_ConvertParams params = {0};
     params.arch = Arch_x64;
     params.path_style = PathStyle_UnixAbsolute;
@@ -237,14 +258,9 @@ Test(d2r_sparse_units)
     TestCheck(result.units.first->v[0].line_table != 0);
     if(test_case != 0)
     {
-      if(test_case == 4)
-      {
-        TestCheck(result.units.first->v[0].line_table->line_count != 0);
-      }
-      else
-      {
-        TestCheck(result.units.first->v[0].line_table->line_count == 0);
-      }
+      // Case 4 has only advance_pc; end_sequence. LLVM emits a terminator,
+      // not a source row with a nonempty address range.
+      TestCheck(result.units.first->v[0].line_table->line_count == 0);
       B32 found_int = 0;
       for EachNode(chunk, RDIM_TypeChunkNode, result.types.first)
       {
