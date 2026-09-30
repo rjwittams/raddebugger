@@ -138,6 +138,132 @@ Test(d2r_line_extended_opcode)
   }
 }
 
+Test(d2r_line_unresolved_file)
+{
+  U8 abbrev[] = {1,0x11,1, 3,8, 0x1b,8, 0x10,0x17, 0x11,1, 0x12,6, 0,0,
+                 2,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0, 0};
+  U8 info[] = {0,0,0,0, 4,0, 0,0,0,0, 8, 1,
+               'm','a','i','n','.','c',0, '/','s','r','c',0,
+               0,0,0,0, 0,0x10,0,0,0,0,0,0, 0,0x20,0,0,
+               2,'i','n','t',0,5,4, 0};
+  U32 info_size = sizeof(info)-4;
+  MemoryCopy(info, &info_size, 4);
+  U8 info5[sizeof(info)+1] = {0,0,0,0, 5,0,1,8, 0,0,0,0};
+  MemoryCopy(info5+12, info+11, sizeof(info)-11);
+  U32 info5_size = sizeof(info5)-4;
+  MemoryCopy(info5, &info5_size, 4);
+  // v4 files are 1-based; v5 files are 0-based. Both tables name two files.
+  U8 header[] = {0,0,0,0, 4,0, 0,0,0,0, 1,1,1,0xfb,14,13,
+                 0,1,1,1,1,0,0,0,1,0,0,1, 0,
+                 'm','a','i','n','.','c',0,0,0,0,
+                 'o','t','h','e','r','.','c',0,0,0,0, 0};
+  U32 header_size = sizeof(header)-10;
+  MemoryCopy(header+6, &header_size, 4);
+  U8 header5[] = {0,0,0,0, 5,0,8,0, 0,0,0,0, 1,1,1,0xfb,14,13,
+                  0,1,1,1,1,0,0,0,1,0,0,1,
+                  1,1,8,1, '/','s','r','c',0,
+                  2,1,8,2,0x0f,2, 'm','a','i','n','.','c',0,0,
+                  'o','t','h','e','r','.','c',0,0};
+  U32 header5_size = sizeof(header5)-12;
+  MemoryCopy(header5+8, &header5_size, 4);
+  struct {U8 files[3]; U8 line_step;} cases[] =
+  {
+    {{0,9,1}, 1}, // unresolved middle
+    {{9,0,1}, 1}, // unresolved prefix
+    {{0,1,9}, 1}, // unresolved suffix
+    {{9,9,9}, 1}, // no resolved file
+    {{0,9,1}, 0}, // file changes without line-number changes
+  };
+  String8 paths[] = {str8_lit("/src/main.c"), str8_lit("/src/other.c")};
+  for(U64 version = 4; version <= 5; version += 1) for EachElement(case_idx, cases)
+  {
+    // Three four-byte ranges beginning at 0x1000. Logical file 9 deliberately
+    // refers beyond the file table; logical files 0/1 name main.c/other.c.
+    U8 files[3];
+    for EachElement(idx, files) {files[idx] = cases[case_idx].files[idx] + (version == 4 && cases[case_idx].files[idx] < 2);}
+    U8 program[] = {0,9,2, 0,0x10,0,0,0,0,0,0,
+                    4,files[0], 1,
+                    2,4, 3,cases[case_idx].line_step, 4,files[1], 1,
+                    2,4, 3,cases[case_idx].line_step, 4,files[2], 1,
+                    2,4, 0,1,1};
+    String8List parts = {0};
+    str8_list_push(arena, &parts, version == 5 ? str8_array_fixed(header5) : str8_array_fixed(header));
+    str8_list_push(arena, &parts, str8_array_fixed(program));
+    String8 lines = str8_list_join(arena, &parts, 0);
+    U32 line_size = lines.size-4;
+    MemoryCopy(lines.str, &line_size, 4);
+    TestCheck(t_write_file(str8f(arena, "v%I64u-case%I64u.line", version, case_idx), lines));
+    RDIM_BinarySectionNode section = {0};
+    section.v.voff_first = 0x1000;
+    section.v.voff_opl = 0x3000;
+    D2R_ConvertParams params = {0};
+    params.arch = Arch_x64;
+    params.path_style = PathStyle_UnixAbsolute;
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    params.binary_sections.first = params.binary_sections.last = &section;
+    params.binary_sections.count = 1;
+    params.raw.sec[DW_SectionKind_Info].data = version == 5 ? str8_array_fixed(info5) : str8_array_fixed(info);
+    params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+    params.raw.sec[DW_SectionKind_Line].data = lines;
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+    lane_ctx(restore);
+    TestCheck(result.units.total_count == 1);
+    RDIM_LineTable *table = result.units.first->v[0].line_table;
+    for EachNode(n, RDIM_LineSequenceNode, table->first_seq)
+    {
+      test_outf("v%I64u case %I64u: [%I64x,%I64x) %S, %I64u rows\n", version, case_idx,
+                n->v.voffs[0], n->v.voffs[n->v.line_count],
+                n->v.src_file ? n->v.src_file->path : str8_lit("<no file>"), n->v.line_count);
+    }
+    TestCheck(table->seq_count == (case_idx == 3 ? 1 : 3) && table->line_count == 3);
+    U64 idx = 0;
+    for EachNode(n, RDIM_LineSequenceNode, table->first_seq)
+    {
+      for EachIndex(row, n->v.line_count)
+      {
+        TestCheck(idx < 3);
+        TestCheck(n->v.voffs[row] == 0x1000+4*idx && n->v.voffs[row+1] == 0x1004+4*idx);
+        TestCheck(n->v.line_nums[row] == 1+idx*cases[case_idx].line_step);
+        U8 file = cases[case_idx].files[idx];
+        TestCheck(file == 9 ? n->v.src_file == 0 :
+                  n->v.src_file != 0 && str8_match(n->v.src_file->path, paths[file], 0));
+        idx += 1;
+      }
+    }
+    restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
+    RDIM_BakeResults baked = rdim_bake(convert_arena, &result);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
+    String8 data = str8_list_join(convert_arena, &blobs, 0);
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    RDI_ParsedLineTable parsed = {0};
+    rdi_parsed_from_line_table(&rdi, rdi_line_table_from_unit(&rdi, rdi_unit_from_voff(&rdi, 0x1000)), &parsed);
+    for(U64 voff = 0x1000; voff < 0x100c; voff += 1)
+    {
+      U64 row = rdi_line_info_idx_from_voff(&parsed, voff);
+      TestCheck(row < parsed.count);
+      RDI_Line *line = &parsed.lines[row];
+      U64 input_row = (voff-0x1000)/4;
+      U8 file = cases[case_idx].files[input_row];
+      // With no resolved file, lookup may select the preceding sequence's
+      // terminator at the same address. Neither row may name a source file.
+      if(file == 9) {TestCheck(line->file_idx == 0);}
+      else
+      {
+        TestCheck(line->line_num == 1+input_row*cases[case_idx].line_step);
+        RDI_SourceFile *expected = rdi_source_file_from_normal_path(&rdi, paths[file].str, paths[file].size);
+        TestCheck(line->file_idx != 0 && rdi_source_file_from_line(&rdi, line) == expected);
+      }
+    }
+    arena_release(convert_arena);
+  }
+}
+
 Test(d2r_inline_sequence_end)
 {
   // A row at end_sequence has no address range. It must not cover the gap
