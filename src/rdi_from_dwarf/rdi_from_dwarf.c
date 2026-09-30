@@ -810,13 +810,14 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       }
       
       //- rjf: run the line opcode program
-      B32 emit_line = 0;
       RDIM_SrcFile *line_seq_src_file = 0;
       LineSeqChunk *first_line_seq_chunk = 0;
       LineSeqChunk *last_line_seq_chunk = 0;
       U64 total_line_seq_count = 0;
       for(U64 off = 0, next_off = 0; off <= unit_line_table_data.size; off = next_off)
       {
+        // Emission belongs to this opcode, including after end_sequence resets.
+        B32 emit_line = 0;
         next_off = unit_line_table_data.size;
         
         //- rjf: read next opcode
@@ -1093,7 +1094,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           if(last_line_seq_chunk != 0 && last_line_seq_chunk->line_count > 0)
           {
             last_line = last_line_seq_chunk->line_nums[last_line_seq_chunk->line_count-1];
-            last_col = last_line_seq_chunk->col_nums[last_line_seq_chunk->line_count-1];
+            last_col = last_line_seq_chunk->col_nums[2*(last_line_seq_chunk->line_count-1)];
           }
           
           // rjf: determine if we need a new line
@@ -1122,7 +1123,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
             U64 chunk_line_idx = chunk->line_count;
             chunk->voffs[chunk_line_idx] = vm_regs.address - base_vaddr;
             chunk->line_nums[chunk_line_idx] = (U32)vm_regs.line;
-            chunk->col_nums[chunk_line_idx] = (U16)vm_regs.column;
+            chunk->col_nums[2*chunk_line_idx] = (U16)vm_regs.column;
             chunk->line_count += 1;
             total_line_seq_count += 1;
             line_seq_src_file = src_file;

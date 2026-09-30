@@ -45,8 +45,10 @@ Test(d2r_line_extended_opcode)
                   2,1,8,2,0x0f,1, 'm','a','i','n','.','c',0,0};
   U32 header5_size = sizeof(header5) - 12;
   MemoryCopy(header5+8, &header5_size, 4);
-  U8 first[] = {0,9,2, 0,0x10,0,0,0,0,0,0, 1, 3,1, 2,4, 1, 2,4, 0,1,1};
-  U8 second[] = {0,9,2, 0,0x20,0,0,0,0,0,0, 1, 3,1, 2,4, 1, 2,4, 0,1,1};
+  // Set column (opcode 5) after set_address, before each emitted row.
+  // A preceding end_sequence must not emit a row at the next set_address.
+  U8 first[] = {0,9,2, 0,0x10,0,0,0,0,0,0, 5,7,1, 3,1, 2,4, 5,19,1, 2,4, 0,1,1};
+  U8 second[] = {0,9,2, 0,0x20,0,0,0,0,0,0, 5,7,1, 3,1, 2,4, 5,19,1, 2,4, 0,1,1};
   // An unknown extended opcode's payload must not become line instructions.
   U8 long_padding[133] = {0,0x82,1,0}; // 130-byte extent, two-byte ULEB length.
   struct {String8 name, data; U64 sequences;} cases[] =
@@ -101,6 +103,8 @@ Test(d2r_line_extended_opcode)
     {
       RDIM_LineSequence *seq = &n->v;
       TestCheck(seq->line_count == 2);
+      TestCheck(seq->col_nums[0] == 7 && seq->col_nums[1] == 0);
+      TestCheck(seq->col_nums[2] == 19 && seq->col_nums[3] == 0);
       TestCheck(str8_match(seq->src_file->path, str8_lit("/src/main.c"), 0));
       for(U64 idx = 0; idx < 2; idx += 1)
       {
