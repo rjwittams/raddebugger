@@ -2282,7 +2282,7 @@ d_unwind_step__macho_x64(D_Handle process_handle, D_Handle module_handle, U64 mo
       is_good = 0;
     }break;
   }
-  if(is_good && !is_stale && reg_valid)
+  if(is_good && !is_stale)
   {
     uwnd_reg_mark_valid(Arch_x64, caller_valid, X64_RegCode_rip, 0);
     uwnd_reg_mark_valid(Arch_x64, caller_valid, X64_RegCode_rsp, 0);
@@ -2467,7 +2467,7 @@ d_unwind_arm64_epilogue(D_Handle process, Rng1U64 function, ARM64_RegBlock *regs
       caller.lr = 0;
       *regs = caller;
       uwnd_reg_mark_valid(Arch_arm64, caller_valid, ARM64_RegCode_pc, 0);
-      if(reg_valid) {MemoryCopy(reg_valid, caller_valid, sizeof(*regs));}
+      MemoryCopy(reg_valid, caller_valid, sizeof(*regs));
       return 1;
     }
     if(word == 0xd503201f) {continue;} // NOP
@@ -2637,7 +2637,7 @@ d_unwind_arm64_prefix(D_Handle process, Rng1U64 function, MachO_UnwindInfoLookup
       caller.lr = 0;
       *regs = caller;
       uwnd_reg_mark_valid(Arch_arm64, caller_valid, ARM64_RegCode_pc, 0);
-      if(reg_valid) {MemoryCopy(reg_valid, caller_valid, sizeof(*regs));}
+      MemoryCopy(reg_valid, caller_valid, sizeof(*regs));
     }
     else {good = 0;}
   }
@@ -2665,14 +2665,11 @@ d_unwind_step__frame_pointer_arm64(D_Handle process_handle, ARM64_RegBlock *regs
         regs->lr = caller_lr;
         regs->sp = frame_fp + 16;
         regs->pc = caller_lr;
-        if(reg_valid)
-        {
-          // A bare frame chain says nothing about the other saved registers.
-          MemoryZero(reg_valid, sizeof(*regs));
-          uwnd_reg_mark_valid(Arch_arm64, reg_valid, ARM64_RegCode_x29, 0);
-          uwnd_reg_mark_valid(Arch_arm64, reg_valid, ARM64_RegCode_sp, 0);
-          uwnd_reg_mark_valid(Arch_arm64, reg_valid, ARM64_RegCode_pc, 0);
-        }
+        // A bare frame chain says nothing about the other saved registers.
+        MemoryZero(reg_valid, sizeof(*regs));
+        uwnd_reg_mark_valid(Arch_arm64, reg_valid, ARM64_RegCode_x29, 0);
+        uwnd_reg_mark_valid(Arch_arm64, reg_valid, ARM64_RegCode_sp, 0);
+        uwnd_reg_mark_valid(Arch_arm64, reg_valid, ARM64_RegCode_pc, 0);
         is_good = 1;
       }
     }
@@ -2774,7 +2771,7 @@ d_unwind_step__macho_arm64(D_Handle process_handle, D_Handle module_handle, U64 
     }
   }
 
-  if(is_good && !is_stale && reg_valid)
+  if(is_good && !is_stale)
   {
     uwnd_reg_mark_valid(Arch_arm64, caller_valid, ARM64_RegCode_pc, 0);
     uwnd_reg_mark_valid(Arch_arm64, caller_valid, ARM64_RegCode_sp, 0);

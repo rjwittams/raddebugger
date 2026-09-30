@@ -4,6 +4,7 @@
 internal UWND_StepResult
 eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64 tls_vaddr, U64 lookup_pc, void *regs, U8 *reg_valid, U64 *cfa_out)
 {
+  Assert(reg_valid != 0);
   Temp scratch = scratch_begin(0, 0);
   B32 done = 0;
   UWND_StepResult result = {0};
@@ -622,8 +623,7 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
         default:
         case DW_UnwindRuleCode_SameVal:
         {
-          if(input_valid) {MemoryCopy(caller_valid+reg_rng.min, input_valid+reg_rng.min, reg_size);}
-          else {uwnd_reg_set_valid(caller_valid, reg_rng, 1);}
+          MemoryCopy(caller_valid+reg_rng.min, input_valid+reg_rng.min, reg_size);
         }break;
         case DW_UnwindRuleCode_Undefined:
         {
@@ -668,8 +668,7 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
           U8 *src_reg_val_buffer = push_array(temp.arena, U8, read_size);
           arch_reg_block_read_range(arch_info, input_regs, src_reg_rng, src_reg_val_buffer);
           arch_reg_block_write_range(arch_info, regs, reg_rng, src_reg_val_buffer);
-          if(input_valid) {MemoryCopy(caller_valid+reg_rng.min, input_valid+src_reg_rng.min, read_size);}
-          else {uwnd_reg_set_valid(caller_valid, reg_rng, 1);}
+          MemoryCopy(caller_valid+reg_rng.min, input_valid+src_reg_rng.min, read_size);
           temp_end(temp);
         }break;
         case DW_UnwindRuleCode_Expr:
@@ -784,7 +783,7 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
       }
       result.status = UWND_StepStatus_Good;
       result.is_interrupted = signal_frame;
-      if(reg_valid) {MemoryCopy(reg_valid, caller_valid, arch_info->reg_block_size);}
+      MemoryCopy(reg_valid, caller_valid, arch_info->reg_block_size);
     }
   }
   scratch_end(scratch);
