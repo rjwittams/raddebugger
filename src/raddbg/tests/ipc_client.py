@@ -1,9 +1,26 @@
 """Serialized request/reply client for isolated RAD regression sessions."""
+import base64
+import binascii
 import json
 import os
 import re
 import subprocess
 import time
+
+
+def ipc_bytes(value):
+    """Decode an IPC byte-string explicitly; never replace invalid bytes."""
+    if isinstance(value, str):
+        return value.encode('utf-8')
+    if not isinstance(value, dict) or set(value) != {'base64'} or not isinstance(value['base64'], str):
+        raise ValueError('Expected an IPC string or {base64: string}')
+    try:
+        result = base64.b64decode(value['base64'], validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise ValueError('Invalid IPC base64') from error
+    if base64.b64encode(result).decode('ascii') != value['base64']:
+        raise ValueError('Expected canonical padded IPC base64')
+    return result
 
 
 class Client:

@@ -290,6 +290,31 @@ are outside this contract. Command submission is not execution completion.
 The client waits for a greater `stop_count`, a stopped target, and a settled
 snapshot after each execution command.
 
+#### Byte strings in snapshot and evaluation replies
+
+Module/source paths, function/symbol names, evaluation `reason` and `type`, and
+`process_handle` use a string-or-object representation: valid UTF-8 remains an
+ordinary JSON string; otherwise the entire original byte sequence is returned
+as `{"base64":"..."}`. Base64 uses the RFC 4648 standard alphabet, padding and
+no line breaks. Empty strings, valid Unicode and ordinary JSON escaping are
+unchanged. Protocol keys, status tokens and numeric/address fields are not
+byte-string unions. No bytes are replaced or normalized.
+
+This extends the alpha v1 field contract; older clients assuming every such
+field is a string cannot handle the exceptional object case. `Client` returns
+the wire representation unchanged. Use `ipc_client.ipc_bytes(value)` explicitly
+to recover bytes. On POSIX, `os.fsdecode(ipc_bytes(path))` provides a filesystem
+string without discarding invalid bytes; use a separate policy for display.
+Do not decode base64 bytes as UTF-8 with replacement for path identity.
+
+The native `ipc_byte_strings` torture test checks known encodings and exports
+vectors. Check the actual formatter through Python's JSON parser and the client:
+
+```sh
+./build/torture ipc_byte_strings
+python3 src/raddbg/tests/test_ipc_bytes.py torture_artifacts/ipc_byte_strings/byte_strings.jsonl
+```
+
 Top-level `status` is `ready`, `pending`, or `stale`. `ready` means the
 observation is stable, not that unwinding or symbol loading succeeded. Compare
 `run_gen`, `stop_count`, `mem_gen`, and `reg_gen` within one debugger lifetime.

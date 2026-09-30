@@ -4,22 +4,61 @@
 internal String8
 rd_snapshot_json_string(Arena *arena, String8 value)
 {
-  U8 *out = push_array_no_zero(arena, U8, value.size*6+3);
-  U64 size = 0;
-  out[size++] = '"';
-  for(U64 i = 0; i < value.size; i += 1)
+  B32 valid_utf8 = 1;
+  for(U64 i = 0; i < value.size;)
   {
-    U8 c = value.str[i];
-    if(c == '"' || c == '\\') {out[size++] = '\\'; out[size++] = c;}
-    else if(c < 32)
+    UnicodeDecode decode = utf8_decode(value.str+i, value.size-i);
+    if(decode.codepoint > 0x10ffff ||
+       (0xd800 <= decode.codepoint && decode.codepoint <= 0xdfff) ||
+       (decode.inc == 2 && decode.codepoint < 0x80) ||
+       (decode.inc == 3 && decode.codepoint < 0x800) ||
+       (decode.inc == 4 && decode.codepoint < 0x10000))
     {
-      U8 hex[] = "0123456789abcdef";
-      out[size++] = '\\'; out[size++] = 'u'; out[size++] = '0'; out[size++] = '0';
-      out[size++] = hex[c >> 4]; out[size++] = hex[c & 15];
+      valid_utf8 = 0;
+      break;
     }
-    else {out[size++] = c;}
+    i += decode.inc;
   }
-  out[size++] = '"';
+  U8 *out = push_array_no_zero(arena, U8, value.size*6+16);
+  U64 size = 0;
+  if(!valid_utf8)
+  {
+    // RFC 4648 alphabet; base_core's base64 table uses a different alphabet.
+    String8 alphabet = str8_lit("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/");
+    String8 prefix = str8_lit("{\"base64\":\"");
+    MemoryCopy(out, prefix.str, prefix.size);
+    size = prefix.size;
+    for(U64 i = 0; i < value.size; i += 3)
+    {
+      U64 count = Min(value.size-i, 3);
+      U32 bits = (U32)value.str[i] << 16;
+      if(count > 1) {bits |= (U32)value.str[i+1] << 8;}
+      if(count > 2) {bits |= value.str[i+2];}
+      out[size++] = alphabet.str[(bits >> 18) & 63];
+      out[size++] = alphabet.str[(bits >> 12) & 63];
+      out[size++] = count > 1 ? alphabet.str[(bits >> 6) & 63] : '=';
+      out[size++] = count > 2 ? alphabet.str[bits & 63] : '=';
+    }
+    out[size++] = '"';
+    out[size++] = '}';
+  }
+  else
+  {
+    out[size++] = '"';
+    for(U64 i = 0; i < value.size; i += 1)
+    {
+      U8 c = value.str[i];
+      if(c == '"' || c == '\\') {out[size++] = '\\'; out[size++] = c;}
+      else if(c < 32)
+      {
+        U8 hex[] = "0123456789abcdef";
+        out[size++] = '\\'; out[size++] = 'u'; out[size++] = '0'; out[size++] = '0';
+        out[size++] = hex[c >> 4]; out[size++] = hex[c & 15];
+      }
+      else {out[size++] = c;}
+    }
+    out[size++] = '"';
+  }
   return str8(out, size);
 }
 
