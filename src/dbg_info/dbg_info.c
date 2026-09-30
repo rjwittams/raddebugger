@@ -47,21 +47,12 @@ di_rdi_path_from_original_path(Arena *arena, String8 path)
 {
   String8 result = {0};
   String8 dsym_marker = str8_lit(".dSYM/");
-  U64 dsym_pos = path.size;
-  for(U64 scan_pos = 0; scan_pos < path.size;)
+  U64 dsym_opl = path.size >= dsym_marker.size
+    ? str8_find_needle_reverse(path, 0, dsym_marker, StringMatchFlag_CaseInsensitive|StringMatchFlag_SlashInsensitive)
+    : 0;
+  if(dsym_opl != 0)
   {
-    U64 match_pos = str8_find_needle(path, scan_pos, dsym_marker,
-                                     StringMatchFlag_CaseInsensitive|StringMatchFlag_SlashInsensitive);
-    if(match_pos == path.size)
-    {
-      break;
-    }
-    dsym_pos = match_pos;
-    scan_pos = match_pos + dsym_marker.size;
-  }
-  if(dsym_pos < path.size)
-  {
-    result = str8f(arena, "%S.rdi", str8_prefix(path, dsym_pos));
+    result = str8f(arena, "%S.rdi", str8_prefix(path, dsym_opl-dsym_marker.size));
   }
   else
   {
