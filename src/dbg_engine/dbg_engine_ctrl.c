@@ -4240,6 +4240,7 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
       MachO_CodeSymbolArray code_symbols = {0};
       EH_UWND_ModuleUnwindInfo *synthesized_eh_unwind_info = 0;
       DMN_ModuleInfo synthesized_module_info = {0};
+      B32 is_macho_module = 0;
       if(module_info == 0 || module_info == &dmn_module_info_nil)
       {
         module_info = &synthesized_module_info;
@@ -4250,6 +4251,8 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
         if(d_process_read_struct(process_handle, base_vaddr, &magic) == sizeof(magic) &&
            macho_magic_is_supported(magic))
         {
+          is_macho_module = 1;
+          module_info->debug_info_path = str8_zero();
           U64 header_size = macho_header_size_from_magic(magic);
           MachO_Header64 header = {0};
           if(header_size != 0 &&
@@ -4296,11 +4299,27 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
               Rng1U64 function_starts_vrange = {0};
               macho_linkedit_data_vrange_from_bin(data, &bin, MACHO_LC_FUNCTION_STARTS, slide, &function_starts_vrange);
               module_info->arch = arch;
+              MachO_UUID loaded_uuid = macho_uuid_from_bin(data, &bin);
+              File image_file = file_open(AccessFlag_Read|AccessFlag_ShareRead, module_path);
+              if(macho_file_matches_image(image_file, arch, loaded_uuid))
+              {
+                module_info->debug_info_path = str8_copy(arena, module_path);
+              }
+              file_close(image_file);
               String8 dsym_path = macho_dsym_path_from_executable_path(scratch2.arena, module_path);
               FileProperties dsym_props = properties_from_file_path(dsym_path);
               if(dsym_props.modified != 0 && dsym_props.size != 0)
               {
-                module_info->debug_info_path = str8_copy(arena, dsym_path);
+                File dsym_file = file_open(AccessFlag_Read|AccessFlag_ShareRead, dsym_path);
+                if(macho_file_matches_image(dsym_file, arch, loaded_uuid))
+                {
+                  module_info->debug_info_path = str8_copy(arena, dsym_path);
+                }
+                else
+                {
+                  log_infof("Ignoring companion dSYM %S: UUID or architecture does not match loaded image %S\n", dsym_path, module_path);
+                }
+                file_close(dsym_file);
               }
               for EachIndex(idx, bin.load_commands.count)
               {
@@ -4464,6 +4483,7 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
       
       //- rjf: compute local symbol server cache path for this debug info
       String8 local_symbol_server_cache_path = smsv_local_debug_info_path_from_key(scratch2.arena, str8_skip_last_slash(module_info->debug_info_path), module_info->debug_info_guid, module_info->debug_info_age);
+      if(is_macho_module) {local_symbol_server_cache_path = str8_zero();}
       
       //- rjf: pick default initial debug info path
       String8 initial_debug_info_path = {0};
@@ -4483,6 +4503,7 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
         }
         
         // rjf: push heuristic-based debug info paths
+        if(!is_macho_module)
         {
           String8 exe_path = module_info->module_path;
           String8 exe_path_no_ext = str8_chop_last_dot(exe_path);

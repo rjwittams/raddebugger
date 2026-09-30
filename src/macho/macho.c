@@ -317,7 +317,7 @@ macho_uuid_from_bin(String8 data, MachO_Bin *bin)
   for EachIndex(idx, bin->load_commands.count)
   {
     MachO_LoadCommandInfo *info = &bin->load_commands.v[idx];
-    if(info->cmd == MACHO_LC_UUID && info->offset + sizeof(MachO_UUIDCommand) <= data.size)
+    if(info->cmd == MACHO_LC_UUID && info->cmd_size >= sizeof(MachO_UUIDCommand) && info->offset + sizeof(MachO_UUIDCommand) <= data.size)
     {
       MachO_UUIDCommand command = {0};
       str8_deserial_read_struct(data, info->offset, &command);
@@ -363,6 +363,46 @@ macho_guid_from_uuid(MachO_UUID uuid)
   result.data2 = ((U16)uuid.v[4]<<8) | uuid.v[5];
   result.data3 = ((U16)uuid.v[6]<<8) | uuid.v[7];
   MemoryCopy(result.data4, uuid.v+8, sizeof(result.data4));
+  return result;
+}
+
+internal MachO_UUID
+macho_uuid_from_file(File file, Arch *arch_out)
+{
+  MachO_UUID result = {0};
+  *arch_out = Arch_Null;
+  MachO_Header64 header = {0};
+  if(file_read_struct(file, 0, &header) == sizeof(header) && header.magic == MACHO_MAGIC_64)
+  {
+    *arch_out = arch_from_macho_cpu_type(header.cpu_type);
+    FileProperties props = properties_from_file(file);
+    if(props.size >= sizeof(header) && header.load_commands_size <= MB(16) && header.load_commands_size <= props.size-sizeof(header))
+    {
+      Temp scratch = scratch_begin(0, 0);
+      U64 size = sizeof(header)+header.load_commands_size;
+      U8 *bytes = push_array(scratch.arena, U8, size);
+      if(file_read(file, r1u64(0, size), bytes) == size)
+      {
+        String8 data = str8(bytes, size);
+        MachO_Bin bin = macho_bin_from_data(scratch.arena, data);
+        if(bin.load_commands.count == header.load_command_count)
+        {
+          result = macho_uuid_from_bin(data, &bin);
+        }
+      }
+      scratch_end(scratch);
+    }
+  }
+  return result;
+}
+
+internal B32
+macho_file_matches_image(File file, Arch arch, MachO_UUID uuid)
+{
+  Arch file_arch = Arch_Null;
+  MachO_UUID file_uuid = macho_uuid_from_file(file, &file_arch);
+  B32 result = (arch != Arch_Null && file_arch == arch &&
+                !macho_uuid_is_zero(uuid) && macho_uuid_match(uuid, file_uuid));
   return result;
 }
 

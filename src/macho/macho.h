@@ -283,6 +283,8 @@ internal B32 macho_uuid_is_zero(MachO_UUID uuid);
 internal B32 macho_uuid_match(MachO_UUID a, MachO_UUID b);
 internal String8 macho_string_from_uuid(Arena *arena, MachO_UUID uuid);
 internal Guid macho_guid_from_uuid(MachO_UUID uuid);
+internal MachO_UUID macho_uuid_from_file(File file, Arch *arch_out);
+internal B32 macho_file_matches_image(File file, Arch arch, MachO_UUID uuid);
 internal String8 macho_dsym_path_from_executable_path(Arena *arena, String8 executable_path);
 internal U64 macho_header_size_from_magic(U32 magic);
 internal U64 macho_base_vaddr_from_bin(String8 data, MachO_Bin *bin);
