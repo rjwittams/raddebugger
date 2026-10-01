@@ -635,6 +635,7 @@ d_serialized_string_from_event(Arena *arena, D_Event *event, U64 max)
     str8_serial_push_struct(scratch.arena, &srl, &event->stack_base);
     str8_serial_push_struct(scratch.arena, &srl, &event->tls_root);
     str8_serial_push_struct(scratch.arena, &srl, &event->timestamp);
+    str8_serial_push_struct(scratch.arena, &srl, &event->dbg_info_key);
     str8_serial_push_struct(scratch.arena, &srl, &event->exception_code);
     str8_serial_push_struct(scratch.arena, &srl, &event->rgba);
     str8_serial_push_struct(scratch.arena, &srl, &event->bp_flags);
@@ -672,6 +673,7 @@ d_event_from_serialized_string(Arena *arena, String8 string)
     read_off += str8_deserial_read_struct(string, read_off, &event.stack_base);
     read_off += str8_deserial_read_struct(string, read_off, &event.tls_root);
     read_off += str8_deserial_read_struct(string, read_off, &event.timestamp);
+    read_off += str8_deserial_read_struct(string, read_off, &event.dbg_info_key);
     read_off += str8_deserial_read_struct(string, read_off, &event.exception_code);
     read_off += str8_deserial_read_struct(string, read_off, &event.rgba);
     read_off += str8_deserial_read_struct(string, read_off, &event.bp_flags);
@@ -837,7 +839,11 @@ d_dbgi_key_from_module(D_Entity *module)
 internal DI_Key
 d_dbgi_key_from_debug_info_path(D_Entity *dbg_path)
 {
-  DI_Key dbgi_key = di_key_from_path_timestamp(dbg_path->string, dbg_path->timestamp);
+  DI_Key dbgi_key = dbg_path->dbg_info_key;
+  if(di_key_match(dbgi_key, di_key_zero()))
+  {
+    dbgi_key = di_key_from_path_timestamp(dbg_path->string, dbg_path->timestamp);
+  }
   return dbgi_key;
 }
 
@@ -1486,6 +1492,7 @@ d_entity_store_apply_events(D_EntityCtxRWStore *store, D_EventList *list)
         }
         d_entity_equip_string(store, debug_info_path, path_normalized_from_string(scratch.arena, event->string));
         debug_info_path->timestamp = event->timestamp;
+        debug_info_path->dbg_info_key = event->dbg_info_key;
         scratch_end(scratch);
       }break;
       
@@ -3588,7 +3595,7 @@ d_ctrl_thread__entry_point(void *p)
             if(module != &d_entity_nil)
             {
               D_Entity *debug_info_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
-              DI_Key old_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, debug_info_path->timestamp);
+              DI_Key old_dbgi_key = d_dbgi_key_from_debug_info_path(debug_info_path);
               di_close(old_dbgi_key, 0);
               MutexScopeW(d_ctrl_state->ctrl_thread_entity_ctx_rw_mutex)
               {
@@ -3597,6 +3604,7 @@ d_ctrl_thread__entry_point(void *p)
               U64 new_dbgi_timestamp = properties_from_file_path(path).modified;
               debug_info_path->timestamp = new_dbgi_timestamp;
               DI_Key new_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, new_dbgi_timestamp);
+              debug_info_path->dbg_info_key = new_dbgi_key;
               di_open(new_dbgi_key);
               D_EventList evts = {0};
               D_Event *evt = d_event_list_push(scratch.arena, &evts);
@@ -3604,6 +3612,7 @@ d_ctrl_thread__entry_point(void *p)
               evt->entity     = msg->entity;
               evt->string     = path;
               evt->timestamp  = new_dbgi_timestamp;
+              evt->dbg_info_key = new_dbgi_key;
               d_c2u_push_events(&evts);
             }
           }break;
@@ -4230,6 +4239,8 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
       D_Handle module_handle = d_handle_from_dmn(D_MachineID_Local, event->module);
       String8 module_path = path_normalized_from_string(scratch2.arena, event->string);
       U64 exe_timestamp = properties_from_file_path(module_path).modified;
+      Arch macho_arch = Arch_Null;
+      Guid macho_guid = {0};
       DMN_ModuleInfo *module_info = event->module_info;
       U64 base_vaddr = event->address;
       
@@ -4266,6 +4277,8 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
               String8 data = str8(data_bytes, data_size);
               MachO_Bin bin = macho_bin_from_data(scratch2.arena, data);
               Arch arch = arch_from_macho_cpu_type(bin.header.cpu_type);
+              macho_arch = arch;
+              macho_guid = macho_guid_from_uuid(macho_uuid_from_bin(data, &bin));
               U64 file_base_vaddr = macho_base_vaddr_from_bin(data, &bin);
               U64 slide = base_vaddr - file_base_vaddr;
               // Read the loaded image's tables so architecture, image identity
@@ -4595,7 +4608,8 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
       out_evt2->string     = initial_debug_info_path;
       
       // rjf: open debug info
-      DI_Key initial_dbgi_key = di_key_from_path_timestamp(initial_debug_info_path, debug_info_timestamp);
+      DI_Key initial_dbgi_key = di_key_from_path_timestamp_identity(initial_debug_info_path, debug_info_timestamp, macho_arch, macho_guid);
+      out_evt2->dbg_info_key = initial_dbgi_key;
       di_open(initial_dbgi_key);
       scratch_end(scratch2);
     }break;
@@ -5735,6 +5749,7 @@ d_ctrl_thread__open_crash_dump(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       evt->entity     = module_handle;
       evt->parent     = process;
       evt->timestamp  = debug_info_timestamp;
+      evt->dbg_info_key = initial_dbgi_key;
       evt->string     = initial_debug_info_path;
     }
   }
@@ -7893,6 +7908,7 @@ d_call_stack_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_
               dst_e->vaddr_range      = src_e->vaddr_range;
               dst_e->stack_base       = src_e->stack_base;
               dst_e->timestamp        = src_e->timestamp;
+              dst_e->dbg_info_key     = src_e->dbg_info_key;
               dst_e->bp_flags         = src_e->bp_flags;
               dst_e->string           = str8_copy(scratch.arena, src_e->string);
               dst_e->os               = src_e->os;

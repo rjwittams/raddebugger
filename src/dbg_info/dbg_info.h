@@ -45,6 +45,8 @@ struct DI_KeyPathNode
   DI_KeyPathNode *prev;
   String8 path;
   U64 min_timestamp;
+  Arch macho_arch;
+  Guid macho_guid;
   DI_Key key;
 };
 
@@ -147,6 +149,7 @@ struct DI_LoadTask
   
   B32 og_analyzed;
   B32 og_is_rdi;
+  B32 og_matches_identity;
   B32 og_folder_analyzed;
   B32 og_folder_is_writable;
   U64 og_size;
@@ -344,6 +347,7 @@ internal void di_set_auto_downloads(B32 auto_downloads);
 //~ rjf: Path * Timestamp Cache Submission & Lookup
 
 internal DI_Key di_key_from_path_timestamp(String8 path, U64 min_timestamp);
+internal DI_Key di_key_from_path_timestamp_identity(String8 path, U64 min_timestamp, Arch macho_arch, Guid macho_guid);
 
 ////////////////////////////////
 //~ rjf: Debug Info Opening / Closing

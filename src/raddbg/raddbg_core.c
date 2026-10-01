@@ -259,6 +259,24 @@ rd_path_from_cfg(CFG_Node *cfg)
   return result;
 }
 
+internal DI_Key
+rd_dbgi_key_from_cfg(CFG_Node *cfg)
+{
+  String8 path = rd_path_from_cfg(cfg);
+  U64 timestamp = 0;
+  try_u64_from_str8_c_rules(cfg_node_child_from_string(cfg, str8_lit("timestamp"))->first->string, &timestamp);
+  D_EntityArray dbg_paths = d_entity_array_from_kind(D_EntityKind_DebugInfoPath);
+  for EachIndex(idx, dbg_paths.count)
+  {
+    D_Entity *dbg_path = dbg_paths.v[idx];
+    if(dbg_path->timestamp == timestamp && str8_match(dbg_path->string, path, 0))
+    {
+      return d_dbgi_key_from_debug_info_path(dbg_path);
+    }
+  }
+  return di_key_from_path_timestamp(path, timestamp);
+}
+
 internal D_Target
 rd_target_from_cfg(Arena *arena, CFG_Node *cfg)
 {
@@ -921,10 +939,7 @@ rd_eval_space_read(E_Space space, void *out, E_SpaceRangeInfo *out_range_info, R
           if(str8_match(child_schema->string, str8_lit("guid"), 0))
           {
             Access *access = access_open();
-            String8 path = rd_path_from_cfg(root_cfg);
-            U64 timestamp = 0;
-            try_u64_from_str8_c_rules(cfg_node_child_from_string(root_cfg, str8_lit("timestamp"))->first->string, &timestamp);
-            DI_Key key = di_key_from_path_timestamp(path, timestamp);
+            DI_Key key = rd_dbgi_key_from_cfg(root_cfg);
             RDI_Parsed *rdi = di_rdi_from_key(access, key, 0, 0);
             RDI_TopLevelInfo *tli = rdi_element_from_name_idx(rdi, TopLevelInfo, 0);
             Guid guid = {0};
@@ -12074,11 +12089,7 @@ rd_frame(void)
       
       // rjf: unpack debug info config
       CFG_Node *di = n->v;
-      String8 path = rd_path_from_cfg(di);
-      CFG_Node *di_timestamp = cfg_node_child_from_string(di, str8_lit("timestamp"));
-      U64 timestamp = 0;
-      try_u64_from_str8_c_rules(di_timestamp->first->string, &timestamp);
-      DI_Key key = di_key_from_path_timestamp(path, timestamp);
+      DI_Key key = rd_dbgi_key_from_cfg(di);
       
       // rjf: touch in cache
       U64 hash = u64_hash_from_str8(str8_struct(&key));
@@ -12665,15 +12676,28 @@ rd_frame(void)
     U64 dbg_infos_count = 0;
     {
       CFG_NodePtrList dbg_infos = cfg_node_top_level_list_from_string(scratch.arena, str8_lit("debug_info"));
-      for EachNode(n, CFG_NodePtrNode, dbg_infos.first)
+      D_EntityArray modules = d_entity_array_from_kind(D_EntityKind_Module);
+      CFG_NodePtrNode *cfg_node = dbg_infos.first;
+      for(U64 idx = 0; idx < dbg_infos.count + modules.count; idx += 1)
       {
-        CFG_Node *di = n->v;
-        if(rd_cfg_is_project_filtered(di)) { continue; }
-        String8 path = rd_path_from_cfg(di);
-        CFG_Node *timestamp_node = cfg_node_child_from_string(di, str8_lit("timestamp"));
-        U64 timestamp = 0;
-        try_u64_from_str8_c_rules(timestamp_node->first->string, &timestamp);
-        DI_Key key = di_key_from_path_timestamp(path, timestamp);
+        String8 path = {0};
+        DI_Key key = {0};
+        if(idx < dbg_infos.count)
+        {
+          CFG_Node *di = cfg_node->v;
+          cfg_node = cfg_node->next;
+          if(rd_cfg_is_project_filtered(di)) { continue; }
+          path = rd_path_from_cfg(di);
+          key = rd_dbgi_key_from_cfg(di);
+        }
+        else
+        {
+          D_Entity *module = modules.v[idx - dbg_infos.count];
+          D_Entity *dbg_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
+          path = dbg_path->string;
+          key = d_dbgi_key_from_debug_info_path(dbg_path);
+        }
+        if(path.size == 0) { continue; }
         U64 hash = u64_hash_from_str8(str8_struct(&key));
         U64 slot_idx = hash%dbg_info_slots_count;
         DbgInfoNode *node = 0;

@@ -275,6 +275,23 @@ These synthetic cases do not establish live signal-frame support.
 rule, as used by Linux `_start`, from a rule that needs unavailable input.
 The former completes the stack; the latter remains an unwind error.
 
+## Mach-O build identity regression
+
+The macOS build-identity regression uses a GUI-started cleat daemon with
+debugger authorization. From the source checkout, run:
+
+```sh
+CLEAT_DAEMON=YOUR_GUI_DAEMON python3 src/raddbg/tests/run_macho_identity.py
+```
+
+It checks matching/stale dSYMs, corrupt and wrong-UUID cache regeneration,
+failed conversion, read-only fallback, and replacement with preserved
+timestamps. Its concurrent case keeps build A alive, replaces the files
+with build B, forces B's conversion, then evaluates a different local in
+each process. It retains fixtures, IPC traces, commands, binary hashes and
+source status in a unique `build/identity-live-*` directory, and exits its
+owned targets and debugger instances. Explicit RDI opening is not covered.
+
 ## `debug_snapshot` version 1
 
 Send this as the sole command in a serialized IPC request:
