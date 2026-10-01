@@ -278,7 +278,8 @@ The former completes the stack; the latter remains an unwind error.
 ## Mach-O build identity regression
 
 The macOS build-identity regression uses a GUI-started cleat daemon with
-debugger authorization. From the source checkout, run:
+debugger authorization and requires `raddbg`, `raddbg_non_graphical` and
+`radbin` in `build/`, plus clang and dsymutil. From the source checkout, run:
 
 ```sh
 CLEAT_DAEMON=YOUR_GUI_DAEMON python3 src/raddbg/tests/run_macho_identity.py
@@ -290,7 +291,13 @@ timestamps. Its concurrent case keeps build A alive, replaces the files
 with build B, forces B's conversion, then evaluates a different local in
 each process. It retains fixtures, IPC traces, commands, binary hashes and
 source status in a unique `build/identity-live-*` directory, and exits its
-owned targets and debugger instances. Explicit RDI opening is not covered.
+owned targets and debugger instances.
+
+Six standalone `load_debug_info` cases check plain/compressed RDI, zero and
+different GUIDs, and read-only input directories. Each starts without a target,
+confirms a fixture-specific type is absent, then loads the supplied RDI and
+checks its type size. Input hashes and directory contents must remain unchanged.
+This proves explicit file loading, not reassignment of a live module's debug info.
 
 ## `debug_snapshot` version 1
 

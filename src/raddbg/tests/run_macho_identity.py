@@ -1,5 +1,6 @@
 """Live macOS checks for debug-info build identity, conversion and cache reuse."""
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -41,7 +42,8 @@ def run(args):
 metadata = {'source_revision': run(['git', '-C', root, 'rev-parse', 'HEAD']).strip(),
             'source_status': run(['git', '-C', root, 'status', '--short']),
             'debugger_sha256': hashlib.sha256(debugger.read_bytes()).hexdigest(),
-            'sender_sha256': hashlib.sha256(sender.read_bytes()).hexdigest()}
+            'sender_sha256': hashlib.sha256(sender.read_bytes()).hexdigest(),
+            'radbin_sha256': hashlib.sha256((root/'build/radbin').read_bytes()).hexdigest()}
 (out/'metadata.json').write_text(json.dumps(metadata, indent=2))
 (out/'source.patch').write_text(run(['git', '-C', root, 'diff', '--binary', 'HEAD']))
 
@@ -52,11 +54,15 @@ def stop_target(client):
         assert time.monotonic() < deadline, 'Owned target did not exit'
         time.sleep(.05)
 
-def probe(name, target, want_source, after_stop=None, expected_file='fresh.c', expected_line=4):
+@contextmanager
+def debugger_client(name, target=None):
     folder = out/name
     folder.mkdir()
     project = folder/'test.project'
-    project.write_text('// raddbg 0.9.29 project file\n\ntarget:\n{\n executable: '+json.dumps(str(target))+'\n working_directory: '+json.dumps(str(target.parent))+'\n enabled: 1\n}\n')
+    text = '// raddbg 0.9.29 project file\n'
+    if target:
+        text += '\ntarget:\n{\n executable: '+json.dumps(str(target))+'\n working_directory: '+json.dumps(str(target.parent))+'\n enabled: 1\n}\n'
+    project.write_text(text)
     session = 'rad-identity-'+name+'-'+out.name[-8:]
     client = None
     try:
@@ -74,6 +80,19 @@ def probe(name, target, want_source, after_stop=None, expected_file='fresh.c', e
             time.sleep(.1)
         else:
             raise AssertionError('Debugger did not become ready')
+        yield client, folder
+    finally:
+        try:
+            if client:
+                try:
+                    stop_target(client)
+                finally:
+                    client.command('exit')
+        finally:
+            (out/'results.json').write_text(json.dumps(results, indent=2))
+
+def probe(name, target, want_source, after_stop=None, expected_file='fresh.c', expected_line=4):
+    with debugger_client(name, target) as (client, folder):
         state = client.stopped('restart')
         deadline = time.monotonic()+20
         while state['symbols_pending'] and time.monotonic() < deadline:
@@ -90,18 +109,10 @@ def probe(name, target, want_source, after_stop=None, expected_file='fresh.c', e
         print('PASS', name, flush=True)
         if after_stop:
             after_stop(client, folder)
-    finally:
-        try:
-            if client:
-                try:
-                    stop_target(client)
-                finally:
-                    client.command('exit')
-        finally:
-            (out/'results.json').write_text(json.dumps(results, indent=2))
 
 fresh = out/'fresh.c'
-fresh.write_text('int main(void)\n{\n volatile int first_value = 42;\n __builtin_trap();\n return first_value;\n}\n')
+fresh.write_text('int main(void)\n{\n volatile int first_value = 42;\n __builtin_trap();\n return first_value;\n}\n'
+                 'typedef struct { char bytes[37]; } IdentityProbe;\nIdentityProbe probe_global;\n')
 old = out/'old.c'
 old.write_text('\n\n\n\nint main(void)\n{\n volatile int second_value = 84;\n __builtin_trap();\n return second_value;\n}\n')
 images = out/'images'
@@ -215,5 +226,52 @@ for other_cache in images.glob('*.rdi'):
     if other_cache != cache:
         other_cache.unlink()
 probe('concurrent-builds', target, True, lambda c, f: replace_and_restart(c, f, True))
+
+explicit = out/'explicit'
+explicit.mkdir()
+plain = explicit/'plain.rdi'
+plain.write_bytes(original)
+compressed = explicit/'compressed.rdi'
+run([root/'build/radbin', '--rdi', '--compress', plain, '--out:'+str(compressed)])
+assert compressed.stat().st_size < plain.stat().st_size, 'Fixture did not compress'
+zero_uuid = bytearray(original)
+zero_uuid[top+24:top+40] = bytes(16)
+(explicit/'zero-uuid.rdi').write_bytes(zero_uuid)
+(explicit/'wrong-uuid.rdi').write_bytes(wrong_uuid)
+
+for name, rdi in (('explicit-plain', plain), ('explicit-compressed', compressed),
+                  ('explicit-zero-uuid', explicit/'zero-uuid.rdi'),
+                  ('explicit-wrong-uuid', explicit/'wrong-uuid.rdi'),
+                  ('explicit-readonly-plain', plain), ('explicit-readonly-compressed', compressed)):
+    readonly = 'readonly' in name
+    if readonly:
+        explicit.chmod(0o555)
+        rdi.chmod(0o444)
+    try:
+        with debugger_client(name) as (client, folder):
+            before_hash = hashlib.sha256(rdi.read_bytes()).hexdigest()
+            unloaded = client.command(['eval', 'sizeof(IdentityProbe)'])
+            assert 'value: "37"' not in unloaded, unloaded
+            client.command(['load_debug_info', str(rdi)])
+            deadline = time.monotonic()+10
+            while True:
+                value = client.command(['eval', 'sizeof(IdentityProbe)'])
+                if 'value: "37"' in value or time.monotonic() >= deadline:
+                    break
+                time.sleep(.05)
+            (folder/'evaluation.txt').write_text(value)
+            assert 'value: "37"' in value, value
+            assert 'msgs:  ""' in value, value
+            assert hashlib.sha256(rdi.read_bytes()).hexdigest() == before_hash, 'Explicit input was rewritten'
+            assert set(explicit.iterdir()) == {plain, compressed, explicit/'zero-uuid.rdi', explicit/'wrong-uuid.rdi'}, 'Unexpected adjacent cache'
+            state = client.snapshot()
+            assert state['process_count'] == 0, state
+            results.append({'case': name, 'status': 'pass', 'input_sha256': before_hash, 'build': state['build']})
+            print('PASS', name, flush=True)
+    finally:
+        if readonly:
+            explicit.chmod(0o755)
+            rdi.chmod(0o644)
+
 print('DONE', out, flush=True)
 assert all(r['status'] == 'pass' for r in results), results
