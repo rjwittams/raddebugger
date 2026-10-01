@@ -612,9 +612,12 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       DW2_ParseCtx *ctx = &unit_parse_ctxs[unit_idx];
       DW2_Tag *unit_root_tag = &unit_root_tags[unit_idx];
       DW2_Attrib *stmt_list = dw2_attrib_from_kind(unit_root_tag, DW_AttribKind_StmtList);
-      U64 line_info_off = stmt_list->val.u128.u64[0];
-      String8 line_info_data = raw->sec[DW_SectionKind_Line].data;
-      dw2_read_line_table_header(scratch.arena, raw, ctx, line_info_data, line_info_off, &unit_line_table_headers[unit_idx]);
+      if(stmt_list != &dw2_attrib_nil)
+      {
+        U64 line_info_off = stmt_list->val.u128.u64[0];
+        String8 line_info_data = raw->sec[DW_SectionKind_Line].data;
+        dw2_read_line_table_header(scratch.arena, raw, ctx, line_info_data, line_info_off, &unit_line_table_headers[unit_idx]);
+      }
     }
     lane_sync();
   }

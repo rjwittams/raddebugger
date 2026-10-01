@@ -336,6 +336,119 @@ Test(d2r_inline_sequence_end)
   arena_release(convert_arena);
 }
 
+Test(d2r_missing_stmt_list)
+{
+  // CU a points to the line table at offset zero. CU b either has no
+  // DW_AT_stmt_list or points to its own table (the control).
+  U8 abbrev[] = {1,0x11,1, 3,8, 0x1b,8, 0x10,0x17, 0x11,1, 0x12,6, 0,0,
+                 2,0x11,1, 3,8, 0x1b,8, 0x11,1, 0x12,6, 0,0,
+                 3,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0, 0};
+  U8 header4[] = {0,0,0,0, 4,0, 0,0,0,0, 8};
+  U8 header5[] = {0,0,0,0, 5,0, 1,8, 0,0,0,0};
+  U8 type[] = {3,'i','n','t',0,5,4,0};
+  U8 second_type[] = {3,'o','t','h','e','r',0,5,4,0};
+  U8 line4[] = {0,0,0,0, 4,0, 0,0,0,0, 1,1,1,0xfb,14,13,
+                0,1,1,1,1,0,0,0,1,0,0,1, 0, 'a','.','c',0,0,0,0,0};
+  U8 line5[] = {0,0,0,0, 5,0,8,0, 0,0,0,0, 1,1,1,0xfb,14,13,
+                0,1,1,1,1,0,0,0,1,0,0,1,
+                1,1,8,1, '/','s','r','c',0,
+                2,1,8,2,0x0f,1, 'a','.','c',0,0};
+  U32 header_size4 = sizeof(line4)-10, header_size5 = sizeof(line5)-12;
+  MemoryCopy(line4+6, &header_size4, 4);
+  MemoryCopy(line5+8, &header_size5, 4);
+  B32 all_units_match = 1;
+  for(U64 version = 4; version <= 5; version += 1) for(U64 present = 0; present <= 1; present += 1)
+  {
+    String8List parts = {0};
+    U32 second_line_off = 0;
+    for(U64 idx = 0; idx < 2; idx += 1)
+    {
+      String8List line_parts = {0};
+      line4[sizeof(line4)-8] = line5[sizeof(line5)-5] = idx == 0 ? 'a' : 'b';
+      U8 program[] = {0,9,2, 0,idx == 0 ? 0x10 : 0x20,0,0,0,0,0,0,
+                      4,version == 4 ? 1 : 0, 1, 2,4, 0,1,1};
+      str8_list_push(arena, &line_parts, version == 4 ? str8_array_fixed(line4) : str8_array_fixed(line5));
+      str8_list_push(arena, &line_parts, str8_array_fixed(program));
+      String8 line_data = str8_list_join(arena, &line_parts, 0);
+      U32 line_size = line_data.size-4;
+      MemoryCopy(line_data.str, &line_size, 4);
+      str8_list_push(arena, &parts, line_data);
+      if(idx == 0) {second_line_off = line_data.size;}
+    }
+    String8 lines = str8_list_join(arena, &parts, 0);
+    MemoryZeroStruct(&parts);
+    for(U64 idx = 0; idx < 2; idx += 1)
+    {
+      String8List unit_parts = {0};
+      str8_list_push(arena, &unit_parts, version == 4 ? str8_array_fixed(header4) : str8_array_fixed(header5));
+      U8 code = idx == 0 || present ? 1 : 2;
+      str8_list_push(arena, &unit_parts, str8_struct(&code));
+      str8_list_push(arena, &unit_parts, idx == 0 ? str8_lit("a.c\0") : str8_lit("b.c\0"));
+      str8_list_push(arena, &unit_parts, str8_lit("/src\0"));
+      U32 stmt_list = idx == 0 ? 0 : second_line_off;
+      if(code == 1) {str8_list_push(arena, &unit_parts, str8_struct(&stmt_list));}
+      U64 low_pc = idx == 0 ? 0x1000 : 0x2000;
+      U32 high_pc = 4;
+      str8_list_push(arena, &unit_parts, str8_struct(&low_pc));
+      str8_list_push(arena, &unit_parts, str8_struct(&high_pc));
+      str8_list_push(arena, &unit_parts, idx == 0 ? str8_array_fixed(type) : str8_array_fixed(second_type));
+      String8 unit_data = str8_list_join(arena, &unit_parts, 0);
+      U32 unit_size = unit_data.size-4;
+      MemoryCopy(unit_data.str, &unit_size, 4);
+      str8_list_push(arena, &parts, unit_data);
+    }
+    String8 info = str8_list_join(arena, &parts, 0);
+    String8 name = str8f(arena, "v%I64u-%s", version, present ? "present" : "absent");
+    TestCheck(t_write_file(str8f(arena, "%S.info", name), info));
+    TestCheck(t_write_file(str8f(arena, "%S.abbrev", name), str8_array_fixed(abbrev)));
+    TestCheck(t_write_file(str8f(arena, "%S.line", name), lines));
+    RDIM_BinarySectionNode section = {0};
+    section.v.voff_first = 0x1000;
+    section.v.voff_opl = 0x2004;
+    D2R_ConvertParams params = {0};
+    params.arch = Arch_x64;
+    params.path_style = PathStyle_UnixAbsolute;
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    params.binary_sections.first = params.binary_sections.last = &section;
+    params.binary_sections.count = 1;
+    params.raw.sec[DW_SectionKind_Info].data = info;
+    params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+    params.raw.sec[DW_SectionKind_Line].data = lines;
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count=1, .broadcast_memory=&broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+    TestCheck(result.units.total_count == 2);
+    RDIM_LineTable *first = result.units.first->v[0].line_table;
+    RDIM_LineTable *second = result.units.first->v[1].line_table;
+    test_outf("%S: first unit %I64u lines, second unit %I64u lines\n", name, first->line_count, second->line_count);
+    TestCheck(first->line_count == 1 && first->first_seq->v.voffs[0] == 0x1000);
+    all_units_match &= second->line_count == present && second->seq_count == present;
+    B32 found_other = 0;
+    for EachNode(chunk, RDIM_TypeChunkNode, result.types.first) for EachIndex(idx, chunk->count)
+    {
+      RDIM_Type *type = &chunk->v[idx];
+      found_other |= type->kind == RDI_TypeKind_Alias && type->byte_size == 4 &&
+                     str8_match(type->name, str8_lit("other"), 0);
+    }
+    TestCheck(found_other);
+    RDIM_BakeResults baked = rdim_bake(convert_arena, &result);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
+    String8 data = str8_list_join(convert_arena, &blobs, 0);
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    RDI_ParsedLineTable parsed = {0};
+    rdi_parsed_from_line_table(&rdi, rdi_line_table_from_unit(&rdi, rdi_unit_from_voff(&rdi, 0x2000)), &parsed);
+    test_outf("%S: baked second unit %I64u lines\n", name, parsed.count);
+    all_units_match &= parsed.count == (present ? 2 : 0);
+    if(present) {TestCheck(parsed.voffs[0] == 0x2000 && parsed.lines[0].line_num == 1);}
+    arena_release(convert_arena);
+  }
+  TestCheck(all_units_match);
+}
+
 Test(d2r_sparse_units)
 {
   // Keep line decoding and empty child lists independently testable.
