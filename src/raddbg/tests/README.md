@@ -23,6 +23,13 @@ check ELF unwind-index synthesis for both executable types.
 A headless build can be supplied as `--sender build/raddbg_non_graphical`.
 The sender and debugger must use compatible IPC transports.
 
+`c-gcc-unwind` is an optional macOS check using GNU `gcc-16` or `gcc` from
+PATH (not Apple's Clang alias). It requires version-3 EH-frame CIEs and no
+compact-unwind section, then checks `leaf` → `main` → `dyld`, source lines,
+restart and normal exit. It skips if GNU GCC is absent or the host is not
+macOS. A compiler that produces different unwind data fails the fixture
+check rather than silently testing a different unwind path.
+
 Each case builds in a new directory, with one target, its own user/project
 configuration, and its own cleat session. It never attaches to an existing
 debugger. Cleanup kills attached test targets, verifies their removal from

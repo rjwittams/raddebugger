@@ -252,7 +252,7 @@ eh_read_cie(String8 data, U64 off, DW_Format fmt, Arch arch, U64 pc, EH_PtrCtx *
   S64 data_align_factor = 0;
   U64 ret_addr_reg = 0;
   EH_Augmentation aug = {0};
-  if(version == 1)
+  if(version == 1 || version == 3)
   {
     // rjf: read aug string
     aug_string_off_first = off;
@@ -273,7 +273,14 @@ eh_read_cie(String8 data, U64 off, DW_Format fmt, Arch arch, U64 pc, EH_PtrCtx *
     off += str8_deserial_read_sleb128(data, off, &data_align_factor);
     
     // rjf: read return address register
-    off += str8_deserial_read(data, off, &ret_addr_reg, sizeof(U8), sizeof(U8));
+    if(version == 1)
+    {
+      off += str8_deserial_read(data, off, &ret_addr_reg, sizeof(U8), sizeof(U8));
+    }
+    else
+    {
+      off += str8_deserial_read_uleb128(data, off, &ret_addr_reg);
+    }
     
     // rjf: parse augmentation
     aug_data_off_first = off;
@@ -281,6 +288,10 @@ eh_read_cie(String8 data, U64 off, DW_Format fmt, Arch arch, U64 pc, EH_PtrCtx *
     // Include the encoded length, so even a zero-byte 'z' augmentation is present.
     aug_data_off_opl = off + aug_data_size;
     off += aug_data_size;
+  }
+  else
+  {
+    version = 0;
   }
   
   // rjf: fill output
@@ -310,7 +321,7 @@ eh_read_cie(String8 data, U64 off, DW_Format fmt, Arch arch, U64 pc, EH_PtrCtx *
     cie_out->ext[EH_CIE_Ext_HandlerIp ] = aug.handler_ip;
   }
   
-  U64 bytes_read = (off - start_off);
+  U64 bytes_read = version != 0 ? (off - start_off) : 0;
   return bytes_read;
 }
 

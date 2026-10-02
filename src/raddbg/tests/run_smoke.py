@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import platform
 import shlex
+import shutil
 import struct
 import subprocess
 import sys
@@ -70,7 +71,7 @@ def main():
     p.add_argument('--debugger', required=True, type=Path)
     p.add_argument('--sender', type=Path, help='Default: same binary as debugger')
     p.add_argument('--compiler', default='cl' if os.name == 'nt' else 'clang')
-    p.add_argument('--case', choices=['all', 'languages', *['language-'+x for x in language_basics.LANGUAGES], 'c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-source-case', 'c-assert', 'c-assert-optimized', *ELF_CASES, 'symbol-library', *ARM_CASES], default='c')
+    p.add_argument('--case', choices=['all', 'languages', *['language-'+x for x in language_basics.LANGUAGES], 'c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-source-case', 'c-gcc-unwind', 'c-assert', 'c-assert-optimized', *ELF_CASES, 'symbol-library', *ARM_CASES], default='c')
     p.add_argument('--examples', type=Path, help='Explicit raddebugger_examples checkout for language cases')
     p.add_argument('--output-root', type=Path, help='Existing directory for retained, unique run directories')
     a = p.parse_args()
@@ -78,7 +79,7 @@ def main():
     a.sender = (a.sender or a.debugger).resolve()
     if a.output_root:
         a.output_root = a.output_root.resolve()
-    cases = ['c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-source-case', 'c-assert', 'c-assert-optimized', *ELF_CASES, 'symbol-library', *ARM_CASES] if a.case == 'all' else [a.case]
+    cases = ['c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-source-case', 'c-gcc-unwind', 'c-assert', 'c-assert-optimized', *ELF_CASES, 'symbol-library', *ARM_CASES] if a.case == 'all' else [a.case]
     if a.case == 'languages':
         cases = ['language-'+x for x in language_basics.LANGUAGES]
     elif a.case == 'all' and a.examples:
@@ -116,6 +117,20 @@ def run_case(a, case):
         result.check_returncode()
         return result.stdout
     try:
+        compiler = a.compiler
+        if case == 'c-gcc-unwind':
+            if platform.system() != 'Darwin':
+                record.update(status='skipped', reason='Requires GCC Mach-O CIE version 3')
+                return record
+            compiler = None
+            for name in ('gcc-16', 'gcc'):
+                candidate = shutil.which(name)
+                if candidate and 'Free Software Foundation' in run([candidate, '--version'], timeout=10):
+                    compiler = candidate
+                    break
+            if compiler is None:
+                record.update(status='skipped', reason='GNU gcc-16/gcc not found (Apple Clang is not GCC)')
+                return record
         if case in ELF_CASES and platform.system() != 'Linux':
             record.update(status='skipped', reason='Requires the Linux ELF module loader')
             return record
@@ -183,7 +198,7 @@ def run_case(a, case):
         elif os.name == 'nt':
             run([a.compiler, '/Zi', '/O2' if case.startswith('c-inline') else '/Od', *['/D'+d for d in defines], str(source), '/Fe:'+str(target), '/link', '/debug', '/incremental:no'], timeout=60)
         else:
-            record['compiler_version'] = run([a.compiler, '--version'], timeout=10)
+            record['compiler_version'] = run([compiler, '--version'], timeout=10)
             compile_flags = []
             link_flags = []
             if case in ELF_CASES:
@@ -193,11 +208,18 @@ def run_case(a, case):
             for index, src in enumerate(sources):
                 obj = f'fixture-{index}.o'
                 optimization = '-O2' if case == 'c-assert-optimized' else '-O1' if case.startswith('c-inline') else '-O0'
-                run([a.compiler, '-g', optimization, *compile_flags, *['-D'+d for d in defines], '-c', str(src), '-o', obj], timeout=60)
+                run([compiler, '-g', optimization, *compile_flags, *['-D'+d for d in defines], '-c', str(src), '-o', obj], timeout=60)
                 objects.append(obj)
-            run([a.compiler, '-g', *link_flags, *objects, '-o', str(target)], timeout=60)
+            run([compiler, '-g', *link_flags, *objects, '-o', str(target)], timeout=60)
             if platform.system() == 'Darwin':
                 run(['xcrun', 'dsymutil', str(target)], timeout=60)
+        if case == 'c-gcc-unwind':
+            cfi = run(['xcrun', 'dwarfdump', '--eh-frame', str(target)], timeout=60)
+            versions = [line.split()[-1] for line in cfi.splitlines() if line.strip().startswith('Version:')]
+            assert versions and set(versions) == {'3'}, ('Requires version 3 CIEs', versions)
+            sections = run(['xcrun', 'otool', '-l', str(target)], timeout=60)
+            assert '__eh_frame' in sections and '__unwind_info' not in sections, 'Fixture must use EH-frame unwinding'
+            record['cie_versions'] = versions
         if case in ELF_CASES:
             with target.open('rb') as stream:
                 header = stream.read(18)
@@ -214,6 +236,8 @@ def run_case(a, case):
         stop_line = language_basics.line(source, 'MATRIX_CALL') if language else 6 if case in ARM_CASES else next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'volatile int seed = 20' in line)
         if case.startswith('c-inline'):
             stop_line = next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'SNAPSHOT_STOP' in line)
+        if case == 'c-gcc-unwind':
+            stop_line = next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'volatile int doubled' in line)
         breakpoint = '' if case.startswith('c-assert') or case == 'symbol-library' else f'breakpoint:\n{{\n source_location: {json.dumps(str(source)+f":{stop_line}:1")}\n enabled: 1\n}}\n'
         if case == 'c-source-case':
             breakpoint = ''.join('breakpoint:\n{\n source_location: '+
@@ -263,6 +287,23 @@ def run_case(a, case):
         else:
             raise AssertionError('Debugger did not become ready; see ipc.jsonl')
         record['debugger_build'] = initial['build']
+        if case == 'c-gcc-unwind':
+            caller_line = next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'result = leaf(seed)' in line)
+            for cycle in range(2):
+                stopped = client.stopped('restart')
+                assert stopped['stop']['cause'] == 'breakpoint', stopped
+                assert stopped['stack']['status'] == 'ready' and stopped['stack']['unwind_flags'] == 0, stopped
+                frames = stopped['stack']['frames']
+                assert len(frames) == 3, stopped
+                for frame, function, line in zip(frames, ('leaf', 'main'), (stop_line, caller_line)):
+                    assert frame['function'] == function, stopped
+                    assert frame['source']['is_source'] and Path(frame['source']['path']) == source, stopped
+                    assert frame['source']['line'] == line, stopped
+                check_loader_frame(stopped)
+                ended = client.stopped('run')
+                assert ended['process_count'] == 0 and ended['last_process_end']['exit_code'] == 0, ended
+            record['status'] = 'pass'
+            return record
         if case == 'c-source-case':
             for cycle in range(2):
                 pcs = []

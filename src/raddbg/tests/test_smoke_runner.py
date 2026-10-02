@@ -57,6 +57,27 @@ class SmokeRunnerTests(unittest.TestCase):
             raise FileNotFoundError(command[0])
         return subprocess.CompletedProcess(command, 0)
 
+    def test_missing_optional_gcc_is_skipped(self):
+        with patch('platform.system', return_value='Darwin'), \
+             patch('shutil.which', return_value=None):
+            status, records = self.invoke('c-gcc-unwind')
+        self.assertEqual(status, 2)
+        self.assertEqual(records[0]['status'], 'skipped')
+        self.assertIn('GNU gcc-16/gcc not found', records[0]['reason'])
+
+    def test_apple_clang_alias_is_not_gcc(self):
+        def clang_version(command, **kwargs):
+            self.assertEqual(command, ['/usr/bin/gcc', '--version'])
+            kwargs['stdout'].write('Apple clang version 21.0.0\n')
+            return subprocess.CompletedProcess(command, 0)
+        with patch('platform.system', return_value='Darwin'), \
+             patch('platform.platform', return_value='Darwin'), \
+             patch('shutil.which', side_effect=lambda name: '/usr/bin/gcc' if name == 'gcc' else None), \
+             patch('subprocess.run', side_effect=clang_version):
+            status, records = self.invoke('c-gcc-unwind')
+        self.assertEqual(status, 2)
+        self.assertEqual(records[0]['status'], 'skipped')
+
     def test_missing_cleat_is_failure(self):
         self.debugger.write_bytes(b'debugger')
         def missing_cleat(command, **kwargs):
