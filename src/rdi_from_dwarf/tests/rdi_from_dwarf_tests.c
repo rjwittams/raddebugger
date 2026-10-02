@@ -479,6 +479,138 @@ Test(d2r_inline_sequence_end)
   arena_release(convert_arena);
 }
 
+Test(d2r_source_paths)
+{
+  U8 abbrev[] = {1,0x11,1, 3,8, 0x1b,8, 0x10,0x17, 0x11,1, 0x12,6, 0,0,
+                 2,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0, 0};
+  U8 unit4[] = {0,0,0,0, 4,0, 0,0,0,0, 8};
+  U8 unit5[] = {0,0,0,0, 5,0, 1,8, 0,0,0,0};
+  U8 line4[] = {0,0,0,0, 4,0, 0,0,0,0, 1,1,1,0xfb,14,13,
+                0,1,1,1,1,0,0,0,1,0,0,1, 0};
+  U8 line5[] = {0,0,0,0, 5,0,8,0, 0,0,0,0, 1,1,1,0xfb,14,13,
+                0,1,1,1,1,0,0,0,1,0,0,1,
+                1,1,8,1, '/','s','r','c',0, 2,1,8,2,0x0f,1};
+  U8 type[] = {2,'i','n','t',0,5,4,0};
+  struct {String8 name, paths[2], canonical; U64 files;} cases[] =
+  {
+    {str8_lit("control"), {str8_lit("/src/shared.h"), str8_lit("/src/shared.h")}, str8_lit("/src/shared.h"), 1},
+    {str8_lit("absolute-dots"), {str8_lit("/src/part/../shared.h"), str8_lit("/src/shared.h")}, str8_lit("/src/shared.h"), 1},
+    {str8_lit("relative-dots"), {str8_lit("part/../shared.h"), str8_lit("/src/shared.h")}, str8_lit("/src/shared.h"), 1},
+    {str8_lit("repeated-separators"), {str8_lit("/src//./shared.h"), str8_lit("/src/shared.h")}, str8_lit("/src/shared.h"), 1},
+    {str8_lit("windows-dots"), {str8_lit("C:\\src\\part\\..\\shared.h"), str8_lit("C:/src/shared.h")}, str8_lit("c:/src/shared.h"), 1},
+    {str8_lit("case-distinct"), {str8_lit("/src/Shared.h"), str8_lit("/src/shared.h")}, str8_lit("/src/shared.h"), 2},
+  };
+  B32 all_paths_match = 1;
+  for(U64 version = 4; version <= 5; version += 1) for EachElement(case_idx, cases)
+  {
+    String8List info_parts = {0}, line_parts = {0};
+    for EachElement(unit_idx, cases[case_idx].paths)
+    {
+      U32 stmt_list = line_parts.total_size;
+      String8List parts = {0};
+      str8_serial_begin(arena, &parts);
+      str8_serial_push_data(arena, &parts, version == 4 ? line4 : line5, version == 4 ? sizeof(line4) : sizeof(line5));
+      str8_serial_push_cstr(arena, &parts, cases[case_idx].paths[unit_idx]);
+      U8 file_tail4[] = {0,0,0,0};
+      U8 file_tail5[] = {0};
+      str8_serial_push_data(arena, &parts, version == 4 ? file_tail4 : file_tail5, version == 4 ? sizeof(file_tail4) : sizeof(file_tail5));
+      U32 header_size = parts.total_size - (version == 4 ? 10 : 12);
+      U64 address = 0x1000+0x1000*unit_idx;
+      U8 set_address[] = {4,version == 4 ? 1 : 0,0,9,2};
+      U8 rows[] = {3,6,1,2,4,0,1,1}; // line 7; copy; advance_pc 4; end_sequence
+      str8_serial_push_data(arena, &parts, set_address, sizeof(set_address));
+      str8_serial_push_u64(arena, &parts, address);
+      str8_serial_push_data(arena, &parts, rows, sizeof(rows));
+      String8 line = str8_serial_end(arena, &parts);
+      U32 line_size = line.size-4;
+      MemoryCopy(line.str, &line_size, 4);
+      MemoryCopy(line.str+(version == 4 ? 6 : 8), &header_size, 4);
+      str8_list_push(arena, &line_parts, line);
+
+      MemoryZeroStruct(&parts);
+      str8_serial_begin(arena, &parts);
+      str8_serial_push_data(arena, &parts, version == 4 ? unit4 : unit5, version == 4 ? sizeof(unit4) : sizeof(unit5));
+      str8_serial_push_u8(arena, &parts, 1);
+      str8_serial_push_cstr(arena, &parts, unit_idx == 0 ? str8_lit("a.c") : str8_lit("b.c"));
+      str8_serial_push_cstr(arena, &parts, str8_lit("/src"));
+      str8_serial_push_u32(arena, &parts, stmt_list);
+      str8_serial_push_u64(arena, &parts, address);
+      str8_serial_push_u32(arena, &parts, 4);
+      str8_serial_push_data(arena, &parts, type, sizeof(type));
+      String8 unit = str8_serial_end(arena, &parts);
+      U32 unit_size = unit.size-4;
+      MemoryCopy(unit.str, &unit_size, 4);
+      str8_list_push(arena, &info_parts, unit);
+    }
+    String8 info = str8_list_join(arena, &info_parts, 0);
+    String8 lines = str8_list_join(arena, &line_parts, 0);
+    String8 name = str8f(arena, "v%I64u-%S", version, cases[case_idx].name);
+    TestCheck(t_write_file(str8f(arena, "%S.info", name), info));
+    TestCheck(t_write_file(str8f(arena, "%S.abbrev", name), str8_array_fixed(abbrev)));
+    TestCheck(t_write_file(str8f(arena, "%S.line", name), lines));
+    RDIM_BinarySectionNode section = {0};
+    section.v.flags = RDI_BinarySectionFlag_Read|RDI_BinarySectionFlag_Execute;
+    section.v.voff_first = 0x1000;
+    section.v.voff_opl = 0x2004;
+    D2R_ConvertParams params = {0};
+    params.arch = Arch_x64;
+    params.path_style = PathStyle_UnixAbsolute;
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    params.binary_sections = (RDIM_BinarySectionList){.first=&section, .last=&section, .count=1};
+    params.raw.sec[DW_SectionKind_Info].data = info;
+    params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+    params.raw.sec[DW_SectionKind_Line].data = lines;
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count=1, .broadcast_memory=&broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+    TestCheck(result.units.total_count == 2);
+    test_outf("%S: %I64u source files\n", name, result.src_files.total_count);
+    all_paths_match &= result.src_files.total_count == cases[case_idx].files;
+    RDIM_BakeResults baked = rdim_bake(convert_arena, &result);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
+    String8 data = str8_list_join(convert_arena, &blobs, 0);
+    TestCheck(t_write_file(str8f(arena, "%S.rdi", name), data));
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    U32 file_ids[2] = {0};
+    for EachElement(unit_idx, file_ids)
+    {
+      U64 address = 0x1000+0x1000*unit_idx;
+      RDI_ParsedLineTable table = {0};
+      rdi_parsed_from_line_table(&rdi, rdi_line_table_from_unit(&rdi, rdi_unit_from_voff(&rdi, address)), &table);
+      U64 row = rdi_line_info_idx_from_voff(&table, address);
+      TestCheck(row < table.count && table.lines[row].line_num == 7);
+      file_ids[unit_idx] = table.lines[row].file_idx;
+    }
+    all_paths_match &= file_ids[0] != 0 && file_ids[1] != 0 &&
+                       ((file_ids[0] == file_ids[1]) == (cases[case_idx].files == 1));
+    RDI_ParsedNameMap map = {0};
+    rdi_parsed_from_name_map(&rdi, rdi_element_from_name_idx(&rdi, NameMaps, RDI_NameMapKind_NormalSourcePaths), &map);
+    U32 id_count = 0;
+    String8 canonical = cases[case_idx].canonical;
+    U32 *ids = rdi_matches_from_map_node(&rdi, rdi_name_map_lookup(&rdi, &map, canonical.str, canonical.size), &id_count);
+    all_paths_match &= id_count == cases[case_idx].files;
+    U32 total_voffs = 0;
+    for EachIndex(idx, id_count)
+    {
+      RDI_SourceFile *file = rdi_element_from_name_idx(&rdi, SourceFiles, ids[idx]);
+      RDI_ParsedSourceLineMap source_map = {0};
+      rdi_parsed_from_source_line_map(&rdi, rdi_source_line_map_from_source_file(&rdi, file), &source_map);
+      U32 voff_count = 0;
+      U64 *voffs = rdi_line_voffs_from_num(&source_map, 7, &voff_count);
+      for EachIndex(voff_idx, voff_count) {all_paths_match &= voffs[voff_idx] == 0x1000 || voffs[voff_idx] == 0x2000;}
+      total_voffs += voff_count;
+    }
+    test_outf("  canonical lookup: %u source IDs, %u line-7 addresses\n", id_count, total_voffs);
+    all_paths_match &= total_voffs == 2;
+    arena_release(convert_arena);
+  }
+  TestCheck(all_paths_match);
+}
+
 Test(d2r_missing_stmt_list)
 {
   // CU a points to the line table at offset zero. CU b either has no
