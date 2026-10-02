@@ -203,6 +203,7 @@
 #include "render/metal/render_metal_tests.c"
 #include "rdi_make/tests/rdi_make_tests.c"
 #include "rdi_from_dwarf/tests/rdi_from_dwarf_tests.c"
+#include "rdi_from_dwarf/tests/binary_metadata_tests.c"
 #include "rdi_from_pdb/tests/rdi_from_pdb_tests.c"
 #include "raddbg/tests/raddbg_tests.c"
 #include "eval2/tests/eval2_tests.c"
