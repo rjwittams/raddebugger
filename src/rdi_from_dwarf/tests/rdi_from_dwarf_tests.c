@@ -592,6 +592,148 @@ Test(d2r_inline_sequence_end)
   arena_release(convert_arena);
 }
 
+Test(d2r_source_directories)
+{
+  U8 abbrev[] = {1,0x11,1, 3,8, 0x1b,8, 0x10,0x17, 0x11,1, 0x12,6, 0,0,
+                 2,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0, 0};
+  U8 info[] = {0,0,0,0, 5,0,1,8, 0,0,0,0, 1,
+               'm','a','i','n','.','c',0, '/','s','r','c',0,
+               0,0,0,0, 0,0x10,0,0,0,0,0,0, 8,0,0,0,
+               2,'i','n','t',0,5,4,0};
+  U32 info_size = sizeof(info)-4;
+  MemoryCopy(info, &info_size, 4);
+  U8 info4[sizeof(info)-1] = {0,0,0,0, 4,0, 0,0,0,0, 8};
+  MemoryCopy(info4+11, info+12, sizeof(info)-12);
+  U32 info4_size = sizeof(info4)-4;
+  MemoryCopy(info4, &info4_size, 4);
+  U8 header[] = {0,0,0,0, 5,0,8,0, 0,0,0,0, 1,1,1,0xfb,14,13,
+                 0,1,1,1,1,0,0,0,1,0,0,1};
+  U8 header4[] = {0,0,0,0, 4,0, 0,0,0,0, 1,1,1,0xfb,14,13,
+                  0,1,1,1,1,0,0,0,1,0,0,1};
+  struct {String8 name, file, expected; U64 dirs, dir_idx;} cases[] =
+  {
+    {str8_lit("control"), str8_lit("main.c"), str8_lit("/src/main.c"), 1,0},
+    {str8_lit("empty-directories"), str8_lit("main.c"), str8_lit("main.c"), 0,0},
+    {str8_lit("one-past-end"), str8_lit("main.c"), str8_lit("main.c"), 1,1},
+    {str8_lit("large-index"), str8_lit("main.c"), str8_lit("main.c"), 1,max_U64},
+    {str8_lit("relative-directory"), str8_lit("main.c"), str8_lit("/src/inc/main.c"), 2,1},
+    {str8_lit("absolute-invalid-index"), str8_lit("/else/main.c"), str8_lit("/else/main.c"), 1,max_U64},
+    {str8_lit("absolute-empty-directories"), str8_lit("/src/main.c"), str8_lit("/src/main.c"), 0,0},
+  };
+  B32 all_paths_match = 1;
+  for(U64 version = 4; version <= 5; version += 1)
+  for EachElement(case_idx, cases)
+  {
+    // DWARF 4 always has an implicit compilation-directory entry at index zero.
+    if(version == 4 && cases[case_idx].dirs == 0) {continue;}
+    String8 name = push_str8f(arena, "v%I64u-%S", version, cases[case_idx].name);
+    String8List parts = {0};
+    str8_serial_begin(arena, &parts);
+    str8_serial_push_data(arena, &parts, version == 5 ? header : header4, version == 5 ? sizeof(header) : sizeof(header4));
+    if(version == 5)
+    {
+      U8 dirs[] = {1,1,8,(U8)cases[case_idx].dirs}; // path/string format; directory count
+      str8_serial_push_data(arena, &parts, dirs, sizeof(dirs));
+      if(cases[case_idx].dirs != 0) {str8_serial_push_cstr(arena, &parts, str8_lit("/src"));}
+    }
+    if(cases[case_idx].dirs == 2) {str8_serial_push_cstr(arena, &parts, str8_lit("inc"));}
+    B32 has_index = case_idx >= 2 && case_idx <= 5;
+    if(version == 5)
+    {
+      if(has_index)
+      {
+        U8 files[] = {2,1,8,2,0x0f,2}; // path/string and directory-index/ULEB formats
+        str8_serial_push_data(arena, &parts, files, sizeof(files));
+      }
+      else
+      {
+        U8 files[] = {1,1,8,2}; // no directory-index field
+        str8_serial_push_data(arena, &parts, files, sizeof(files));
+      }
+    }
+    else {str8_serial_push_u8(arena, &parts, 0);}
+    String8 files[] = {cases[case_idx].file, str8_lit("/src/known.c")};
+    for EachElement(file_idx, files)
+    {
+      str8_serial_push_cstr(arena, &parts, files[file_idx]);
+      if(version == 4 || has_index)
+      {
+        if(cases[case_idx].dir_idx == max_U64)
+        {
+          U8 index[] = {0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,1};
+          str8_serial_push_data(arena, &parts, index, sizeof(index));
+        }
+        else {str8_serial_push_u8(arena, &parts, (U8)cases[case_idx].dir_idx);}
+      }
+      if(version == 4) {str8_serial_push_u8(arena, &parts, 0); str8_serial_push_u8(arena, &parts, 0);}
+    }
+    if(version == 4) {str8_serial_push_u8(arena, &parts, 0);}
+    U32 header_size = parts.total_size-(version == 5 ? 12 : 10);
+    U8 program[] = {0,9,2, 0,0x10,0,0,0,0,0,0, 4,version == 5 ? 0 : 1,1,
+                    2,4,4,version == 5 ? 1 : 2,3,1,1, 2,4,0,1,1};
+    str8_serial_push_data(arena, &parts, program, sizeof(program));
+    String8 lines = str8_serial_end(arena, &parts);
+    U32 line_size = lines.size-4;
+    MemoryCopy(lines.str, &line_size, 4);
+    MemoryCopy(lines.str+(version == 5 ? 8 : 6), &header_size, 4);
+    String8 unit_info = version == 5 ? str8_array_fixed(info) : str8_array_fixed(info4);
+    TestCheck(t_write_file(push_str8f(arena, "%S.info", name), unit_info));
+    TestCheck(t_write_file(push_str8f(arena, "%S.abbrev", name), str8_array_fixed(abbrev)));
+    TestCheck(t_write_file(push_str8f(arena, "%S.line", name), lines));
+    RDIM_BinarySectionNode section = {0};
+    section.v.flags = RDI_BinarySectionFlag_Read|RDI_BinarySectionFlag_Execute;
+    section.v.voff_first = 0x1000;
+    section.v.voff_opl = 0x1008;
+    D2R_ConvertParams params = {0};
+    params.arch = Arch_x64;
+    params.path_style = PathStyle_UnixAbsolute;
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    params.binary_sections.first = params.binary_sections.last = &section;
+    params.binary_sections.count = 1;
+    params.raw.sec[DW_SectionKind_Info].data = unit_info;
+    params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+    params.raw.sec[DW_SectionKind_Line].data = lines;
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+    TestCheck(result.units.total_count == 1 && result.src_files.total_count == 2);
+    RDIM_LineTable *table = result.units.first->v[0].line_table;
+    TestCheck(table->seq_count == 2 && table->line_count == 2);
+    String8 paths[] = {cases[case_idx].expected, str8_lit("/src/known.c")};
+    U64 seq_idx = 0;
+    for EachNode(n, RDIM_LineSequenceNode, table->first_seq)
+    {
+      TestCheck(seq_idx < 2 && n->v.line_count == 1 && n->v.src_file != 0);
+      test_outf("%S file %I64u: %S, expected %S\n", name, seq_idx, n->v.src_file->path, paths[seq_idx]);
+      all_paths_match &= str8_match(n->v.src_file->path, paths[seq_idx], 0);
+      TestCheck(n->v.voffs[0] == 0x1000+4*seq_idx && n->v.voffs[1] == 0x1004+4*seq_idx);
+      TestCheck(n->v.line_nums[0] == 1+seq_idx);
+      seq_idx += 1;
+    }
+    RDIM_BakeResults baked = rdim_bake(convert_arena, &result);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
+    String8 data = str8_list_join(convert_arena, &blobs, 0);
+    TestCheck(t_write_file(push_str8f(arena, "%S.rdi", name), data));
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    RDI_ParsedLineTable parsed = {0};
+    rdi_parsed_from_line_table(&rdi, rdi_line_table_from_unit(&rdi, rdi_unit_from_voff(&rdi, 0x1000)), &parsed);
+    for(U64 voff = 0x1000; voff < 0x1008; voff += 1)
+    {
+      U64 row = rdi_line_info_idx_from_voff(&parsed, voff);
+      U64 file = (voff-0x1000)/4;
+      TestCheck(row < parsed.count && parsed.lines[row].line_num == 1+file);
+      RDI_SourceFile *expected = rdi_source_file_from_normal_path(&rdi, paths[file].str, paths[file].size);
+      all_paths_match &= parsed.lines[row].file_idx != 0 && rdi_source_file_from_line(&rdi, &parsed.lines[row]) == expected;
+    }
+    arena_release(convert_arena);
+  }
+  TestCheck(all_paths_match);
+}
+
 Test(d2r_source_paths)
 {
   U8 abbrev[] = {1,0x11,1, 3,8, 0x1b,8, 0x10,0x17, 0x11,1, 0x12,6, 0,0,
