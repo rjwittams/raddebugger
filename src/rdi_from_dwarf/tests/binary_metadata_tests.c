@@ -82,3 +82,48 @@ Test(d2r_elf_image_base)
     arena_release(convert_arena);
   }
 }
+
+Test(elf_rdi_sections)
+{
+  for(U64 base = 0; base <= 0x400000; base += 0x400000)
+  {
+    String8 names = str8_lit("\0.text\0.data\0.debug_info\0");
+    ELF_Phdr64 phdr = {.p_type=ELF_PType_Load, .p_vaddr=base};
+    ELF_Shdr64 shdrs[] =
+    {
+      {.sh_name=1,  .sh_addr=base+0x1000, .sh_size=0x20, .sh_offset=0x200, .sh_flags=ELF_Shf_Alloc|ELF_Shf_ExecInstr},
+      {.sh_name=7,  .sh_addr=base+0x2000, .sh_size=0x30, .sh_offset=0x300, .sh_flags=ELF_Shf_Alloc|ELF_Shf_Write},
+      {.sh_name=13, .sh_size=0x40, .sh_offset=0x400},
+    };
+    ELF_Bin bin = {0};
+    bin.hdr.e_type = ELF_Type_Exec;
+    bin.phdrs = (ELF_Phdr64Array){.v=&phdr, .count=1};
+    bin.shdrs = (ELF_Shdr64Array){.v=shdrs, .count=ArrayCount(shdrs)};
+    bin.sh_name_range = rng_1u64(0, names.size);
+    Arena *bake_arena = arena_alloc();
+    RDIM_BakeParams params = {0};
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.binary_sections = e2r_rdi_binary_sections_from_elf_section_table(bake_arena, names, &bin, &bin.shdrs);
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count=1, .broadcast_memory=&broadcast}));
+    RDIM_BakeResults baked = rdim_bake(bake_arena, &params);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(bake_arena, &baked.section_bundle);
+    String8 data = str8_list_join(bake_arena, &blobs, 0);
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    U64 count = 0;
+    RDI_BinarySection *sections = rdi_table_from_name(&rdi, BinarySections, &count);
+    TestCheck(count == 4);
+    test_outf("image base 0x%I64x: text [0x%I64x,0x%I64x), debug [0x%I64x,0x%I64x)\n",
+              base, sections[1].voff_first, sections[1].voff_opl, sections[3].voff_first, sections[3].voff_opl);
+    TestCheck(sections[1].voff_first == 0x1000 && sections[1].voff_opl == 0x1020 &&
+              sections[1].foff_first == 0x200 && sections[1].foff_opl == 0x220 &&
+              sections[1].flags == (RDI_BinarySectionFlag_Read|RDI_BinarySectionFlag_Execute));
+    TestCheck(sections[2].voff_first == 0x2000 && sections[2].voff_opl == 0x2030 &&
+              sections[2].flags == (RDI_BinarySectionFlag_Read|RDI_BinarySectionFlag_Write));
+    TestCheck(sections[3].voff_first == 0 && sections[3].voff_opl == 0 &&
+              sections[3].foff_first == 0x400 && sections[3].foff_opl == 0x440);
+    arena_release(bake_arena);
+  }
+}
