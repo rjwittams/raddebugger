@@ -89,6 +89,7 @@ Test(d2r_line_extended_opcode)
     // Preserve the exact input for independent llvm-dwarfdump checks.
     TestCheck(t_write_file(str8f(arena, "v%I64u-%S.line", version, cases[case_idx].name), lines));
     RDIM_BinarySectionNode section = {0};
+    section.v.flags = RDI_BinarySectionFlag_Read|RDI_BinarySectionFlag_Execute;
     section.v.voff_first = 0x1000;
     section.v.voff_opl = 0x3000;
     D2R_ConvertParams params = {0};
@@ -142,22 +143,29 @@ Test(d2r_line_extended_opcode)
 
 Test(d2r_line_tombstones)
 {
+  String8 case_names[] = {str8_lit("control"), str8_lit("tombstone"),
+                         str8_lit("zero-dead"), str8_lit("addend-dead"), str8_lit("zero-live"),
+                         str8_lit("delayed-first-row"), str8_lit("dead-crossing-code"), str8_lit("dead-file-change"),
+                         str8_lit("zero-no-code-metadata")};
+  B32 all_cases_match = 1;
   U8 abbrev[] = {1,0x11,1, 3,8, 0x1b,8, 0x10,0x17, 0x11,1, 0x12,6, 0,0,
                  2,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0, 0};
   U8 header4[] = {0,0,0,0, 4,0, 0,0,0,0, 1,1,1,0xfb,14,13,
                   0,1,1,1,1,0,0,0,1,0,0,1, 0,
-                  'm','a','i','n','.','c',0, 0,0,0, 0};
+                  'm','a','i','n','.','c',0, 0,0,0,
+                  'o','t','h','e','r','.','c',0, 0,0,0, 0};
   U32 header4_size = sizeof(header4)-10;
   MemoryCopy(header4+6, &header4_size, 4);
   U8 header5[] = {0,0,0,0, 5,0,8,0, 0,0,0,0, 1,1,1,0xfb,14,13,
                   0,1,1,1,1,0,0,0,1,0,0,1,
                   1,1,8,1, '/','s','r','c',0,
-                  2,1,8,2,0x0f,1, 'm','a','i','n','.','c',0,0};
+                  2,1,8,2,0x0f,2, 'm','a','i','n','.','c',0,0,
+                  'o','t','h','e','r','.','c',0,0};
   U32 header5_size = sizeof(header5)-12;
   MemoryCopy(header5+8, &header5_size, 4);
   for(U64 version = 4; version <= 5; version += 1)
   for(U64 addr_size = 4; addr_size <= 8; addr_size += 4)
-  for(U64 tombstone = 0; tombstone <= 1; tombstone += 1)
+  for EachElement(case_idx, case_names)
   {
     U8 unit_header4[] = {0,0,0,0, 4,0, 0,0,0,0, (U8)addr_size};
     U8 unit_header5[] = {0,0,0,0, 5,0,1,(U8)addr_size, 0,0,0,0};
@@ -185,7 +193,8 @@ Test(d2r_line_tombstones)
     str8_serial_push_data(arena, &line_parts,
                          version == 5 ? header5 : header4,
                          version == 5 ? sizeof(header5) : sizeof(header4));
-    U64 middle = tombstone ? (addr_size == 4 ? max_U32 : max_U64) : 0x1800;
+    U64 middle = case_idx == 1 ? (addr_size == 4 ? max_U32 : max_U64) : case_idx == 0 || case_idx == 5 ? 0x1800 : case_idx == 3 || case_idx == 7 ? 4 : 0;
+    B32 discarded = (case_idx >= 1 && case_idx <= 3) || case_idx == 6 || case_idx == 7;
     U64 addresses[] = {0x1000, middle, 0x2000};
     for EachElement(idx, addresses)
     {
@@ -194,18 +203,38 @@ Test(d2r_line_tombstones)
       U8 set_address[] = {4, version == 5 ? 0 : 1, 0,(U8)(addr_size+1),2};
       U8 rows[] = {1,3,1,2,4,1,2,4,0,1,1};
       str8_serial_push_data(arena, &line_parts, set_address, sizeof(set_address));
-      str8_serial_push_data(arena, &line_parts, &addresses[idx], addr_size);
-      str8_serial_push_data(arena, &line_parts, rows, sizeof(rows));
+      U64 address = case_idx == 5 && idx == 1 ? 0 : addresses[idx];
+      str8_serial_push_data(arena, &line_parts, &address, addr_size);
+      if(idx == 1 && case_idx == 5)
+      {
+        // set_address is not the first row: advance to real code before copy.
+        U8 advance[] = {2,0x80,0x30}; // advance_pc 0x1800
+        str8_serial_push_data(arena, &line_parts, advance, sizeof(advance));
+      }
+      if(idx == 1 && (case_idx == 6 || case_idx == 7))
+      {
+        // A rejected sequence stays rejected after reaching code or changing file.
+        U8 crossing[] = {1,3,1,2,0x80,0x20,1,2,4,0,1,1};
+        U8 file_change[] = {1,4,version == 5 ? 1 : 2,3,1,2,0x80,0x20,1,2,4,0,1,1};
+        str8_serial_push_data(arena, &line_parts, case_idx == 7 ? file_change : crossing,
+                             case_idx == 7 ? sizeof(file_change) : sizeof(crossing));
+      }
+      else
+      {
+        str8_serial_push_data(arena, &line_parts, rows, sizeof(rows));
+      }
     }
     String8 lines = str8_serial_end(arena, &line_parts);
     U32 line_size = lines.size-4;
     MemoryCopy(lines.str, &line_size, 4);
-    String8 name = str8f(arena, "v%I64u-addr%I64u-%s", version, addr_size, tombstone ? "tombstone" : "control");
+    String8 name = str8f(arena, "v%I64u-addr%I64u-%S", version, addr_size, case_names[case_idx]);
     TestCheck(t_write_file(str8f(arena, "%S.info", name), info));
     TestCheck(t_write_file(str8f(arena, "%S.abbrev", name), str8_array_fixed(abbrev)));
     TestCheck(t_write_file(str8f(arena, "%S.line", name), lines));
     RDIM_BinarySectionNode section = {0};
-    section.v.voff_first = 0x1000;
+    section.v.flags = RDI_BinarySectionFlag_Read;
+    if(case_idx != 8) {section.v.flags |= RDI_BinarySectionFlag_Execute;}
+    section.v.voff_first = case_idx == 4 ? 0 : 0x1000;
     section.v.voff_opl = 0x3000;
     D2R_ConvertParams params = {0};
     params.arch = addr_size == 4 ? Arch_x86 : Arch_x64;
@@ -224,7 +253,7 @@ Test(d2r_line_tombstones)
     TestCheck(result.units.total_count == 1);
     RDIM_LineTable *table = result.units.first->v[0].line_table;
     test_outf("%S: %I64u sequences, %I64u lines\n", name, table->seq_count, table->line_count);
-    TestCheck(table->seq_count == (tombstone ? 2 : 3) && table->line_count == (tombstone ? 4 : 6));
+    all_cases_match &= table->seq_count == (discarded ? 2 : 3) && table->line_count == (discarded ? 4 : 6);
     RDIM_BakeResults baked = rdim_bake(convert_arena, &result);
     lane_ctx(restore);
     String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
@@ -240,15 +269,16 @@ Test(d2r_line_tombstones)
       if(parsed.lines[idx].file_idx != 0)
       {
         U64 voff = parsed.voffs[idx];
-        TestCheck(voff == 0x1000 || voff == 0x1004 || voff == 0x2000 || voff == 0x2004 ||
-                  (!tombstone && (voff == 0x1800 || voff == 0x1804)));
-        TestCheck(parsed.lines[idx].line_num == (voff%8 == 0 ? 1 : 2));
+        all_cases_match &= voff == 0x1000 || voff == 0x1004 || voff == 0x2000 || voff == 0x2004 ||
+                           (!discarded && (voff == middle || voff == middle+4));
+        all_cases_match &= parsed.lines[idx].line_num == (voff%8 == 0 ? 1 : 2);
         source_rows += 1;
       }
     }
-    TestCheck(source_rows == (tombstone ? 4 : 6));
+    all_cases_match &= source_rows == (discarded ? 4 : 6);
     arena_release(convert_arena);
   }
+  TestCheck(all_cases_match);
 }
 
 Test(d2r_line_unresolved_file)
