@@ -1196,30 +1196,17 @@ d_lines_array_from_dbgi_key_file_path_line_range(Arena *arena, DI_Key dbgi_key, 
       override_n = override_n->next)
   {
     String8 file_path = override_n->string;
-    String8 file_path_normalized = rdim_normalized_from_path(scratch.arena, file_path);
     
     // rjf: binary -> rdi
     RDI_Parsed *rdi = di_rdi_from_key(access, dbgi_key, 0, 0);
     
-    // rjf: file_path_normalized * rdi -> src_id
+    // rjf: file_path * rdi -> src_id
     B32 good_src_id = 0;
     U32 src_id = 0;
     if(rdi != &rdi_parsed_nil) ProfScope("file_path_normalized * rdi -> src_id")
     {
-      RDI_NameMap *mapptr = rdi_element_from_name_idx(rdi, NameMaps, RDI_NameMapKind_NormalSourcePaths);
-      RDI_ParsedNameMap map = {0};
-      rdi_parsed_from_name_map(rdi, mapptr, &map);
-      RDI_NameMapNode *node = rdi_name_map_lookup(rdi, &map, file_path_normalized.str, file_path_normalized.size);
-      if(node != 0)
-      {
-        U32 id_count = 0;
-        U32 *ids = rdi_matches_from_map_node(rdi, node, &id_count);
-        if(id_count > 0)
-        {
-          good_src_id = 1;
-          src_id = ids[0];
-        }
-      }
+      src_id = rdi_source_file_idx_from_path(rdi, file_path);
+      good_src_id = src_id != 0;
     }
     
     // rjf: good src-id -> look up line info for visible range
@@ -1291,7 +1278,6 @@ d_lines_array_from_file_path_line_range(Arena *arena, String8 file_path, Rng1S64
       override_n = override_n->next)
   {
     String8 file_path = override_n->string;
-    String8 file_path_normalized = rdim_normalized_from_path(scratch.arena, file_path);
     for EachIndex(idx, dbgi_keys.count)
     {
       Access *access = access_open();
@@ -1300,25 +1286,13 @@ d_lines_array_from_file_path_line_range(Arena *arena, String8 file_path, Rng1S64
       DI_Key key = dbgi_keys.v[idx];
       RDI_Parsed *rdi = di_rdi_from_key(access, key, 1, 0);
       
-      // rjf: file_path_normalized * rdi -> src_id
+      // rjf: file_path * rdi -> src_id
       B32 good_src_id = 0;
       U32 src_id = 0;
       if(rdi != &rdi_parsed_nil) ProfScope("file_path_normalized * rdi -> src_id")
       {
-        RDI_NameMap *mapptr = rdi_element_from_name_idx(rdi, NameMaps, RDI_NameMapKind_NormalSourcePaths);
-        RDI_ParsedNameMap map = {0};
-        rdi_parsed_from_name_map(rdi, mapptr, &map);
-        RDI_NameMapNode *node = rdi_name_map_lookup(rdi, &map, file_path_normalized.str, file_path_normalized.size);
-        if(node != 0)
-        {
-          U32 id_count = 0;
-          U32 *ids = rdi_matches_from_map_node(rdi, node, &id_count);
-          if(id_count > 0)
-          {
-            good_src_id = 1;
-            src_id = ids[0];
-          }
-        }
+        src_id = rdi_source_file_idx_from_path(rdi, file_path);
+        good_src_id = src_id != 0;
       }
       
       // rjf: good src-id -> look up line info for visible range

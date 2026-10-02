@@ -499,6 +499,9 @@ Test(d2r_source_paths)
     {str8_lit("repeated-separators"), {str8_lit("/src//./shared.h"), str8_lit("/src/shared.h")}, str8_lit("/src/shared.h"), 1},
     {str8_lit("windows-dots"), {str8_lit("C:\\src\\part\\..\\shared.h"), str8_lit("C:/src/shared.h")}, str8_lit("c:/src/shared.h"), 1},
     {str8_lit("case-distinct"), {str8_lit("/src/Shared.h"), str8_lit("/src/shared.h")}, str8_lit("/src/shared.h"), 2},
+    {str8_lit("case-reversed"), {str8_lit("/src/shared.h"), str8_lit("/src/Shared.h")}, str8_lit("/src/shared.h"), 2},
+    {str8_lit("case-directory"), {str8_lit("/src/Dir/shared.h"), str8_lit("/src/dir/shared.h")}, str8_lit("/src/dir/shared.h"), 2},
+    {str8_lit("case-windows"), {str8_lit("C:/src/Shared.h"), str8_lit("C:/src/shared.h")}, str8_lit("c:/src/shared.h"), 2},
   };
   B32 all_paths_match = 1;
   for(U64 version = 4; version <= 5; version += 1) for EachElement(case_idx, cases)
@@ -592,8 +595,9 @@ Test(d2r_source_paths)
     U32 id_count = 0;
     String8 canonical = cases[case_idx].canonical;
     U32 *ids = rdi_matches_from_map_node(&rdi, rdi_name_map_lookup(&rdi, &map, canonical.str, canonical.size), &id_count);
-    all_paths_match &= id_count == cases[case_idx].files;
+    TestCheck(id_count == cases[case_idx].files);
     U32 total_voffs = 0;
+    U32 seen_voffs = 0;
     for EachIndex(idx, id_count)
     {
       RDI_SourceFile *file = rdi_element_from_name_idx(&rdi, SourceFiles, ids[idx]);
@@ -601,11 +605,39 @@ Test(d2r_source_paths)
       rdi_parsed_from_source_line_map(&rdi, rdi_source_line_map_from_source_file(&rdi, file), &source_map);
       U32 voff_count = 0;
       U64 *voffs = rdi_line_voffs_from_num(&source_map, 7, &voff_count);
-      for EachIndex(voff_idx, voff_count) {all_paths_match &= voffs[voff_idx] == 0x1000 || voffs[voff_idx] == 0x2000;}
+      for EachIndex(voff_idx, voff_count)
+      {
+        all_paths_match &= voffs[voff_idx] == 0x1000 || voffs[voff_idx] == 0x2000;
+        if(voffs[voff_idx] == 0x1000) {seen_voffs |= 1;}
+        if(voffs[voff_idx] == 0x2000) {seen_voffs |= 2;}
+      }
       total_voffs += voff_count;
     }
     test_outf("  canonical lookup: %u source IDs, %u line-7 addresses\n", id_count, total_voffs);
-    all_paths_match &= total_voffs == 2;
+    all_paths_match &= total_voffs == 2 && seen_voffs == 3;
+    if(cases[case_idx].files == 2)
+    {
+      for EachElement(unit_idx, cases[case_idx].paths)
+      {
+        String8 requested = cases[case_idx].paths[unit_idx];
+        U32 selected_idx = rdi_source_file_idx_from_path(&rdi, requested);
+        RDI_SourceFile *selected = rdi_element_from_name_idx(&rdi, SourceFiles, selected_idx);
+        U64 selected_voff = rdi_first_voff_from_source_file_line_num(&rdi, selected, 7);
+        U64 expected_voff = 0x1000+0x1000*unit_idx;
+        test_outf("  %S selects 0x%I64x (expected 0x%I64x)\n", requested, selected_voff, expected_voff);
+        all_paths_match &= selected_voff == expected_voff;
+        String8 backslashes = str8_copy(arena, requested);
+        for EachIndex(idx, backslashes.size) {if(backslashes.str[idx] == '/') {backslashes.str[idx] = '\\';}}
+        all_paths_match &= rdi_source_file_idx_from_path(&rdi, backslashes) == selected_idx;
+      }
+    }
+    else
+    {
+      all_paths_match &= rdi_source_file_idx_from_path(&rdi, canonical) == file_ids[0];
+    }
+    String8 unmatched_case = upper_from_str8(arena, canonical);
+    all_paths_match &= rdi_source_file_idx_from_path(&rdi, unmatched_case) == ids[0];
+    all_paths_match &= rdi_source_file_idx_from_path(&rdi, str8_lit("/missing/file.c")) == 0;
     arena_release(convert_arena);
   }
   TestCheck(all_paths_match);

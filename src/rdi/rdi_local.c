@@ -74,6 +74,40 @@ str8_from_rdi_path_node_idx(Arena *arena, RDI_Parsed *rdi, PathStyle path_style,
   return path;
 }
 
+internal U32
+rdi_source_file_idx_from_path(RDI_Parsed *rdi, String8 path)
+{
+  Temp scratch = scratch_begin(0, 0);
+  String8 requested = str8_copy(scratch.arena, path);
+  for EachIndex(idx, requested.size)
+  {
+    requested.str[idx] = correct_slash_from_char(requested.str[idx]);
+  }
+  String8 folded = lower_from_str8(scratch.arena, requested);
+  RDI_ParsedNameMap map = {0};
+  rdi_parsed_from_name_map(rdi, rdi_element_from_name_idx(rdi, NameMaps, RDI_NameMapKind_NormalSourcePaths), &map);
+  U32 id_count = 0;
+  U32 *ids = rdi_matches_from_map_node(rdi, rdi_name_map_lookup(rdi, &map, folded.str, folded.size), &id_count);
+  U32 result = id_count != 0 ? ids[0] : 0;
+  // Prefer the requested spelling without removing the existing folded fallback.
+  if(id_count > 1)
+  {
+    PathStyle style = path_style_from_str8(requested);
+    for EachIndex(idx, id_count)
+    {
+      RDI_SourceFile *src = rdi_element_from_name_idx(rdi, SourceFiles, ids[idx]);
+      String8 candidate = str8_from_rdi_path_node_idx(scratch.arena, rdi, style, src->file_path_node_idx);
+      if(str8_match(requested, candidate, 0))
+      {
+        result = ids[idx];
+        break;
+      }
+    }
+  }
+  scratch_end(scratch);
+  return result;
+}
+
 internal String8
 fully_qualified_from_rdi_string_and_container(Arena *arena, RDI_Parsed *rdi, U32 name_string_idx, U32 start_container_idx, RDI_ContainerFlags start_container_flags)
 {
