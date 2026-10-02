@@ -47,6 +47,128 @@ Test(ipc_byte_strings)
                                    str8_list_join(arena, &records, 0)));
 }
 
+Test(source_path_resolution)
+{
+  CFG_Ctx *previous_cfg = cfg_ctx;
+  CFG_State *cfg = cfg_state_alloc();
+  cfg_ctx_select(cfg_state_ctx(cfg));
+  E_Cache *previous_cache = e_cache;
+  E_BaseCtx *previous_base = e_base_ctx;
+  E_Cache *cache = e_cache_alloc();
+  e_select_cache(cache);
+  E_Module module = {.name = str8_lit("/CaseLookup/module/target")};
+  E_DbgInfo debug_info = {.rdi = &rdi_parsed_nil};
+  E_BaseCtx base = {.primary_module = &module, .primary_dbg_info = &debug_info};
+  e_select_base_ctx(&base);
+  D_EntityCtxRWStore *store = d_entity_ctx_rw_store_alloc();
+  D_EntityCtx *previous_entities = d_select_entity_ctx(&store->ctx);
+  D_Handle process_handle = d_handle_from_dmn(D_MachineID_Local, (DMN_Handle){.u64={1}});
+  D_Handle module_handle = d_handle_from_dmn(D_MachineID_Local, (DMN_Handle){.u64={2}});
+  D_Entity *process = d_entity_alloc(store, store->ctx.root->first, D_EntityKind_Process, Arch_x64, process_handle, 1);
+  D_Entity *image = d_entity_alloc(store, process, D_EntityKind_Module, Arch_x64, module_handle, 2);
+  D_Entity *debug_path = d_entity_alloc(store, image, D_EntityKind_DebugInfoPath, Arch_Null, d_handle_zero(), 0);
+  image->vaddr_range = r1u64(0x100000000, 0x100004000);
+  d_entity_equip_string(store, image, module.name);
+  struct {String8 paths[2]; String8 request_root; B32 relative_to_debug_info;} cases[] =
+  {
+    {{str8_lit("/CaseLookup/Shared.h"), str8_lit("/CaseLookup/shared.h")}},
+    {{str8_lit("C:/CaseLookup/Shared.h"), str8_lit("C:/CaseLookup/shared.h")}},
+    {{str8_lit("ModuleCase/Shared.h"), str8_lit("ModuleCase/shared.h")}, str8_lit("/CaseLookup/module/")},
+    {{str8_lit("DebugCase/Shared.h"), str8_lit("DebugCase/shared.h")}, str8_zero(), 1},
+  };
+  B32 all_lines_match = 1;
+  B32 all_traps_match = 1;
+  for EachElement(case_idx, cases)
+  {
+    Arena *bake_arena = arena_alloc();
+    RDIM_BakeParams params = {0};
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.top_level_info.arch = RDI_Arch_X64;
+    for EachElement(file_idx, cases[case_idx].paths)
+    {
+      RDIM_SrcFile *src = rdim_src_file_chunk_list_push(bake_arena, &params.src_files, 2);
+      src->path = cases[case_idx].paths[file_idx];
+      RDIM_Unit *unit = rdim_unit_chunk_list_push(bake_arena, &params.units, 2);
+      unit->source_file = src->path;
+      unit->line_table = rdim_line_table_chunk_list_push(bake_arena, &params.line_tables, 2);
+      U64 *voffs = push_array(bake_arena, U64, 2);
+      voffs[0] = 0x1000+file_idx*0x1000;
+      voffs[1] = voffs[0]+4;
+      U32 *lines = push_array(bake_arena, U32, 1);
+      lines[0] = 7;
+      RDIM_LineSequence *seq = rdim_line_table_push_sequence(bake_arena, &params.line_tables, unit->line_table, src, voffs, lines, 0, 1);
+      rdim_src_file_push_line_sequence(bake_arena, &params.src_files, src, seq);
+      rdim_rng1u64_chunk_list_push(bake_arena, &unit->voff_ranges, 1, (RDIM_Rng1U64){voffs[0], voffs[1]});
+    }
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count=1, .broadcast_memory=&broadcast}));
+    RDIM_BakeResults baked = rdim_bake(bake_arena, &params);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(bake_arena, &baked.section_bundle);
+    String8 filename = str8f(arena, "paths-%I64u.rdi", case_idx);
+    TestCheck(t_write_file_list(filename, blobs));
+    arena_release(bake_arena);
+    String8 path = t_make_file_path(arena, filename);
+    DI_Key key = di_key_from_path_timestamp(path, 1);
+    debug_info.name = path;
+    di_open(key);
+    Access *access = access_open();
+    RDI_Parsed *rdi = di_rdi_from_key(access, key, 1, now_time_us()+5000000);
+    TestCheck(rdi != &rdi_parsed_nil && rdi->raw_data_size != 0);
+    debug_info.rdi = rdi;
+    debug_info.dbgi_key = key;
+    e_select_base_ctx(&base);
+    debug_path->dbg_info_key = key;
+    d_entity_equip_string(store, debug_path, path);
+    D_EvalScope scope = {.access = access};
+    for EachElement(file_idx, cases[case_idx].paths)
+    {
+      String8 requested = str8f(arena, "%S%S", cases[case_idx].request_root, cases[case_idx].paths[file_idx]);
+      if(cases[case_idx].relative_to_debug_info)
+      {
+        requested = str8f(arena, "%S/%S", str8_chop_last_slash(path), cases[case_idx].paths[file_idx]);
+      }
+      U64 expected = 0x1000+file_idx*0x1000;
+      for(U64 lookup = 0; lookup < 2; lookup += 1)
+      {
+        D_LineListArray result = lookup == 0 ?
+          d_lines_array_from_dbgi_key_file_path_line_range(arena, key, requested, r1s64(7, 7), 8) :
+          d_lines_array_from_file_path_line_range(arena, requested, r1s64(7, 7), 8);
+        D_LineList *list = result.count == 1 ? &result.v[0] : 0;
+        B32 matches = list != 0 && list->count != 0 && list->first != 0;
+        if(list != 0) for EachNode(n, D_LineNode, list->first)
+        {
+          matches &= n->v.pt.line == 7 && n->v.voff_range.min == expected && n->v.voff_range.max == expected+4 &&
+                     di_key_match(n->v.dbgi_key, key);
+        }
+        test_outf("lookup %I64u: %S:7 -> %I64u addresses, expected 0x%I64x: %u\n",
+                  lookup, requested, list ? list->count : 0, expected, matches);
+        all_lines_match &= matches;
+      }
+      D_BreakpointNode node = {.v = {.file_path = requested, .pt = {7, 1}}};
+      D_BreakpointList bps = {.first = &node, .last = &node, .count = 1};
+      DMN_TrapChunkList traps = {0};
+      d_ctrl_thread__append_resolved_module_user_bp_traps(arena, &scope, process_handle, module_handle, &bps, &traps);
+      B32 matches = traps.trap_count == 1 && traps.first->count == 1 &&
+                    traps.first->v[0].vaddr == image->vaddr_range.min+expected &&
+                    traps.first->v[0].process.u64[0] == 1 && traps.first->v[0].id == (U64)&node.v;
+      test_outf("traps: %S:7 -> %I64u addresses, expected 0x%I64x: %u\n",
+                requested, traps.trap_count, image->vaddr_range.min+expected, matches);
+      all_traps_match &= matches;
+    }
+    access_close(access);
+    di_close(key, 0);
+  }
+  e_base_ctx = previous_base;
+  e_select_cache(previous_cache);
+  e_cache_release(cache);
+  d_select_entity_ctx(previous_entities);
+  d_entity_ctx_rw_store_release(store);
+  cfg_ctx_select(previous_cfg);
+  cfg_state_release(cfg);
+  TestCheck(all_lines_match && all_traps_match);
+}
+
 ////////////////////////////////
 //~ rjf: Debugger Testing IPC Driving Helpers
 

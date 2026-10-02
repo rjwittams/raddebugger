@@ -70,7 +70,7 @@ def main():
     p.add_argument('--debugger', required=True, type=Path)
     p.add_argument('--sender', type=Path, help='Default: same binary as debugger')
     p.add_argument('--compiler', default='cl' if os.name == 'nt' else 'clang')
-    p.add_argument('--case', choices=['all', 'languages', *['language-'+x for x in language_basics.LANGUAGES], 'c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', *ELF_CASES, 'symbol-library', *ARM_CASES], default='c')
+    p.add_argument('--case', choices=['all', 'languages', *['language-'+x for x in language_basics.LANGUAGES], 'c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-source-case', 'c-assert', 'c-assert-optimized', *ELF_CASES, 'symbol-library', *ARM_CASES], default='c')
     p.add_argument('--examples', type=Path, help='Explicit raddebugger_examples checkout for language cases')
     p.add_argument('--output-root', type=Path, help='Existing directory for retained, unique run directories')
     a = p.parse_args()
@@ -78,7 +78,7 @@ def main():
     a.sender = (a.sender or a.debugger).resolve()
     if a.output_root:
         a.output_root = a.output_root.resolve()
-    cases = ['c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-assert', 'c-assert-optimized', *ELF_CASES, 'symbol-library', *ARM_CASES] if a.case == 'all' else [a.case]
+    cases = ['c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-source-case', 'c-assert', 'c-assert-optimized', *ELF_CASES, 'symbol-library', *ARM_CASES] if a.case == 'all' else [a.case]
     if a.case == 'languages':
         cases = ['language-'+x for x in language_basics.LANGUAGES]
     elif a.case == 'all' and a.examples:
@@ -125,6 +125,9 @@ def run_case(a, case):
         if case.startswith('c-assert') and os.name == 'nt':
             record.update(status='skipped', reason='Fixture requires __builtin_trap; the Windows runner uses MSVC')
             return record
+        if case == 'c-source-case' and os.name == 'nt':
+            record.update(status='skipped', reason='DWARF logical-path fixture requires Clang; Windows runner uses MSVC')
+            return record
         if case == 'symbol-library' and platform.system() != 'Darwin':
             record.update(status='skipped', reason='Mach-O name-only symbol provider; ELF/PE providers not implemented')
             return record
@@ -148,6 +151,8 @@ def run_case(a, case):
             stem = 'inline'
         if case == 'c-inline-nested':
             stem = 'inline_nested'
+        if case == 'c-source-case':
+            stem = 'source_case'
         if case.startswith('c-assert'):
             stem = 'assert_trap'
         if case == 'symbol-library':
@@ -157,6 +162,8 @@ def run_case(a, case):
             source = Path(language['source'])
         defines = ARM_CASES.get(case, []) + (['EXIT_CODE=37'] if case == 'c-exit-37' else [])
         sources = [source] + ([HERE/(stem+'.S')] if case in ARM_CASES else [])
+        if case == 'c-source-case':
+            sources += [HERE/'source_case_upper.c', HERE/'source_case_lower.c']
         if case == 'unwind-unavailable':
             sources[1] = HERE/'arm64_unwind_error.S'
         record['fixture_hashes'] = {f.name: sha(f) for f in sources}
@@ -208,6 +215,10 @@ def run_case(a, case):
         if case.startswith('c-inline'):
             stop_line = next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'SNAPSHOT_STOP' in line)
         breakpoint = '' if case.startswith('c-assert') or case == 'symbol-library' else f'breakpoint:\n{{\n source_location: {json.dumps(str(source)+f":{stop_line}:1")}\n enabled: 1\n}}\n'
+        if case == 'c-source-case':
+            breakpoint = ''.join('breakpoint:\n{\n source_location: '+
+                                 json.dumps(str(output/'CaseLookup'/name)+':4:1')+
+                                 '\n enabled: 1\n}\n' for name in ('Shared.h', 'shared.h'))
         if language:
             breakpoint += f'breakpoint:\n{{\n address_location: {json.dumps(language["leaf"])}\n enabled: 1\n}}\n'
             return_line = language_basics.line(source, 'MATRIX_RETURN')
@@ -252,6 +263,25 @@ def run_case(a, case):
         else:
             raise AssertionError('Debugger did not become ready; see ipc.jsonl')
         record['debugger_build'] = initial['build']
+        if case == 'c-source-case':
+            for cycle in range(2):
+                pcs = []
+                for command, name, function, local, value in (
+                        ('restart', 'Shared.h', 'case_upper', 'upper_marker', '30'),
+                        ('run', 'shared.h', 'case_lower', 'lower_marker', '50')):
+                    stopped = client.stopped(command)
+                    frame = stopped['stack']['frames'][0]
+                    assert stopped['stop']['cause'] == 'breakpoint', stopped
+                    assert frame['function'] == function and frame['source']['line'] == 4, stopped
+                    assert Path(frame['source']['path']) == output/'CaseLookup'/name, stopped
+                    assert client.value(local) == value, stopped
+                    pcs.append(frame['pc'])
+                    print(f'{cycle}: {name}:4 -> {function}, {local}={value}', flush=True)
+                assert pcs[0] != pcs[1], pcs
+                ended = client.stopped('run')
+                assert ended['process_count'] == 0 and ended['last_process_end']['exit_code'] == 0, ended
+            record['status'] = 'pass'
+            return record
         if language:
             language_basics.exercise(client, source, language)
             record['status'] = 'pass'

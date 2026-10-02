@@ -116,11 +116,20 @@ from the wrapper's body line. `c-inline-nested` requires
 in a header and its call inside a lexical block. It checks each frame's
 source file/line, inline depth and shared physical registers, then normal exit.
 Both cases pass on macOS ARM64 and Linux x64 with Clang/DWARF, and on Windows
-x64 with MSVC/PDB. `all` contains 25 built-in cases; the eleven ARM64-only cases remain
+x64 with MSVC/PDB. `all` contains 26 built-in cases; the eleven ARM64-only cases remain
 skipped on other hosts. The Mach-O `symbol-library` case is also skipped
 on Linux and Windows; the four ELF cases are skipped outside Linux.
-Supplying `--examples` adds the five language cases, for 30 total.
+Supplying `--examples` adds the five language cases, for 31 total.
 These results do not cover Intel Mac live debugging.
+
+`c-source-case` builds three C translation units; two use `#line` to name
+case-distinct logical source files, `CaseLookup/Shared.h` and
+`CaseLookup/shared.h`. This needs no case-sensitive host filesystem. Two
+launches must each hit the upper-file breakpoint, then the lower-file
+breakpoint, with distinct PCs, the requested source path/line, correct locals
+and normal exit. The existing runner builds this DWARF fixture with Clang on
+macOS/Linux; its MSVC route explicitly skips it. The first recorded live run
+is Kiwi ARM64, not coverage of the other hosts or physical source-file loading.
 
 `symbol-library` loads a library built without debug info and stripped of
 debug symbols. It requires symbol-table names and offsets for its leaf and
