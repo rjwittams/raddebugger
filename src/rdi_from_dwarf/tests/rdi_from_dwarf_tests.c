@@ -141,6 +141,119 @@ Test(d2r_line_extended_opcode)
   }
 }
 
+Test(d2r_line_operation_advance)
+{
+  U8 abbrev[] = {1,0x11,1, 3,8, 0x1b,8, 0x10,0x17, 0x11,1, 0x12,6, 0,0,
+                 2,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0, 0};
+  U8 info4[] = {0,0,0,0, 4,0, 0,0,0,0, 8,1,
+                'm','a','i','n','.','c',0, '/','s','r','c',0,
+                0,0,0,0, 0,0x10,0,0,0,0,0,0, 0,0x20,0,0,
+                2,'i','n','t',0,5,4,0};
+  U32 info4_size = sizeof(info4)-4;
+  MemoryCopy(info4, &info4_size, 4);
+  U8 info5[sizeof(info4)+1] = {0,0,0,0, 5,0,1,8, 0,0,0,0};
+  MemoryCopy(info5+12, info4+11, sizeof(info4)-11);
+  U32 info5_size = sizeof(info5)-4;
+  MemoryCopy(info5, &info5_size, 4);
+  U8 header4[] = {0,0,0,0, 4,0, 0,0,0,0, 1,1,1,0xfb,14,13,
+                  0,1,1,1,1,0,0,0,1,0,0,1, 0, 'm','a','i','n','.','c',0,0,0,0,0};
+  U32 header4_size = sizeof(header4)-10;
+  MemoryCopy(header4+6, &header4_size, 4);
+  U8 header5[] = {0,0,0,0, 5,0,8,0, 0,0,0,0, 1,1,1,0xfb,14,13,
+                  0,1,1,1,1,0,0,0,1,0,0,1,
+                  1,1,8,1, '/','s','r','c',0,
+                  2,1,8,2,0x0f,1, 'm','a','i','n','.','c',0,0};
+  U32 header5_size = sizeof(header5)-12;
+  MemoryCopy(header5+8, &header5_size, 4);
+  // Four source rows and their end_sequence address, including operation-index carry.
+  struct {U8 min_inst, max_ops; U64 offsets[5];} cases[] =
+  {
+    {1,1, {1,2,3,6,7}},
+    {4,1, {4,8,12,24,28}},
+    {1,2, {0,1,1,3,4}},
+    {4,2, {0,4,4,12,16}},
+    {4,3, {0,0,4,8,12}},
+  };
+  B32 all_rows_match = 1;
+  for(U64 version = 4; version <= 5; version += 1)
+  for EachElement(case_idx, cases)
+  for(U64 standard = 0; standard <= 1; standard += 1)
+  {
+    header4[10] = header5[12] = cases[case_idx].min_inst;
+    header4[11] = header5[13] = cases[case_idx].max_ops;
+    String8List parts = {0};
+    str8_serial_begin(arena, &parts);
+    str8_serial_push_data(arena, &parts, version == 5 ? header5 : header4,
+                         version == 5 ? sizeof(header5) : sizeof(header4));
+    U8 start[] = {4, version == 5 ? 0 : 1, 0,9,2, 0,0x10,0,0,0,0,0,0};
+    str8_serial_push_data(arena, &parts, start, sizeof(start));
+    U8 advances[] = {1,1,1,3};
+    for EachElement(idx, advances)
+    {
+      // Equivalent line increments encoded with standard or special opcodes.
+      U8 row[] = {2,advances[idx],3,1,1};
+      U8 special = 13 + 14*advances[idx] + 6;
+      str8_serial_push_data(arena, &parts, standard ? row : &special, standard ? sizeof(row) : 1);
+    }
+    U8 end[] = {2,cases[case_idx].max_ops,0,1,1};
+    str8_serial_push_data(arena, &parts, end, sizeof(end));
+    String8 lines = str8_serial_end(arena, &parts);
+    U32 line_size = lines.size-4;
+    MemoryCopy(lines.str, &line_size, 4);
+    String8 name = push_str8f(arena, "ops-v%I64u-min%u-max%u-%s", version,
+                            cases[case_idx].min_inst, cases[case_idx].max_ops, standard ? "standard" : "special");
+    TestCheck(t_write_file(push_str8f(arena, "%S.info", name), version == 5 ? str8_array_fixed(info5) : str8_array_fixed(info4)));
+    TestCheck(t_write_file(push_str8f(arena, "%S.abbrev", name), str8_array_fixed(abbrev)));
+    TestCheck(t_write_file(push_str8f(arena, "%S.line", name), lines));
+    RDIM_BinarySectionNode section = {0};
+    section.v.flags = RDI_BinarySectionFlag_Read|RDI_BinarySectionFlag_Execute;
+    section.v.voff_first = 0x1000;
+    section.v.voff_opl = 0x3000;
+    D2R_ConvertParams params = {0};
+    params.arch = Arch_x64;
+    params.path_style = PathStyle_UnixAbsolute;
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    params.binary_sections.first = params.binary_sections.last = &section;
+    params.binary_sections.count = 1;
+    params.raw.sec[DW_SectionKind_Info].data = version == 5 ? str8_array_fixed(info5) : str8_array_fixed(info4);
+    params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+    params.raw.sec[DW_SectionKind_Line].data = lines;
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+    TestCheck(result.units.total_count == 1);
+    RDIM_LineTable *table = result.units.first->v[0].line_table;
+    TestCheck(table->seq_count == 1 && table->line_count == 4);
+    RDIM_LineSequence *seq = &table->first_seq->v;
+    for(U64 idx = 0; idx <= 4; idx += 1)
+    {
+      test_outf("%S row %I64u: 0x%I64x, expected 0x%I64x\n", name, idx, seq->voffs[idx], 0x1000+cases[case_idx].offsets[idx]);
+      all_rows_match &= seq->voffs[idx] == 0x1000+cases[case_idx].offsets[idx];
+      if(idx < 4) {TestCheck(seq->line_nums[idx] == idx+2);}
+    }
+    RDIM_BakeResults baked = rdim_bake(convert_arena, &result);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
+    String8 data = str8_list_join(convert_arena, &blobs, 0);
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    RDI_ParsedLineTable parsed = {0};
+    U64 last_row_voff = 0x1000+cases[case_idx].offsets[3];
+    TestCheck(t_write_file(push_str8f(arena, "%S.rdi", name), data));
+    rdi_parsed_from_line_table(&rdi, rdi_line_table_from_unit(&rdi, rdi_unit_from_voff(&rdi, last_row_voff)), &parsed);
+    for(U64 voff = last_row_voff; voff < 0x1000+cases[case_idx].offsets[4]; voff += 1)
+    {
+      U64 row = rdi_line_info_idx_from_voff(&parsed, voff);
+      all_rows_match &= row < parsed.count && parsed.voffs[row] == last_row_voff &&
+                        parsed.lines[row].line_num == 5 && parsed.lines[row].file_idx != 0;
+    }
+    arena_release(convert_arena);
+  }
+  TestCheck(all_rows_match);
+}
+
 Test(d2r_line_tombstones)
 {
   String8 case_names[] = {str8_lit("control"), str8_lit("tombstone"),
