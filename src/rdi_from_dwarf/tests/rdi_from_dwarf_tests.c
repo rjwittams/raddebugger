@@ -69,6 +69,8 @@ Test(d2r_line_extended_opcode)
     {str8_lit("empty-sequence"),      str8_lit("\0\11\2\0\30\0\0\0\0\0\0\2\4\0\1\1"), 2},
     // set_address 0; copy; end_sequence, followed by the real second sequence.
     {str8_lit("zero-address-sequence"), str8_lit("\0\11\2\0\0\0\0\0\0\0\0\1\0\1\1"), 2},
+    // Linker tombstones invalidate later rows too, including wrapped addresses.
+    {str8_lit("tombstone-sequence"), str8_lit("\0\11\2\377\377\377\377\377\377\377\377\1\3\1\2\4\1\2\4\0\1\1"), 2},
   };
   for(U64 version = 4; version <= 5; version += 1) for EachElement(case_idx, cases)
   {
@@ -134,6 +136,117 @@ Test(d2r_line_extended_opcode)
       TestCheck(seq->voffs[2] == 0x1000*(seq_idx+1) + 8);
       seq_idx += 1;
     }
+    arena_release(convert_arena);
+  }
+}
+
+Test(d2r_line_tombstones)
+{
+  U8 abbrev[] = {1,0x11,1, 3,8, 0x1b,8, 0x10,0x17, 0x11,1, 0x12,6, 0,0,
+                 2,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0, 0};
+  U8 header4[] = {0,0,0,0, 4,0, 0,0,0,0, 1,1,1,0xfb,14,13,
+                  0,1,1,1,1,0,0,0,1,0,0,1, 0,
+                  'm','a','i','n','.','c',0, 0,0,0, 0};
+  U32 header4_size = sizeof(header4)-10;
+  MemoryCopy(header4+6, &header4_size, 4);
+  U8 header5[] = {0,0,0,0, 5,0,8,0, 0,0,0,0, 1,1,1,0xfb,14,13,
+                  0,1,1,1,1,0,0,0,1,0,0,1,
+                  1,1,8,1, '/','s','r','c',0,
+                  2,1,8,2,0x0f,1, 'm','a','i','n','.','c',0,0};
+  U32 header5_size = sizeof(header5)-12;
+  MemoryCopy(header5+8, &header5_size, 4);
+  for(U64 version = 4; version <= 5; version += 1)
+  for(U64 addr_size = 4; addr_size <= 8; addr_size += 4)
+  for(U64 tombstone = 0; tombstone <= 1; tombstone += 1)
+  {
+    U8 unit_header4[] = {0,0,0,0, 4,0, 0,0,0,0, (U8)addr_size};
+    U8 unit_header5[] = {0,0,0,0, 5,0,1,(U8)addr_size, 0,0,0,0};
+    U64 low_pc = 0x1000;
+    String8List unit_parts = {0};
+    str8_serial_begin(arena, &unit_parts);
+    str8_serial_push_data(arena, &unit_parts,
+                         version == 5 ? unit_header5 : unit_header4,
+                         version == 5 ? sizeof(unit_header5) : sizeof(unit_header4));
+    str8_serial_push_u8(arena, &unit_parts, 1);
+    str8_serial_push_cstr(arena, &unit_parts, str8_lit("main.c"));
+    str8_serial_push_cstr(arena, &unit_parts, str8_lit("/src"));
+    str8_serial_push_u32(arena, &unit_parts, 0); // DW_AT_stmt_list
+    str8_serial_push_data(arena, &unit_parts, &low_pc, addr_size);
+    str8_serial_push_u32(arena, &unit_parts, 0x1008); // DW_AT_high_pc extent
+    U8 type[] = {2,'i','n','t',0,5,4,0};
+    str8_serial_push_data(arena, &unit_parts, type, sizeof(type));
+    String8 info = str8_serial_end(arena, &unit_parts);
+    U32 info_size = info.size-4;
+    MemoryCopy(info.str, &info_size, 4);
+
+    header5[6] = (U8)addr_size;
+    String8List line_parts = {0};
+    str8_serial_begin(arena, &line_parts);
+    str8_serial_push_data(arena, &line_parts,
+                         version == 5 ? header5 : header4,
+                         version == 5 ? sizeof(header5) : sizeof(header4));
+    U64 middle = tombstone ? (addr_size == 4 ? max_U32 : max_U64) : 0x1800;
+    U64 addresses[] = {0x1000, middle, 0x2000};
+    for EachElement(idx, addresses)
+    {
+      // set_file; set_address; copy; advance_line; advance_pc; copy;
+      // advance_pc; end_sequence. A tombstone's second row advances/wraps.
+      U8 set_address[] = {4, version == 5 ? 0 : 1, 0,(U8)(addr_size+1),2};
+      U8 rows[] = {1,3,1,2,4,1,2,4,0,1,1};
+      str8_serial_push_data(arena, &line_parts, set_address, sizeof(set_address));
+      str8_serial_push_data(arena, &line_parts, &addresses[idx], addr_size);
+      str8_serial_push_data(arena, &line_parts, rows, sizeof(rows));
+    }
+    String8 lines = str8_serial_end(arena, &line_parts);
+    U32 line_size = lines.size-4;
+    MemoryCopy(lines.str, &line_size, 4);
+    String8 name = str8f(arena, "v%I64u-addr%I64u-%s", version, addr_size, tombstone ? "tombstone" : "control");
+    TestCheck(t_write_file(str8f(arena, "%S.info", name), info));
+    TestCheck(t_write_file(str8f(arena, "%S.abbrev", name), str8_array_fixed(abbrev)));
+    TestCheck(t_write_file(str8f(arena, "%S.line", name), lines));
+    RDIM_BinarySectionNode section = {0};
+    section.v.voff_first = 0x1000;
+    section.v.voff_opl = 0x3000;
+    D2R_ConvertParams params = {0};
+    params.arch = addr_size == 4 ? Arch_x86 : Arch_x64;
+    params.path_style = PathStyle_UnixAbsolute;
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    params.binary_sections.first = params.binary_sections.last = &section;
+    params.binary_sections.count = 1;
+    params.raw.sec[DW_SectionKind_Info].data = info;
+    params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+    params.raw.sec[DW_SectionKind_Line].data = lines;
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count=1, .broadcast_memory=&broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+    TestCheck(result.units.total_count == 1);
+    RDIM_LineTable *table = result.units.first->v[0].line_table;
+    test_outf("%S: %I64u sequences, %I64u lines\n", name, table->seq_count, table->line_count);
+    TestCheck(table->seq_count == (tombstone ? 2 : 3) && table->line_count == (tombstone ? 4 : 6));
+    RDIM_BakeResults baked = rdim_bake(convert_arena, &result);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
+    String8 data = str8_list_join(convert_arena, &blobs, 0);
+    TestCheck(t_write_file(str8f(arena, "%S.rdi", name), data));
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    RDI_ParsedLineTable parsed = {0};
+    rdi_parsed_from_line_table(&rdi, rdi_line_table_from_unit(&rdi, rdi_unit_from_voff(&rdi, 0x1000)), &parsed);
+    U64 source_rows = 0;
+    for EachIndex(idx, parsed.count)
+    {
+      if(parsed.lines[idx].file_idx != 0)
+      {
+        U64 voff = parsed.voffs[idx];
+        TestCheck(voff == 0x1000 || voff == 0x1004 || voff == 0x2000 || voff == 0x2004 ||
+                  (!tombstone && (voff == 0x1800 || voff == 0x1804)));
+        TestCheck(parsed.lines[idx].line_num == (voff%8 == 0 ? 1 : 2));
+        source_rows += 1;
+      }
+    }
+    TestCheck(source_rows == (tombstone ? 4 : 6));
     arena_release(convert_arena);
   }
 }
