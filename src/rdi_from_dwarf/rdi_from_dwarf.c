@@ -3665,7 +3665,6 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
               // if we find that a location doesn't rely on the frame base at all, we just
               // skip the rest.
               //
-              B32 is_tls_dependent = 0;
               for EachNode(n, DW2_LocNode, locs.first)
               {
                 //- rjf: unpack location
@@ -3717,7 +3716,8 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                   RDIM_EvalBytecode dst_bytecode = {0};
                   B32 dst_bytecode_is_good = 1;
                   B32 bytecode_is_framebase_dependent = 0;
-                  for(U64 expr_off = 0; expr_off < expr.size;)
+                  B32 is_tls_dependent = 0;
+                  for(U64 expr_off = 0; dst_bytecode_is_good && expr_off < expr.size;)
                   {
                     U64 start_expr_off = expr_off;
                     
@@ -3738,6 +3738,29 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                     String8 operand_str8s[2] = {0};
                     for EachIndex(operand_idx, operands_count)
                     {
+                      U64 operand_start = expr_off;
+                      DW_ExprOperandKind operand_kind = operands_kinds[operand_idx];
+                      if(operand_kind == DW_ExprOperandKind_ULEB128 ||
+                         operand_kind == DW_ExprOperandKind_SLEB128 ||
+                         operand_kind == DW_ExprOperandKind_Block)
+                      {
+                        // Bound LEB decoding before the deserializer can shift beyond 64 bits.
+                        U64 leb_size = 0;
+                        U8 last_byte = 0x80;
+                        for(; leb_size < 10 && leb_size < expr.size-expr_off;)
+                        {
+                          last_byte = expr.str[expr_off+leb_size];
+                          leb_size += 1;
+                          if(!(last_byte & 0x80)) {break;}
+                        }
+                        if(last_byte & 0x80 ||
+                           (leb_size == 10 && (operand_kind == DW_ExprOperandKind_SLEB128 ?
+                                              (last_byte != 0 && last_byte != 0x7f) : last_byte > 1)))
+                        {
+                          dst_bytecode_is_good = 0;
+                          break;
+                        }
+                      }
                       switch(operands_kinds[operand_idx])
                       {
                         case DW_ExprOperandKind_Null:
@@ -3756,13 +3779,26 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                         case DW_ExprOperandKind_DwarfUInt: {expr_off += dw2_read_fmt_u64(expr, expr_off, unit_parse_ctx->format, &operand_u64s[operand_idx]);}break;
                         case DW_ExprOperandKind_Block:
                         {
-                          U8 block_size = 0;
-                          expr_off += str8_deserial_read_struct(expr, expr_off, &block_size);
-                          operand_str8s[operand_idx] = str8_substr(expr, r1u64(expr_off, expr_off+block_size));
-                          expr_off += block_size;
+                          U64 block_size = 0;
+                          expr_off += str8_deserial_read_uleb128(expr, expr_off, &block_size);
+                          if(block_size <= expr.size-expr_off)
+                          {
+                            operand_str8s[operand_idx] = str8_substr(expr, r1u64(expr_off, expr_off+block_size));
+                            expr_off += block_size;
+                          }
+                          else
+                          {
+                            dst_bytecode_is_good = 0;
+                          }
                         }break;
                       }
+                      if(operand_kind != DW_ExprOperandKind_Null && expr_off == operand_start)
+                      {
+                        dst_bytecode_is_good = 0;
+                      }
+                      if(!dst_bytecode_is_good) {break;}
                     }
+                    if(!dst_bytecode_is_good) {break;}
                     
                     //- rjf: pop stack values
                     D2R_ExprVal popped_vals[2] = {0};
@@ -3790,7 +3826,8 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                     U64 memread_size = 0;
                     switch(opcode)
                     {
-                      default:{}break;
+                      default:{dst_bytecode_is_good = 0;}break;
+                      case DW_ExprOp_Nop:{}break;
                       
                       //- rjf: small opcode-embedded unsigned literals
                       case DW_ExprOp_Lit0:  case DW_ExprOp_Lit1:  case DW_ExprOp_Lit2:
@@ -3840,16 +3877,20 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                         push_vals[0].is_addr = 1;
                       }break;
                       case DW_ExprOp_Addrx:
-                      if(unit_parse_ctx->addr_table != 0)
                       {
                         U64 addr_idx = operand_u64s[0];
                         U64 addr = 0;
-                        if(dw2_try_offset_from_table_idx(unit_parse_ctx->addr_table, addr_idx, &addr))
+                        if(unit_parse_ctx->addr_table != 0 &&
+                           dw2_try_offset_from_table_idx(unit_parse_ctx->addr_table, addr_idx, &addr))
                         {
                           U64 voff = (addr > base_vaddr) ? (addr - base_vaddr) : 0;
                           rdim_bytecode_push_op(arena, &dst_bytecode, RDI_EvalOp_ModuleOff, voff);
                           push_vals[0].type_kind = RDI_TypeKind_U64;
                           push_vals[0].is_addr = 1;
+                        }
+                        else
+                        {
+                          dst_bytecode_is_good = 0;
                         }
                       }break;
                       
@@ -3982,6 +4023,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                         }
                         else
                         {
+                          dst_bytecode_is_good = 0;
                           log_infof("[.debug_info@0x%I64x] Implicit value DWARF expression operation (DW_ExprOp_ImplicitValue) with block size >8 (%I64u) found. This is not currently supported.\n", start_off, operand_str8s[0].size);
                         }
                       }break;
@@ -4041,6 +4083,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       case DW_ExprOp_Bra:  rdi_eval_op = RDI_EvalOp_Cond; goto jumps;
                       jumps:;
                       {
+                        dst_bytecode_is_good = 0;
                         // rjf: jump delta in bytes (how the instruction is encoded) -> jump delta in instructions
                         S64 jump_delta_bytes = operand_s64s[0];
                         S64 jump_delta_insts = 0;
@@ -4062,6 +4105,10 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       case DW_ExprOp_FBReg:
                       {
                         bytecode_is_framebase_dependent = 1;
+                        if(framebase_loc.kind == RDI_LocationKind_NULL)
+                        {
+                          dst_bytecode_is_good = 0;
+                        }
                         for EachNode(n, RDIM_EvalBytecodeOp, framebase_loc.bytecode.first_op)
                         {
                           rdim_bytecode_push_op(arena, &dst_bytecode, n->op, n->p);
@@ -4097,6 +4144,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       case DW_ExprOp_EntryValue:
                       case DW_GNU_ExprOp_EntryValue:
                       {
+                        dst_bytecode_is_good = 0;
                         // TODO(rjf): expr op entry value ops
                       }break;
                       
@@ -4347,6 +4395,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                   }
                   
                   //- rjf: collect
+                  if(dst_bytecode_is_good && dst_bytecode.first_op != 0)
                   {
                     RDIM_Rng1U64 voff_range = d2r_voff_range_from_vaddr_range(base_vaddr, range);
                     if(bytecode_is_framebase_dependent)
@@ -4355,7 +4404,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       voff_range.max = Min(voff_range.max, framebase_voff_range.max);
                     }
                     rdim_location_case_list_push(arena, dst_locations, loc, voff_range);
-                    dst_is_tls_dependent[0] = is_tls_dependent;
+                    dst_is_tls_dependent[0] |= is_tls_dependent;
                   }
                   
                   //- rjf: not frame-base dependent? -> break - don't do this per-framebase case

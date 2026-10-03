@@ -1078,6 +1078,199 @@ Test(d2r_sparse_units)
   }
 }
 
+Test(d2r_expression_rejection)
+{
+  struct
+  {
+    String8 name;
+    U8 expr[32];
+    U8 expr_size;
+    RDI_LocationKind kind;
+    U8 framebase[8];
+    U8 framebase_size;
+    U8 list_kind; // 1: frame-base list; 2: variable-location list.
+    RDI_LocationKind first_kind;
+  }
+  cases[] =
+  {
+    {str8_lit("register"), {DW_ExprOp_Reg0}, 1, RDI_LocationKind_ValReg},
+    {str8_lit("unsupported-xderef"), {DW_ExprOp_Lit1, DW_ExprOp_Lit2, DW_ExprOp_XDeref}, 3},
+    {str8_lit("register-nop"), {DW_ExprOp_Reg0, DW_ExprOp_Nop}, 2, RDI_LocationKind_ValReg},
+    {str8_lit("implicit-value"), {DW_ExprOp_ImplicitValue, 1, 42}, 3, RDI_LocationKind_ValBytecodeStream},
+    {str8_lit("padded-block-length"), {DW_ExprOp_ImplicitValue, 0x81,0, 42}, 4, RDI_LocationKind_ValBytecodeStream},
+    {str8_lit("truncated-block"), {DW_ExprOp_ImplicitValue, 4, 42}, 3},
+    {str8_lit("missing-block-length"), {DW_ExprOp_ImplicitValue}, 1},
+    {str8_lit("truncated-const"), {DW_ExprOp_Const4U, 42}, 2},
+    {str8_lit("missing-const"), {DW_ExprOp_Const1U}, 1},
+    {str8_lit("truncated-uleb"), {DW_ExprOp_ConstU, 0x80}, 2},
+    {str8_lit("truncated-sleb"), {DW_ExprOp_BReg0, 0x80}, 2},
+    {str8_lit("oversized-uleb"), {DW_ExprOp_ConstU, 0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0}, 12},
+    {str8_lit("overflowing-uleb"), {DW_ExprOp_ConstU, 0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,2}, 11},
+    {str8_lit("unknown-first"), {0xff, DW_ExprOp_Reg0}, 2},
+    {str8_lit("unknown-last"), {DW_ExprOp_Reg0, 0xff}, 2},
+    {str8_lit("unknown-middle"), {DW_ExprOp_Lit1, 0xff, DW_ExprOp_Lit2, DW_ExprOp_Plus}, 4},
+    {str8_lit("entry-value"), {DW_ExprOp_EntryValue, 1, DW_ExprOp_Reg0, DW_ExprOp_PlusUConst, 4}, 5},
+    {str8_lit("gnu-entry-value"), {DW_GNU_ExprOp_EntryValue, 1, DW_ExprOp_Reg0, DW_ExprOp_PlusUConst, 4}, 5},
+    {str8_lit("convert"), {DW_ExprOp_Lit1, DW_ExprOp_Convert, 0}, 3},
+    {str8_lit("stack-value"), {DW_ExprOp_BReg0, 0, DW_ExprOp_StackValue}, 3},
+    {str8_lit("skip"), {DW_ExprOp_Lit1, DW_ExprOp_Skip, 1,0, DW_ExprOp_Lit2}, 5},
+    {str8_lit("bra"), {DW_ExprOp_Lit1, DW_ExprOp_Lit0, DW_ExprOp_Bra, 1,0, DW_ExprOp_Nop}, 6},
+    {str8_lit("large-implicit-value"), {DW_ExprOp_ImplicitValue, 9, 1,2,3,4,5,6,7,8,9}, 11},
+    {str8_lit("missing-addr-table"), {DW_ExprOp_Addrx, 0, DW_ExprOp_PlusUConst, 4}, 4},
+    {str8_lit("empty"), {0}, 0},
+    {str8_lit("nop-only"), {DW_ExprOp_Nop}, 1},
+    {str8_lit("missing-framebase"), {DW_ExprOp_FBReg, 0}, 2},
+    {str8_lit("valid-framebase"), {DW_ExprOp_FBReg, 0}, 2, RDI_LocationKind_AddrRegPlusOff,
+      {DW_ExprOp_BReg6, 0}, 2},
+    {str8_lit("rejected-framebase"), {DW_ExprOp_FBReg, 0}, 2, RDI_LocationKind_NULL,
+      {DW_ExprOp_Lit1, DW_ExprOp_Lit2, DW_ExprOp_XDeref}, 3},
+    {str8_lit("independent-local"), {DW_ExprOp_Reg0}, 1, RDI_LocationKind_ValReg,
+      {DW_ExprOp_Lit1, DW_ExprOp_Lit2, DW_ExprOp_XDeref}, 3},
+    {str8_lit("ranged-framebase"), {DW_ExprOp_FBReg, 0}, 2, RDI_LocationKind_AddrRegPlusOff,
+      {DW_ExprOp_Lit1, DW_ExprOp_Lit2, DW_ExprOp_XDeref}, 3, 1},
+    {str8_lit("ranged-independent-local"), {DW_ExprOp_Reg0}, 1, RDI_LocationKind_ValReg,
+      {DW_ExprOp_Lit1, DW_ExprOp_Lit2, DW_ExprOp_XDeref}, 3, 1, RDI_LocationKind_ValReg},
+    {str8_lit("rejected-tls-case"), {DW_ExprOp_Reg0}, 1, RDI_LocationKind_ValReg,
+      {DW_ExprOp_Lit1, DW_ExprOp_FormTlsAddress, 0xff}, 3, 2},
+  };
+  Arch arches[] = {Arch_x64, Arch_arm64};
+  B32 all_cases_match = 1;
+  for EachElement(arch_idx, arches) for EachElement(case_idx, cases)
+  {
+    U8 abbrev[] = {1,0x11,1, 3,8, 0x11,1, 0x12,6, 0,0,
+                   2,0x2e,1, 3,8, 0x11,1, 0x12,6, 0,0,
+                   3,0x34,0, 3,8, 0x49,0x13, 2,0x18, 0,0,
+                   4,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0,
+                   5,0x2e,1, 3,8, 0x11,1, 0x12,6, 0x40,0x18, 0,0,
+                   6,0x2e,1, 3,8, 0x11,1, 0x12,6, 0x40,0x17, 0,0,
+                   7,0x34,0, 3,8, 0x49,0x13, 2,0x17, 0,0, 0};
+    U8 header[] = {0,0,0,0, 5,0,1,8, 0,0,0,0,
+                   1,'a',0, 0,0x10,0,0,0,0,0,0, 16,0,0,0,
+                   4,'i','3','2',0,5,4,
+                   2,'f',0, 0,0x10,0,0,0,0,0,0, 16,0,0,0};
+    U8 local[] = {3,'x',0, 27,0,0,0};
+    if(cases[case_idx].framebase_size != 0) {header[34] = 5;}
+    U8 list_offset[] = {12,0,0,0};
+    String8 loclists = {0};
+    if(cases[case_idx].list_kind != 0)
+    {
+      // Two adjacent ranges: rejected expression first, valid expression second.
+      // DW_LLE_start_end stores absolute addresses; the list starts after its header.
+      U8 loc_header[] = {0,0,0,0, 5,0,8,0, 0,0,0,0};
+      U8 first[] = {7, 0,0x10,0,0,0,0,0,0, 8,0x10,0,0,0,0,0,0};
+      U8 second[] = {7, 8,0x10,0,0,0,0,0,0, 16,0x10,0,0,0,0,0,0};
+      U8 valid_framebase[] = {2, DW_ExprOp_BReg6, 0};
+      String8List loc_parts = {0};
+      str8_list_push(arena, &loc_parts, str8_array_fixed(loc_header));
+      str8_list_push(arena, &loc_parts, str8_array_fixed(first));
+      str8_list_push(arena, &loc_parts, str8(&cases[case_idx].framebase_size, 1));
+      str8_list_push(arena, &loc_parts, str8(cases[case_idx].framebase, cases[case_idx].framebase_size));
+      str8_list_push(arena, &loc_parts, str8_array_fixed(second));
+      if(cases[case_idx].list_kind == 1)
+      {
+        header[34] = 6;
+        str8_list_push(arena, &loc_parts, str8_array_fixed(valid_framebase));
+      }
+      else
+      {
+        header[34] = 2;
+        local[0] = 7;
+        str8_list_push(arena, &loc_parts, str8(&cases[case_idx].expr_size, 1));
+        str8_list_push(arena, &loc_parts, str8(cases[case_idx].expr, cases[case_idx].expr_size));
+      }
+      str8_list_push(arena, &loc_parts, str8_lit("\0"));
+      loclists = str8_list_join(arena, &loc_parts, 0);
+      U32 loc_size = loclists.size-4;
+      MemoryCopy(loclists.str, &loc_size, 4);
+    }
+    U8 end[] = {0,0};
+    String8List parts = {0};
+    str8_list_push(arena, &parts, str8_array_fixed(header));
+    if(cases[case_idx].list_kind == 1)
+    {
+      str8_list_push(arena, &parts, str8_array_fixed(list_offset));
+    }
+    else if(cases[case_idx].framebase_size != 0 && cases[case_idx].list_kind == 0)
+    {
+      str8_list_push(arena, &parts, str8(&cases[case_idx].framebase_size, 1));
+      str8_list_push(arena, &parts, str8(cases[case_idx].framebase, cases[case_idx].framebase_size));
+    }
+    str8_list_push(arena, &parts, str8_array_fixed(local));
+    if(cases[case_idx].list_kind == 2)
+    {
+      str8_list_push(arena, &parts, str8_array_fixed(list_offset));
+    }
+    else
+    {
+      str8_list_push(arena, &parts, str8(&cases[case_idx].expr_size, 1));
+      str8_list_push(arena, &parts, str8(cases[case_idx].expr, cases[case_idx].expr_size));
+    }
+    str8_list_push(arena, &parts, str8_array_fixed(end));
+    String8 info = str8_list_join(arena, &parts, 0);
+    U32 info_size = info.size-4;
+    MemoryCopy(info.str, &info_size, 4);
+    RDIM_BinarySectionNode section = {0};
+    section.v.voff_first = 0x1000;
+    section.v.voff_opl = 0x1010;
+    D2R_ConvertParams params = {0};
+    params.arch = arches[arch_idx];
+    params.path_style = PathStyle_UnixAbsolute;
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    params.binary_sections.first = params.binary_sections.last = &section;
+    params.binary_sections.count = 1;
+    params.raw.sec[DW_SectionKind_Info].data = info;
+    params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+    params.raw.sec[DW_SectionKind_LocLists].data = loclists;
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+    RDIM_BakeResults baked = rdim_bake(convert_arena, &result);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
+    String8 data = str8_list_join(convert_arena, &blobs, 0);
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    U64 locals_count = 0;
+    RDI_Symbol *locals = rdi_table_from_name(&rdi, LocalVariables, &locals_count);
+    TestCheck(locals_count == 2);
+    RDI_Location location = rdi_location_from_location_voff(&rdi, locals[1].location, 0x1008);
+    RDI_LocationKind kind = rdi_kind_from_location(location);
+    test_outf("%S %S: location kind %u, expected %u\n", string_from_arch(arches[arch_idx]), cases[case_idx].name, kind, cases[case_idx].kind);
+    all_cases_match &= kind == cases[case_idx].kind;
+    if(cases[case_idx].list_kind != 0)
+    {
+      U64 voffs[] = {0x1000, 0x1007, 0x1008, 0x100f};
+      for EachElement(voff_idx, voffs)
+      {
+        RDI_Location actual = rdi_location_from_location_voff(&rdi, locals[1].location, voffs[voff_idx]);
+        RDI_LocationKind expected = voff_idx < 2 ? cases[case_idx].first_kind : cases[case_idx].kind;
+        all_cases_match &= rdi_kind_from_location(actual) == expected;
+      }
+    }
+    if(kind == RDI_LocationKind_ValReg)
+    {
+      TestCheck(rdi_regcode_from_location(location) == (arches[arch_idx] == Arch_x64 ? RDI_RegCodeX64_rax : RDI_RegCodeARM64_x0));
+    }
+    if(cases[case_idx].kind == RDI_LocationKind_ValBytecodeStream)
+    {
+      U64 bytes_count = 0;
+      U8 *bytes = rdi_table_from_name(&rdi, LocationsBytecodeData, &bytes_count);
+      U64 off = rdi_bytecode_data_off_from_location(location);
+      all_cases_match &= kind == RDI_LocationKind_ValBytecodeStream && off+3 <= bytes_count &&
+                         bytes[off] == RDI_EvalOp_ConstU8 && bytes[off+1] == 42 && bytes[off+2] == RDI_EvalOp_Stop;
+    }
+    String8 name = str8f(arena, "%S-%S", string_from_arch(arches[arch_idx]), cases[case_idx].name);
+    TestCheck(t_write_file(str8f(arena, "%S.info", name), info));
+    TestCheck(t_write_file(str8f(arena, "%S.abbrev", name), str8_array_fixed(abbrev)));
+    if(loclists.size != 0) {TestCheck(t_write_file(str8f(arena, "%S.loclists", name), loclists));}
+    TestCheck(t_write_file(str8f(arena, "%S.rdi", name), data));
+    arena_release(convert_arena);
+  }
+  TestCheck(all_cases_match);
+}
+
 Test(d2r_module_types)
 {
   // Two compilation units: a procedure references a base type in a named scope
