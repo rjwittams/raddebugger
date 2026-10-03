@@ -1090,6 +1090,9 @@ Test(d2r_expression_rejection)
     U8 framebase_size;
     U8 list_kind; // 1: frame-base list; 2: variable-location list.
     RDI_LocationKind first_kind;
+    B32 is_thread_variable;
+    U8 bytecode[32];
+    U8 bytecode_size;
   }
   cases[] =
   {
@@ -1112,7 +1115,42 @@ Test(d2r_expression_rejection)
     {str8_lit("entry-value"), {DW_ExprOp_EntryValue, 1, DW_ExprOp_Reg0, DW_ExprOp_PlusUConst, 4}, 5},
     {str8_lit("gnu-entry-value"), {DW_GNU_ExprOp_EntryValue, 1, DW_ExprOp_Reg0, DW_ExprOp_PlusUConst, 4}, 5},
     {str8_lit("convert"), {DW_ExprOp_Lit1, DW_ExprOp_Convert, 0}, 3},
-    {str8_lit("stack-value"), {DW_ExprOp_BReg0, 0, DW_ExprOp_StackValue}, 3},
+    {str8_lit("stack-value"), {DW_ExprOp_BReg0, 0, DW_ExprOp_StackValue}, 3, RDI_LocationKind_ValReg},
+    {str8_lit("register-address"), {DW_ExprOp_BReg0, 0}, 2, RDI_LocationKind_AddrBytecodeStream},
+    {str8_lit("register-offset-address"), {DW_ExprOp_BReg0, 16}, 2, RDI_LocationKind_AddrRegPlusOff},
+    {str8_lit("register-offset-value"), {DW_ExprOp_BReg0, 16, DW_ExprOp_StackValue}, 3, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_RegRead,1,8,0,0, RDI_EvalOp_ConstU8,16, RDI_EvalOp_TruncSigned,8,
+                   RDI_EvalOp_Add,RDI_EvalTypeGroup_S,0, RDI_EvalOp_Stop}, .bytecode_size = 13},
+    {str8_lit("literal-value"), {DW_ExprOp_Lit5, DW_ExprOp_StackValue}, 2, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ConstU8,5, RDI_EvalOp_Stop}, .bytecode_size = 3},
+    {str8_lit("literal-zero-value"), {DW_ExprOp_Lit0, DW_ExprOp_StackValue}, 2, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ConstU8,0, RDI_EvalOp_Stop}, .bytecode_size = 3},
+    {str8_lit("literal-31-value"), {DW_ExprOp_Lit31, DW_ExprOp_StackValue}, 2, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ConstU8,31, RDI_EvalOp_Stop}, .bytecode_size = 3},
+    {str8_lit("dereferenced-value"), {DW_ExprOp_BReg0,0, DW_ExprOp_Deref, DW_ExprOp_StackValue}, 4, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_RegRead,1,8,0,0, RDI_EvalOp_MemRead,8, RDI_EvalOp_Stop}, .bytecode_size = 8},
+    {str8_lit("constant-value"), {DW_ExprOp_Const1U,42, DW_ExprOp_StackValue}, 3, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ConstU8,42, RDI_EvalOp_Stop}, .bytecode_size = 3},
+    {str8_lit("module-address"), {DW_ExprOp_Addr, 0,0x10,0,0,0,0,0,0}, 9, RDI_LocationKind_ModuleOff},
+    {str8_lit("module-value"), {DW_ExprOp_Addr, 0,0x10,0,0,0,0,0,0, DW_ExprOp_StackValue}, 10, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ModuleOff,0,0x10,0,0, RDI_EvalOp_Stop}, .bytecode_size = 6},
+    {str8_lit("module-add-address"), {DW_ExprOp_Addr, 0,0x10,0,0,0,0,0,0, DW_ExprOp_PlusUConst,16}, 11, RDI_LocationKind_ModuleOff},
+    {str8_lit("module-add-value"), {DW_ExprOp_Addr, 0,0x10,0,0,0,0,0,0, DW_ExprOp_PlusUConst,16, DW_ExprOp_StackValue}, 12, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ModuleOff,0,0x10,0,0, RDI_EvalOp_ConstU8,16,
+                   RDI_EvalOp_Add,RDI_EvalTypeGroup_U,0, RDI_EvalOp_Stop}, .bytecode_size = 11},
+    {str8_lit("add-module-value"), {DW_ExprOp_Const1U,16, DW_ExprOp_Addr, 0,0x10,0,0,0,0,0,0, DW_ExprOp_Plus, DW_ExprOp_StackValue}, 13, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ConstU8,16, RDI_EvalOp_ModuleOff,0,0x10,0,0,
+                   RDI_EvalOp_Add,RDI_EvalTypeGroup_U,0, RDI_EvalOp_Stop}, .bytecode_size = 11},
+    {str8_lit("tls-address"), {DW_ExprOp_Const1U,16, DW_ExprOp_FormTlsAddress}, 3, RDI_LocationKind_TLSOff,
+      .is_thread_variable = 1},
+    {str8_lit("tls-value"), {DW_ExprOp_Const1U,16, DW_ExprOp_FormTlsAddress, DW_ExprOp_StackValue}, 4, RDI_LocationKind_ValBytecodeStream,
+      .is_thread_variable = 1, .bytecode = {RDI_EvalOp_ConstU8,16, RDI_EvalOp_TLSOff,0,0,0,0,
+                                           RDI_EvalOp_Add,RDI_EvalTypeGroup_U,0, RDI_EvalOp_Stop}, .bytecode_size = 11},
+    {str8_lit("stack-value-empty"), {DW_ExprOp_StackValue}, 1},
+    {str8_lit("stack-value-after-drop"), {DW_ExprOp_Const1U, 42, DW_ExprOp_Drop, DW_ExprOp_StackValue}, 4},
+    {str8_lit("stack-value-after-literal-drop"), {DW_ExprOp_Lit5, DW_ExprOp_Drop, DW_ExprOp_StackValue}, 3},
+    {str8_lit("stack-value-not-terminal"), {DW_ExprOp_BReg0, 0, DW_ExprOp_StackValue, DW_ExprOp_PlusUConst, 1}, 5},
+    {str8_lit("stack-value-piece"), {DW_ExprOp_Lit5, DW_ExprOp_StackValue, DW_ExprOp_Piece, 4}, 4},
     {str8_lit("skip"), {DW_ExprOp_Lit1, DW_ExprOp_Skip, 1,0, DW_ExprOp_Lit2}, 5},
     {str8_lit("bra"), {DW_ExprOp_Lit1, DW_ExprOp_Lit0, DW_ExprOp_Bra, 1,0, DW_ExprOp_Nop}, 6},
     {str8_lit("large-implicit-value"), {DW_ExprOp_ImplicitValue, 9, 1,2,3,4,5,6,7,8,9}, 11},
@@ -1121,6 +1159,8 @@ Test(d2r_expression_rejection)
     {str8_lit("nop-only"), {DW_ExprOp_Nop}, 1},
     {str8_lit("missing-framebase"), {DW_ExprOp_FBReg, 0}, 2},
     {str8_lit("valid-framebase"), {DW_ExprOp_FBReg, 0}, 2, RDI_LocationKind_AddrRegPlusOff,
+      {DW_ExprOp_BReg6, 0}, 2},
+    {str8_lit("framebase-value"), {DW_ExprOp_FBReg, 16, DW_ExprOp_StackValue}, 3, RDI_LocationKind_ValBytecodeStream,
       {DW_ExprOp_BReg6, 0}, 2},
     {str8_lit("rejected-framebase"), {DW_ExprOp_FBReg, 0}, 2, RDI_LocationKind_NULL,
       {DW_ExprOp_Lit1, DW_ExprOp_Lit2, DW_ExprOp_XDeref}, 3},
@@ -1234,6 +1274,11 @@ Test(d2r_expression_rejection)
     TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
     U64 locals_count = 0;
     RDI_Symbol *locals = rdi_table_from_name(&rdi, LocalVariables, &locals_count);
+    if(cases[case_idx].is_thread_variable)
+    {
+      TestCheck(locals_count == 1);
+      locals = rdi_table_from_name(&rdi, ThreadVariables, &locals_count);
+    }
     TestCheck(locals_count == 2);
     RDI_Location location = rdi_location_from_location_voff(&rdi, locals[1].location, 0x1008);
     RDI_LocationKind kind = rdi_kind_from_location(location);
@@ -1253,13 +1298,25 @@ Test(d2r_expression_rejection)
     {
       TestCheck(rdi_regcode_from_location(location) == (arches[arch_idx] == Arch_x64 ? RDI_RegCodeX64_rax : RDI_RegCodeARM64_x0));
     }
-    if(cases[case_idx].kind == RDI_LocationKind_ValBytecodeStream)
+    if(cases[case_idx].kind == RDI_LocationKind_ValBytecodeStream &&
+       cases[case_idx].expr[0] == DW_ExprOp_ImplicitValue)
     {
       U64 bytes_count = 0;
       U8 *bytes = rdi_table_from_name(&rdi, LocationsBytecodeData, &bytes_count);
       U64 off = rdi_bytecode_data_off_from_location(location);
       all_cases_match &= kind == RDI_LocationKind_ValBytecodeStream && off+3 <= bytes_count &&
                          bytes[off] == RDI_EvalOp_ConstU8 && bytes[off+1] == 42 && bytes[off+2] == RDI_EvalOp_Stop;
+    }
+    if(cases[case_idx].bytecode_size != 0)
+    {
+      U64 bytes_count = 0;
+      U8 *bytes = rdi_table_from_name(&rdi, LocationsBytecodeData, &bytes_count);
+      U64 off = rdi_bytecode_data_off_from_location(location);
+      U64 size = cases[case_idx].bytecode_size;
+      B32 bytecode_matches = kind == RDI_LocationKind_ValBytecodeStream && off <= bytes_count &&
+                             size <= bytes_count-off && MemoryMatch(bytes+off, cases[case_idx].bytecode, size);
+      if(!bytecode_matches) {test_outf("%S: value bytecode mismatch\n", cases[case_idx].name);}
+      all_cases_match &= bytecode_matches;
     }
     String8 name = str8f(arena, "%S-%S", string_from_arch(arches[arch_idx]), cases[case_idx].name);
     TestCheck(t_write_file(str8f(arena, "%S.info", name), info));
