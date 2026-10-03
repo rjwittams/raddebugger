@@ -1093,6 +1093,8 @@ Test(d2r_expression_rejection)
     B32 is_thread_variable;
     U8 bytecode[32];
     U8 bytecode_size;
+    B32 check_value;
+    U64 value;
   }
   cases[] =
   {
@@ -1131,6 +1133,44 @@ Test(d2r_expression_rejection)
       .bytecode = {RDI_EvalOp_RegRead,1,8,0,0, RDI_EvalOp_MemRead,8, RDI_EvalOp_Stop}, .bytecode_size = 8},
     {str8_lit("constant-value"), {DW_ExprOp_Const1U,42, DW_ExprOp_StackValue}, 3, RDI_LocationKind_ValBytecodeStream,
       .bytecode = {RDI_EvalOp_ConstU8,42, RDI_EvalOp_Stop}, .bytecode_size = 3},
+    {str8_lit("over-address"), {DW_ExprOp_BReg0,0, DW_ExprOp_Lit5, DW_ExprOp_Over}, 4, RDI_LocationKind_AddrBytecodeStream},
+    {str8_lit("pick-address"), {DW_ExprOp_BReg0,0, DW_ExprOp_Lit5, DW_ExprOp_Lit6, DW_ExprOp_Pick,2}, 6, RDI_LocationKind_AddrBytecodeStream},
+    {str8_lit("over-scalar"), {DW_ExprOp_Lit5, DW_ExprOp_BReg0,0, DW_ExprOp_Over}, 4, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ConstU8,5, RDI_EvalOp_RegRead,1,8,0,0, RDI_EvalOp_Pick,1,
+                   RDI_EvalOp_Stop}, .bytecode_size = 10},
+    {str8_lit("swap-address"), {DW_ExprOp_BReg0,0, DW_ExprOp_Lit5, DW_ExprOp_Swap}, 4, RDI_LocationKind_AddrBytecodeStream},
+    {str8_lit("swap-scalar"), {DW_ExprOp_Lit5, DW_ExprOp_BReg0,0, DW_ExprOp_Swap}, 4, RDI_LocationKind_ValBytecodeStream},
+    {str8_lit("dup-address"), {DW_ExprOp_BReg0,0, DW_ExprOp_Dup, DW_ExprOp_Drop}, 4, RDI_LocationKind_AddrBytecodeStream},
+    {str8_lit("shra-negative"), {DW_ExprOp_ConstS,0x78, DW_ExprOp_Lit2, DW_ExprOp_Shra, DW_ExprOp_StackValue}, 5, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ConstU8,0xf8, RDI_EvalOp_TruncSigned,8, RDI_EvalOp_ConstU8,2,
+                   RDI_EvalOp_RShift,RDI_EvalTypeGroup_S,8, RDI_EvalOp_Stop},
+      .bytecode_size = 10, .check_value = 1, .value = (U64)-2},
+    {str8_lit("shra-sign-bit"), {DW_ExprOp_ConstS,0x7f, DW_ExprOp_Lit1, DW_ExprOp_Shra, DW_ExprOp_StackValue}, 5, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ConstU8,0xff, RDI_EvalOp_TruncSigned,8, RDI_EvalOp_ConstU8,1,
+                   RDI_EvalOp_RShift,RDI_EvalTypeGroup_S,8, RDI_EvalOp_Stop},
+      .bytecode_size = 10, .check_value = 1, .value = max_U64},
+    {str8_lit("shra-positive"), {DW_ExprOp_Lit8, DW_ExprOp_Lit2, DW_ExprOp_Shra, DW_ExprOp_StackValue}, 4, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ConstU8,8, RDI_EvalOp_ConstU8,2, RDI_EvalOp_RShift,RDI_EvalTypeGroup_S,8, RDI_EvalOp_Stop},
+      .bytecode_size = 8, .check_value = 1, .value = 2},
+    {str8_lit("shr-negative-bits"), {DW_ExprOp_ConstS,0x78, DW_ExprOp_Lit2, DW_ExprOp_Shr, DW_ExprOp_StackValue}, 5, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ConstU8,0xf8, RDI_EvalOp_TruncSigned,8, RDI_EvalOp_ConstU8,2,
+                   RDI_EvalOp_RShift,RDI_EvalTypeGroup_U,8, RDI_EvalOp_Stop},
+      .bytecode_size = 10, .check_value = 1, .value = 0x3ffffffffffffffe},
+    {str8_lit("shl"), {DW_ExprOp_Lit1, DW_ExprOp_Lit4, DW_ExprOp_Shl, DW_ExprOp_StackValue}, 4, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ConstU8,1, RDI_EvalOp_ConstU8,4, RDI_EvalOp_LShift,RDI_EvalTypeGroup_U,8, RDI_EvalOp_Stop},
+      .bytecode_size = 8, .check_value = 1, .value = 16},
+    {str8_lit("not-zero"), {DW_ExprOp_Lit0, DW_ExprOp_Not, DW_ExprOp_StackValue}, 3, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ConstU8,0, RDI_EvalOp_BitNot,RDI_EvalTypeGroup_U,0, RDI_EvalOp_Stop},
+      .bytecode_size = 6, .check_value = 1, .value = max_U64},
+    {str8_lit("not-one"), {DW_ExprOp_Lit1, DW_ExprOp_Not, DW_ExprOp_StackValue}, 3, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ConstU8,1, RDI_EvalOp_BitNot,RDI_EvalTypeGroup_U,0, RDI_EvalOp_Stop},
+      .bytecode_size = 6, .check_value = 1, .value = max_U64-1},
+    {str8_lit("ne-equal"), {DW_ExprOp_Lit5, DW_ExprOp_Lit5, DW_ExprOp_Ne, DW_ExprOp_StackValue}, 4, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ConstU8,5, RDI_EvalOp_ConstU8,5, RDI_EvalOp_NtEq,RDI_EvalTypeGroup_U,0, RDI_EvalOp_Stop},
+      .bytecode_size = 8, .check_value = 1, .value = 0},
+    {str8_lit("ne-unequal"), {DW_ExprOp_Lit5, DW_ExprOp_Lit6, DW_ExprOp_Ne, DW_ExprOp_StackValue}, 4, RDI_LocationKind_ValBytecodeStream,
+      .bytecode = {RDI_EvalOp_ConstU8,5, RDI_EvalOp_ConstU8,6, RDI_EvalOp_NtEq,RDI_EvalTypeGroup_U,0, RDI_EvalOp_Stop},
+      .bytecode_size = 8, .check_value = 1, .value = 1},
     {str8_lit("module-address"), {DW_ExprOp_Addr, 0,0x10,0,0,0,0,0,0}, 9, RDI_LocationKind_ModuleOff},
     {str8_lit("module-value"), {DW_ExprOp_Addr, 0,0x10,0,0,0,0,0,0, DW_ExprOp_StackValue}, 10, RDI_LocationKind_ValBytecodeStream,
       .bytecode = {RDI_EvalOp_ModuleOff,0,0x10,0,0, RDI_EvalOp_Stop}, .bytecode_size = 6},
@@ -1317,6 +1357,23 @@ Test(d2r_expression_rejection)
                              size <= bytes_count-off && MemoryMatch(bytes+off, cases[case_idx].bytecode, size);
       if(!bytecode_matches) {test_outf("%S: value bytecode mismatch\n", cases[case_idx].name);}
       all_cases_match &= bytecode_matches;
+      if(cases[case_idx].check_value && kind == RDI_LocationKind_ValBytecodeStream &&
+         off <= bytes_count && size <= bytes_count-off)
+      {
+        String8 bytecode = str8(bytes+off, size);
+        E_InterpretCtx interp_ctx = {0};
+        E_InterpretCtx *restore_ctx = e_interpret_ctx;
+        e_select_interpret_ctx(&interp_ctx, 0, 0);
+        E_Interpretation interp = e_interpret(bytecode);
+        e_select_interpret_ctx(restore_ctx, 0, 0);
+        B32 value_matches = interp.code == E_InterpretationCode_Good && interp.value.u64 == cases[case_idx].value;
+        if(!value_matches)
+        {
+          test_outf("%S: evaluated value %I64x (status %u), expected %I64x\n",
+                    cases[case_idx].name, interp.value.u64, interp.code, cases[case_idx].value);
+        }
+        all_cases_match &= value_matches;
+      }
     }
     String8 name = str8f(arena, "%S-%S", string_from_arch(arches[arch_idx]), cases[case_idx].name);
     TestCheck(t_write_file(str8f(arena, "%S.info", name), info));
