@@ -1011,6 +1011,168 @@ Test(d2r_missing_stmt_list)
   TestCheck(all_units_match);
 }
 
+Test(d2r_unit_refusal)
+{
+  struct
+  {
+    String8 name;
+    U8 form[2];
+    U8 form_size;
+    B32 accepted;
+    U8 position; // 0: child; 1: root; 2: indirect; 3: unused; 4: missing abbreviation; 5: sibling-linked child.
+    U8 unit_kind;
+  }
+  cases[] =
+  {
+    {str8_lit("unknown-child-form"), {0x81,0x3e}, 2, 0},
+    {str8_lit("flag-present"), {0x19}, 1, 1},
+    {str8_lit("implicit-constant"), {0x21,1}, 2, 1},
+    {str8_lit("data1"), {0x0b}, 1, 1},
+    {str8_lit("unknown-root-form"), {0x19}, 1, 0, 1},
+    {str8_lit("unknown-indirect-form"), {0x16}, 1, 0, 2},
+    {str8_lit("indirect-flag-present"), {0x16}, 1, 1, 2},
+    {str8_lit("unused-unknown-form"), {0x81,0x3e}, 2, 1, 3},
+    {str8_lit("missing-abbreviation"), {0x19}, 1, 0, 4},
+    {str8_lit("unknown-unit-kind"), {0x19}, 1, 0, 0, 7},
+    {str8_lit("reserved-unit-kind"), {0x19}, 1, 0, 0, 0xff},
+    {str8_lit("type-unit"), {0x19}, 1, 0, 0, 2},
+    {str8_lit("split-type-unit"), {0x19}, 1, 0, 0, 6},
+    {str8_lit("partial-unit"), {0x19}, 1, 1, 0, 3},
+    {str8_lit("unknown-sibling-child"), {0x81,0x3e}, 2, 0, 5},
+    {str8_lit("truncated-data16"), {0x1e}, 1, 0},
+  };
+  Arch arches[] = {Arch_x64, Arch_arm64};
+  B32 all_cases_match = 1;
+  for EachElement(arch_idx, arches) for EachElement(case_idx, cases)
+  {
+    // Refusal must withdraw even the earlier readable DIEs in the same unit.
+    // The following unit has its own length and must remain independently usable.
+    U8 abbrev_prefix[] = {1,0x11,1, 3,8, 0,0,
+                          2,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0,
+                          3,0x24,0, 0x34};
+    if(cases[case_idx].position == 1) {abbrev_prefix[4] = 0x7f;}
+    U8 abbrev_suffix[] = {3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0,
+                          4,0x11,1, 3,8, 0,0,
+                          5,0x41,1, 3,8, 0,0,
+                          6,0x3c,1, 3,8, 0,0,
+                          7,0x39,1, 1,0x13, 0,0, 0};
+    String8List abbrev_parts = {0};
+    str8_list_push(arena, &abbrev_parts, str8_array_fixed(abbrev_prefix));
+    str8_list_push(arena, &abbrev_parts, str8(cases[case_idx].form, cases[case_idx].form_size));
+    str8_list_push(arena, &abbrev_parts, str8_array_fixed(abbrev_suffix));
+    String8 abbrev = str8_list_join(arena, &abbrev_parts, 0);
+    U8 first_prefix[] = {0,0,0,0, 5,0,1,8, 0,0,0,0,
+                        1,'a',0, 2,'b','e','f','o','r','e',0,5,4, 3};
+    if(cases[case_idx].unit_kind) {first_prefix[6] = cases[case_idx].unit_kind == 0xff ? 0 : cases[case_idx].unit_kind;}
+    if(cases[case_idx].position == 3) {first_prefix[sizeof(first_prefix)-1] = 2;}
+    if(cases[case_idx].position == 4) {first_prefix[sizeof(first_prefix)-1] = 99;}
+    if(cases[case_idx].position == 5) {first_prefix[sizeof(first_prefix)-1] = 7;}
+    B32 type_unit = cases[case_idx].unit_kind == 2 || cases[case_idx].unit_kind == 6;
+    if(type_unit) {first_prefix[12] = 5;}
+    if(cases[case_idx].unit_kind == 3) {first_prefix[12] = 6;}
+    U8 first_suffix[] = {'b','a','d',0,5,4, 0};
+    String8List first_parts = {0};
+    str8_list_push(arena, &first_parts, str8(first_prefix, 12));
+    if(type_unit)
+    {
+      U8 type_header[] = {0,0,0,0,0,0,0,0, 27,0,0,0};
+      str8_list_push(arena, &first_parts, str8_array_fixed(type_header));
+    }
+    str8_list_push(arena, &first_parts, str8(first_prefix+12, sizeof(first_prefix)-12));
+    if(cases[case_idx].position == 5)
+    {
+      U8 sibling[] = {0,0,0,0, 3};
+      str8_list_push(arena, &first_parts, str8_array_fixed(sibling));
+    }
+    if(cases[case_idx].position == 2)
+    {
+      U8 unknown[] = {0x81,0x3e};
+      str8_list_push(arena, &first_parts, cases[case_idx].accepted ? str8_lit("\x19") : str8_array_fixed(unknown));
+    }
+    if((cases[case_idx].form[0] == 0x81 && cases[case_idx].position != 3) ||
+       (cases[case_idx].position == 2 && !cases[case_idx].accepted))
+    {
+      str8_list_push(arena, &first_parts, str8_lit("phantom\0"));
+    }
+    if(cases[case_idx].form[0] == 0x0b) {str8_list_push(arena, &first_parts, str8_lit("\x01"));}
+    str8_list_push(arena, &first_parts, str8_array_fixed(first_suffix));
+    if(cases[case_idx].position == 5) {str8_list_push(arena, &first_parts, str8_lit("\0"));}
+    String8 first = str8_list_join(arena, &first_parts, 0);
+    U32 first_size = first.size-4;
+    MemoryCopy(first.str, &first_size, 4);
+    if(cases[case_idx].position == 5)
+    {
+      U32 sibling_off = first.size-1;
+      MemoryCopy(first.str+sizeof(first_prefix), &sibling_off, 4);
+    }
+    U8 second[] = {0,0,0,0, 5,0,1,8, 0,0,0,0,
+                   4,'b',0, 2,'a','f','t','e','r',0,5,4, 0};
+    U32 second_size = sizeof(second)-4;
+    MemoryCopy(second, &second_size, 4);
+    String8List info_parts = {0};
+    str8_list_push(arena, &info_parts, first);
+    str8_list_push(arena, &info_parts, str8_array_fixed(second));
+    String8 info = str8_list_join(arena, &info_parts, 0);
+    D2R_ConvertParams params = {0};
+    params.arch = arches[arch_idx];
+    params.path_style = PathStyle_UnixAbsolute;
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    params.raw.sec[DW_SectionKind_Info].data = info;
+    params.raw.sec[DW_SectionKind_Abbrev].data = abbrev;
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+    RDIM_BakeResults baked = rdim_bake(convert_arena, &result);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
+    String8 data = str8_list_join(convert_arena, &blobs, 0);
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    U64 units_count = 0, types_count = 0;
+    RDI_Unit *units = rdi_table_from_name(&rdi, Units, &units_count);
+    RDI_TypeNode *types = rdi_table_from_name(&rdi, TypeNodes, &types_count);
+    B32 before = 0, bad = 0, phantom = 0, after = 0;
+    B32 first_unit = 0, second_unit = 0;
+    for EachIndex(unit_idx, units_count)
+    {
+      U64 name_size = 0;
+      U8 *name_str = rdi_string_from_idx(&rdi, units[unit_idx].unit_name_string_idx, &name_size);
+      String8 name = str8(name_str, name_size);
+      first_unit |= str8_match(name, str8_lit("a"), 0);
+      second_unit |= str8_match(name, str8_lit("b"), 0);
+    }
+    for EachIndex(type_idx, types_count)
+    {
+      RDI_TypeNode *type = &types[type_idx];
+      if(type->kind == RDI_TypeKind_Alias)
+      {
+        U64 name_size = 0;
+        U8 *name_str = rdi_string_from_idx(&rdi, type->user_defined.name_string_idx, &name_size);
+        String8 name = str8(name_str, name_size);
+        B32 signed_int = type->byte_size == 4 && type->user_defined.direct_type_idx < types_count &&
+                         types[type->user_defined.direct_type_idx].kind == RDI_TypeKind_S32;
+        before |= str8_match(name, str8_lit("before"), 0) && signed_int;
+        bad |= str8_match(name, str8_lit("bad"), 0) && signed_int;
+        phantom |= str8_match(name, str8_lit("phantom"), 0);
+        after |= str8_match(name, str8_lit("after"), 0) && signed_int;
+      }
+    }
+    test_outf("%S %S: units %I64u; before %u, bad %u, phantom %u, after %u\n",
+              string_from_arch(arches[arch_idx]), cases[case_idx].name, units_count, before, bad, phantom, after);
+    all_cases_match &= units_count == (cases[case_idx].accepted ? 3 : 2) &&
+                       first_unit == cases[case_idx].accepted && second_unit &&
+                       before == cases[case_idx].accepted && bad == cases[case_idx].accepted && !phantom && after;
+    String8 name = str8f(arena, "%S-%S", string_from_arch(arches[arch_idx]), cases[case_idx].name);
+    TestCheck(t_write_file(str8f(arena, "%S.info", name), info));
+    TestCheck(t_write_file(str8f(arena, "%S.abbrev", name), abbrev));
+    TestCheck(t_write_file(str8f(arena, "%S.rdi", name), data));
+    arena_release(convert_arena);
+  }
+  TestCheck(all_cases_match);
+}
+
 Test(d2r_sparse_units)
 {
   // Keep line decoding and empty child lists independently testable.

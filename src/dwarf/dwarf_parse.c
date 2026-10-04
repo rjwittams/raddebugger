@@ -451,16 +451,17 @@ dw2_read_form_val(DW_Raw *raw, DW2_ParseCtx *ctx, String8 data, U64 off, DW_Form
 {
   U64 start_off = off;
   DW2_FormVal val = {form_kind};
+  val.good = 1;
   {
     //- rjf: read value bytes
     U64 bytes_to_read = 0;
     switch(form_kind)
     {
-      //- rjf: no-ops
+      // Unknown encoded extents cannot be skipped safely.
       default:
       case DW_FormKind_Indirect:
       case DW_FormKind_Null:
-      {}break;
+      {val.good = 0;}break;
       
       //- rjf: 1-byte uint reads
       case DW_FormKind_Ref1:
@@ -649,6 +650,11 @@ dw2_read_form_val(DW_Raw *raw, DW2_ParseCtx *ctx, String8 data, U64 off, DW_Form
       }
     }
   }
+  if(off > data.size ||
+     (off == start_off && form_kind != DW_FormKind_FlagPresent && form_kind != DW_FormKind_ImplicitConst))
+  {
+    val.good = 0;
+  }
   *out = val;
   U64 bytes_read = (off - start_off);
   return bytes_read;
@@ -771,6 +777,7 @@ dw2_read_tag(Arena *arena, DW_Raw *raw, DW2_ParseCtx *ctx, String8 data, U64 off
   
   // rjf: map abbrev ID -> abbrev offset
   U64 abbrev_off = 0;
+  B32 abbrev_found = (abbrev_id == 0);
   {
     DW2_AbbrevMap *abbrev_map = ctx->abbrev_map;
     U64 hash = u64_hash_from_str8(str8_struct(&abbrev_id));
@@ -780,15 +787,22 @@ dw2_read_tag(Arena *arena, DW_Raw *raw, DW2_ParseCtx *ctx, String8 data, U64 off
       if(n->id == abbrev_id)
       {
         abbrev_off = n->off;
+        abbrev_found = 1;
         break;
       }
     }
+  }
+  if(!abbrev_found || off == start_off)
+  {
+    MemoryZeroStruct(tag_out);
+    return 0;
   }
   
   // rjf: read abbrev header
   U64 tag_kind = 0;
   U8 has_children = 0;
   U64 attrib_abbrev_read_off = 0;
+  if(abbrev_id != 0)
   {
     String8 abbrev_data = raw->sec[DW_SectionKind_Abbrev].data;
     U64 abbrev_read_off = abbrev_off;
@@ -834,6 +848,11 @@ dw2_read_tag(Arena *arena, DW_Raw *raw, DW2_ParseCtx *ctx, String8 data, U64 off
       if(attrib_kind != 0)
       {
         off += dw2_read_form_val(raw, ctx, data, off, attrib_form_kind, implicit_const, &val);
+        if(!val.good)
+        {
+          MemoryZeroStruct(tag_out);
+          return 0;
+        }
       }
       
       // rjf: push
@@ -1127,6 +1146,12 @@ dw2_read_line_table_header(Arena *arena, DW_Raw *raw, DW2_ParseCtx *ctx, String8
               DW_FormKind form_kind = (DW_FormKind)entry_formats[entry_format_idx*2 + 1];
               DW2_FormVal form_val = {0};
               off += dw2_read_form_val(raw, ctx, data, off, form_kind, 0, &form_val);
+              if(!form_val.good)
+              {
+                scratch_end(scratch);
+                MemoryZeroStruct(out);
+                return 0;
+              }
               switch(lnct)
               {
                 default:
