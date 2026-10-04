@@ -1385,6 +1385,142 @@ Test(d2r_expression_rejection)
   TestCheck(all_cases_match);
 }
 
+Test(d2r_loclist_consumption)
+{
+  struct
+  {
+    String8 name;
+    U8 entry[24];
+    U8 entry_size;
+    B32 has_addr_table;
+    B32 first_available;
+    U8 second_kind; // 0: absolute; 1: direct base; 2: indexed base;
+                    // 3: no suffix; 4: absolute suffix after a refused entry.
+  }
+  cases[] =
+  {
+    {str8_lit("endx-valid"), {DW_LLE_StartxEndx,0,1, 2,DW_ExprOp_Reg0,DW_ExprOp_Nop}, 6, 1, 1},
+    {str8_lit("endx-missing-table"), {DW_LLE_StartxEndx,0,1, 2,DW_ExprOp_Reg0,DW_ExprOp_Nop}, 6},
+    {str8_lit("endx-missing-start"), {DW_LLE_StartxEndx,2,1, 2,DW_ExprOp_Reg0,DW_ExprOp_Nop}, 6, 1},
+    {str8_lit("endx-missing-end"), {DW_LLE_StartxEndx,0,2, 2,DW_ExprOp_Reg0,DW_ExprOp_Nop}, 6, 1},
+    {str8_lit("length-valid"), {DW_LLE_StartxLength,0,8, 2,DW_ExprOp_Reg0,DW_ExprOp_Nop}, 6, 1, 1},
+    {str8_lit("length-missing-table"), {DW_LLE_StartxLength,0,8, 2,DW_ExprOp_Reg0,DW_ExprOp_Nop}, 6},
+    {str8_lit("length-missing-start"), {DW_LLE_StartxLength,2,8, 2,DW_ExprOp_Reg0,DW_ExprOp_Nop}, 6, 1},
+    {str8_lit("base-direct"), {DW_LLE_BaseAddress,0,0x10,0,0,0,0,0,0,
+                             DW_LLE_OffsetPair,0,8, 2,DW_ExprOp_Reg0,DW_ExprOp_Nop}, 15, 0, 1},
+    {str8_lit("base-indexed"), {DW_LLE_BaseAddressx,0, DW_LLE_OffsetPair,0,8, 2,DW_ExprOp_Reg0,DW_ExprOp_Nop}, 8, 1, 1},
+    {str8_lit("base-missing-table"), {DW_LLE_BaseAddress,0,0x10,0,0,0,0,0,0,
+                                    DW_LLE_BaseAddressx,0, DW_LLE_OffsetPair,0,8, 2,DW_ExprOp_Reg0,DW_ExprOp_Nop}, 17},
+    {str8_lit("base-missing-index"), {DW_LLE_BaseAddress,0,0x10,0,0,0,0,0,0,
+                                    DW_LLE_BaseAddressx,2, DW_LLE_OffsetPair,0,8, 2,DW_ExprOp_Reg0,DW_ExprOp_Nop}, 17, 1},
+    {str8_lit("base-reset-direct"), {DW_LLE_BaseAddress,0,0x10,0,0,0,0,0,0,
+                                   DW_LLE_BaseAddressx,2, DW_LLE_OffsetPair,0,8, 2,DW_ExprOp_Reg0,DW_ExprOp_Nop}, 17, 1, 0, 1},
+    {str8_lit("base-reset-indexed"), {DW_LLE_BaseAddress,0,0x10,0,0,0,0,0,0,
+                                    DW_LLE_BaseAddressx,2, DW_LLE_OffsetPair,0,8, 2,DW_ExprOp_Reg0,DW_ExprOp_Nop}, 17, 1, 0, 2},
+    {str8_lit("truncated-expression"), {DW_LLE_StartxLength,0,8, 2,DW_ExprOp_Reg0}, 5, 1, 0, 3},
+    {str8_lit("padded-expression-size"), {DW_LLE_StartxLength,0,8, 0x81,0,DW_ExprOp_Reg0,DW_LLE_EndOfList}, 7, 1, 1, 3},
+    {str8_lit("missing-expression-size"), {DW_LLE_StartxLength,0,8}, 3, 1, 0, 3},
+    {str8_lit("truncated-expression-size"), {DW_LLE_StartxLength,0,8,0x81}, 4, 1, 0, 3},
+    {str8_lit("overflowing-expression-size"), {DW_LLE_StartxLength,0,8, 0x81,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,2,
+                                            DW_ExprOp_Reg0}, 14, 1, 0, 3},
+    {str8_lit("overlong-expression-size"), {DW_LLE_StartxLength,0,8, 0x81,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0,
+                                          DW_ExprOp_Reg0}, 15, 1, 0, 3},
+    {str8_lit("ten-byte-expression-size"), {DW_LLE_StartxLength,0,8, 0x81,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0,
+                                          DW_ExprOp_Reg0,DW_LLE_EndOfList}, 15, 1, 1, 3},
+    {str8_lit("unknown-entry"), {0xff}, 1, 0, 0, 4},
+    {str8_lit("unknown-after-valid"), {DW_LLE_StartxLength,0,8, 2,DW_ExprOp_Reg0,DW_ExprOp_Nop,0xff}, 7, 1, 1, 4},
+    {str8_lit("end-before-suffix"), {DW_LLE_EndOfList}, 1, 0, 0, 4},
+  };
+  Arch arches[] = {Arch_x64, Arch_arm64};
+  B32 all_cases_match = 1;
+  for EachElement(arch_idx, arches) for EachElement(case_idx, cases)
+  {
+    // A local has an indexed range followed by an absolute range. Neither a
+    // failed index nor its expression payload may hide the absolute range.
+    U8 abbrev[] = {1,0x11,1, 3,8, 0x73,0x17, 0x11,1, 0x12,6, 0,0,
+                   2,0x2e,1, 3,8, 0x11,1, 0x12,6, 0,0,
+                   3,0x34,0, 3,8, 0x49,0x13, 2,0x17, 0,0,
+                   4,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0, 0};
+    U8 info[] = {0,0,0,0, 5,0,1,8, 0,0,0,0,
+                 1,'a',0, 8,0,0,0, 0,0x10,0,0,0,0,0,0, 16,0,0,0,
+                 4,'i','3','2',0,5,4,
+                 2,'f',0, 0,0x10,0,0,0,0,0,0, 16,0,0,0,
+                 3,'x',0, 31,0,0,0, 12,0,0,0, 0,0};
+    U32 info_size = sizeof(info)-4;
+    MemoryCopy(info, &info_size, 4);
+    U8 addr[] = {20,0,0,0, 5,0,8,0, 0,0x10,0,0,0,0,0,0, 8,0x10,0,0,0,0,0,0};
+    U8 loc_header[] = {0,0,0,0, 5,0,8,0, 0,0,0,0};
+    U8 second[] = {DW_LLE_StartEnd, 8,0x10,0,0,0,0,0,0, 16,0x10,0,0,0,0,0,0,
+                   1,DW_ExprOp_Reg1, DW_LLE_EndOfList};
+    U8 second_base[] = {DW_LLE_BaseAddress,8,0x10,0,0,0,0,0,0,
+                       DW_LLE_OffsetPair,0,8, 1,DW_ExprOp_Reg1, DW_LLE_EndOfList};
+    U8 second_indexed_base[] = {DW_LLE_BaseAddressx,1, DW_LLE_OffsetPair,0,8,
+                               1,DW_ExprOp_Reg1, DW_LLE_EndOfList};
+    String8List loc_parts = {0};
+    str8_list_push(arena, &loc_parts, str8_array_fixed(loc_header));
+    str8_list_push(arena, &loc_parts, str8(cases[case_idx].entry, cases[case_idx].entry_size));
+    String8 second_entry = cases[case_idx].second_kind == 1 ? str8_array_fixed(second_base) :
+                          cases[case_idx].second_kind == 2 ? str8_array_fixed(second_indexed_base) : str8_array_fixed(second);
+    if(cases[case_idx].second_kind != 3) {str8_list_push(arena, &loc_parts, second_entry);}
+    String8 loclists = str8_list_join(arena, &loc_parts, 0);
+    U32 loc_size = loclists.size-4;
+    MemoryCopy(loclists.str, &loc_size, 4);
+    D2R_ConvertParams params = {0};
+    params.arch = arches[arch_idx];
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    params.exe_name = str8_lit("loclists");
+    RDIM_BinarySectionNode section = {0};
+    section.v.flags = RDI_BinarySectionFlag_Read|RDI_BinarySectionFlag_Execute;
+    section.v.voff_first = 0x1000;
+    section.v.voff_opl = 0x1010;
+    params.binary_sections.first = params.binary_sections.last = &section;
+    params.binary_sections.count = 1;
+    params.raw.sec[DW_SectionKind_Info].data = str8_array_fixed(info);
+    params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+    params.raw.sec[DW_SectionKind_LocLists].data = loclists;
+    if(cases[case_idx].has_addr_table) {params.raw.sec[DW_SectionKind_Addr].data = str8_array_fixed(addr);}
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+    RDIM_BakeResults baked = rdim_bake(convert_arena, &result);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
+    String8 data = str8_list_join(convert_arena, &blobs, 0);
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    U64 locals_count = 0;
+    RDI_Symbol *locals = rdi_table_from_name(&rdi, LocalVariables, &locals_count);
+    TestCheck(locals_count == 2);
+    U64 voffs[] = {0x1000, 0x1007, 0x1008, 0x100f, 0x1010};
+    for EachElement(voff_idx, voffs)
+    {
+      RDI_Location location = rdi_location_from_location_voff(&rdi, locals[1].location, voffs[voff_idx]);
+      B32 available = voff_idx < 2 ? cases[case_idx].first_available : voff_idx < 4 && cases[case_idx].second_kind < 3;
+      RDI_LocationKind expected = available ? RDI_LocationKind_ValReg : RDI_LocationKind_NULL;
+      RDI_LocationKind kind = rdi_kind_from_location(location);
+      test_outf("%S %S @%I64x: location kind %u, expected %u\n",
+                string_from_arch(arches[arch_idx]), cases[case_idx].name, voffs[voff_idx], kind, expected);
+      all_cases_match &= kind == expected;
+      if(kind == RDI_LocationKind_ValReg && available)
+      {
+        RDI_RegCode reg = voff_idx < 2 ? (arches[arch_idx] == Arch_x64 ? RDI_RegCodeX64_rax : RDI_RegCodeARM64_x0) :
+                                       (arches[arch_idx] == Arch_x64 ? RDI_RegCodeX64_rdx : RDI_RegCodeARM64_x1);
+        all_cases_match &= rdi_regcode_from_location(location) == reg;
+      }
+    }
+    String8 name = str8f(arena, "%S-%S", string_from_arch(arches[arch_idx]), cases[case_idx].name);
+    TestCheck(t_write_file(str8f(arena, "%S.info", name), str8_array_fixed(info)));
+    TestCheck(t_write_file(str8f(arena, "%S.abbrev", name), str8_array_fixed(abbrev)));
+    TestCheck(t_write_file(str8f(arena, "%S.loclists", name), loclists));
+    if(cases[case_idx].has_addr_table) {TestCheck(t_write_file(str8f(arena, "%S.addr", name), str8_array_fixed(addr)));}
+    TestCheck(t_write_file(str8f(arena, "%S.rdi", name), data));
+    arena_release(convert_arena);
+  }
+  TestCheck(all_cases_match);
+}
+
 Test(d2r_module_types)
 {
   // Two compilation units: a procedure references a base type in a named scope
