@@ -1547,6 +1547,135 @@ Test(d2r_expression_rejection)
   TestCheck(all_cases_match);
 }
 
+Test(d2r_rnglist_base_state)
+{
+  struct
+  {
+    String8 name;
+    U8 entry[24];
+    U8 entry_size;
+    B32 has_addr_table;
+    B32 first_available;
+    U8 second_kind; // 0: absolute; 1: direct base; 2: indexed base; 3: refused suffix;
+                    // 4: absolute followed by an offset pair without restoring the invalid base.
+  }
+  cases[] =
+  {
+    {str8_lit("base-direct"), {DW_RLE_BaseAddress,0,0x10,0,0,0,0,0,0,
+                             DW_RLE_OffsetPair,0,8}, 12, 0, 1},
+    {str8_lit("base-missing-index"), {DW_RLE_BaseAddress,0,0x10,0,0,0,0,0,0,
+                                    DW_RLE_BaseAddressx,2, DW_RLE_OffsetPair,0,8}, 14, 1},
+    {str8_lit("unit-base"), {DW_RLE_OffsetPair,0,8}, 3, 0, 1},
+    {str8_lit("base-indexed"), {DW_RLE_BaseAddressx,0, DW_RLE_OffsetPair,0,8}, 5, 1, 1},
+    {str8_lit("base-missing-table"), {DW_RLE_BaseAddress,0,0x10,0,0,0,0,0,0,
+                                    DW_RLE_BaseAddressx,0, DW_RLE_OffsetPair,0,8}, 14},
+    {str8_lit("base-reset-direct"), {DW_RLE_BaseAddress,0,0x10,0,0,0,0,0,0,
+                                   DW_RLE_BaseAddressx,2, DW_RLE_OffsetPair,0,8}, 14, 1, 0, 1},
+    {str8_lit("base-reset-indexed"), {DW_RLE_BaseAddress,0,0x10,0,0,0,0,0,0,
+                                    DW_RLE_BaseAddressx,2, DW_RLE_OffsetPair,0,8}, 14, 1, 0, 2},
+    {str8_lit("absolute-does-not-reset-base"), {DW_RLE_BaseAddress,0,0x10,0,0,0,0,0,0,
+                                             DW_RLE_BaseAddressx,2, DW_RLE_OffsetPair,0,8}, 14, 1, 0, 4},
+    {str8_lit("endx-valid"), {DW_RLE_StartxEndx,0,1}, 3, 1, 1},
+    {str8_lit("endx-missing-start"), {DW_RLE_StartxEndx,2,1}, 3, 1},
+    {str8_lit("endx-missing-end"), {DW_RLE_StartxEndx,0,2}, 3, 1},
+    {str8_lit("endx-missing-table"), {DW_RLE_StartxEndx,0,1}, 3},
+    {str8_lit("length-valid"), {DW_RLE_StartxLength,0,8}, 3, 1, 1},
+    {str8_lit("length-missing-start"), {DW_RLE_StartxLength,2,8}, 3, 1},
+    {str8_lit("length-missing-table"), {DW_RLE_StartxLength,0,8}, 3},
+    {str8_lit("absolute-start-end"), {DW_RLE_StartEnd,0,0x10,0,0,0,0,0,0,
+                                      8,0x10,0,0,0,0,0,0}, 17, 0, 1},
+    {str8_lit("absolute-start-length"), {DW_RLE_StartLength,0,0x10,0,0,0,0,0,0,8}, 10, 0, 1},
+    {str8_lit("unknown-entry"), {0xff}, 1, 0, 0, 3},
+    {str8_lit("unknown-after-valid"), {DW_RLE_StartxLength,0,8,0xff}, 4, 1, 1, 3},
+    {str8_lit("end-before-suffix"), {DW_RLE_EndOfList}, 1, 0, 0, 3},
+    {str8_lit("base-only"), {DW_RLE_BaseAddress,0,0x10,0,0,0,0,0,0,DW_RLE_EndOfList}, 10, 0, 0, 3},
+    {str8_lit("indexed-base-only"), {DW_RLE_BaseAddressx,0,DW_RLE_EndOfList}, 3, 1, 0, 3},
+  };
+  Arch arches[] = {Arch_x64, Arch_arm64};
+  B32 all_cases_match = 1;
+  for EachElement(arch_idx, arches) for EachElement(case_idx, cases)
+  {
+    // The procedure has two adjacent ranges. An unresolved base may not
+    // attribute the first range to its predecessor; the absolute second is independent.
+    U8 abbrev[] = {1,0x11,1, 3,8, 0x73,0x17, 0x11,1, 0x12,6, 0,0,
+                   2,0x2e,0, 3,8, 0x55,0x17, 0,0, 0};
+    U8 info[] = {0,0,0,0, 5,0,1,8, 0,0,0,0,
+                 1,'a',0, 8,0,0,0, 0,0x10,0,0,0,0,0,0, 16,0,0,0,
+                 2,'f',0, 12,0,0,0, 0};
+    U32 info_size = sizeof(info)-4;
+    MemoryCopy(info, &info_size, 4);
+    U8 addr[] = {20,0,0,0, 5,0,8,0, 0,0x10,0,0,0,0,0,0, 8,0x10,0,0,0,0,0,0};
+    U8 rng_header[] = {0,0,0,0, 5,0,8,0, 0,0,0,0};
+    U8 second[] = {DW_RLE_StartEnd, 8,0x10,0,0,0,0,0,0, 16,0x10,0,0,0,0,0,0,
+                   DW_RLE_EndOfList};
+    U8 second_base[] = {DW_RLE_BaseAddress,8,0x10,0,0,0,0,0,0,
+                       DW_RLE_OffsetPair,0,8, DW_RLE_EndOfList};
+    U8 second_indexed_base[] = {DW_RLE_BaseAddressx,1, DW_RLE_OffsetPair,0,8, DW_RLE_EndOfList};
+    U8 second_absolute_then_offset[] = {DW_RLE_StartEnd, 8,0x10,0,0,0,0,0,0, 16,0x10,0,0,0,0,0,0,
+                                       DW_RLE_OffsetPair,0,8, DW_RLE_EndOfList};
+    String8List rng_parts = {0};
+    str8_list_push(arena, &rng_parts, str8_array_fixed(rng_header));
+    str8_list_push(arena, &rng_parts, str8(cases[case_idx].entry, cases[case_idx].entry_size));
+    String8 second_entry = cases[case_idx].second_kind == 1 ? str8_array_fixed(second_base) :
+                          cases[case_idx].second_kind == 2 ? str8_array_fixed(second_indexed_base) :
+                          cases[case_idx].second_kind == 4 ? str8_array_fixed(second_absolute_then_offset) : str8_array_fixed(second);
+    str8_list_push(arena, &rng_parts, second_entry);
+    String8 rnglists = str8_list_join(arena, &rng_parts, 0);
+    U32 rng_size = rnglists.size-4;
+    MemoryCopy(rnglists.str, &rng_size, 4);
+    D2R_ConvertParams params = {0};
+    params.arch = arches[arch_idx];
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    params.raw.sec[DW_SectionKind_Info].data = str8_array_fixed(info);
+    params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+    params.raw.sec[DW_SectionKind_RngLists].data = rnglists;
+    if(cases[case_idx].has_addr_table) {params.raw.sec[DW_SectionKind_Addr].data = str8_array_fixed(addr);}
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+    RDIM_BakeResults baked = rdim_bake(convert_arena, &result);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
+    String8 data = str8_list_join(convert_arena, &blobs, 0);
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    U64 procs_count = 0;
+    RDI_Symbol *procs = rdi_table_from_name(&rdi, Procedures, &procs_count);
+    TestCheck(procs_count == 2);
+    RDI_Scope *scope = rdi_element_from_name_idx(&rdi, Scopes, procs[1].root_scope_idx);
+    U64 range_size = scope->voff_range_opl-scope->voff_range_first;
+    U64 expected_size = 2*(cases[case_idx].first_available + (cases[case_idx].second_kind != 3));
+    test_outf("%S %S: range endpoints %I64u, expected %I64u\n",
+              string_from_arch(arches[arch_idx]), cases[case_idx].name, range_size, expected_size);
+    all_cases_match &= range_size == expected_size;
+    if(range_size == expected_size)
+    {
+      U64 *voffs = rdi_element_from_name_idx(&rdi, ScopeVOffData, scope->voff_range_first);
+      U64 idx = 0;
+      if(cases[case_idx].first_available) {all_cases_match &= voffs[idx] == 0x1000 && voffs[idx+1] == 0x1008; idx += 2;}
+      if(cases[case_idx].second_kind != 3) {all_cases_match &= voffs[idx] == 0x1008 && voffs[idx+1] == 0x1010;}
+    }
+    U64 probes[] = {0,0xfff,0x1000,0x1007,0x1008,0x100f,0x1010};
+    for EachElement(probe_idx, probes)
+    {
+      B32 available = probe_idx >= 2 && probe_idx < 4 ? cases[case_idx].first_available :
+                      probe_idx >= 4 && probe_idx < 6 && cases[case_idx].second_kind != 3;
+      RDI_Scope *found = rdi_scope_from_voff(&rdi, probes[probe_idx]);
+      all_cases_match &= available ? found == scope : found->proc_idx == 0;
+    }
+    String8 name = str8f(arena, "%S-%S", string_from_arch(arches[arch_idx]), cases[case_idx].name);
+    TestCheck(t_write_file(str8f(arena, "%S.info", name), str8_array_fixed(info)));
+    TestCheck(t_write_file(str8f(arena, "%S.abbrev", name), str8_array_fixed(abbrev)));
+    TestCheck(t_write_file(str8f(arena, "%S.rnglists", name), rnglists));
+    if(cases[case_idx].has_addr_table) {TestCheck(t_write_file(str8f(arena, "%S.addr", name), str8_array_fixed(addr)));}
+    TestCheck(t_write_file(str8f(arena, "%S.rdi", name), data));
+    arena_release(convert_arena);
+  }
+  TestCheck(all_cases_match);
+}
+
 Test(d2r_loclist_consumption)
 {
   struct
