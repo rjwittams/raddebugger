@@ -1710,7 +1710,7 @@ Test(d2r_rnglist_base_state)
     B32 has_addr_table;
     B32 first_available;
     U8 second_kind; // 0: absolute; 1: direct base; 2: indexed base; 3: refused suffix;
-                    // 4: absolute followed by an offset pair without restoring the invalid base.
+                    // 4: absolute followed by an offset pair without restoring the invalid base; 5: no suffix.
   }
   cases[] =
   {
@@ -1743,6 +1743,36 @@ Test(d2r_rnglist_base_state)
     {str8_lit("end-before-suffix"), {DW_RLE_EndOfList}, 1, 0, 0, 3},
     {str8_lit("base-only"), {DW_RLE_BaseAddress,0,0x10,0,0,0,0,0,0,DW_RLE_EndOfList}, 10, 0, 0, 3},
     {str8_lit("indexed-base-only"), {DW_RLE_BaseAddressx,0,DW_RLE_EndOfList}, 3, 1, 0, 3},
+    {str8_lit("missing-end-address"), {DW_RLE_StartEnd,0,0x10,0,0,0,0,0,0}, 9, 0, 0, 5},
+    {str8_lit("truncated-after-valid"), {DW_RLE_StartxLength,0,8,
+                                       DW_RLE_StartEnd,0,0x10,0,0,0,0,0,0,8,0x10}, 14, 1, 1, 5},
+    {str8_lit("missing-length"), {DW_RLE_StartLength,0,0x10,0,0,0,0,0,0}, 9, 0, 0, 5},
+    {str8_lit("overflowing-index"), {DW_RLE_StartxEndx,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,2,1}, 12, 1, 0, 3},
+    {str8_lit("reversed-addresses"), {DW_RLE_StartEnd,8,0x10,0,0,0,0,0,0, 0,0x10,0,0,0,0,0,0}, 17},
+    {str8_lit("reversed-indices"), {DW_RLE_StartxEndx,1,0}, 3, 1},
+    {str8_lit("reversed-offsets"), {DW_RLE_OffsetPair,8,0}, 3},
+    {str8_lit("overflowing-base-offsets"), {DW_RLE_BaseAddress,0xf0,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+                                          DW_RLE_OffsetPair,0x90,0x20,0x98,0x20}, 14},
+    {str8_lit("overflowing-start-length"), {DW_RLE_StartLength,0,0x10,0,0,0,0,0,0,
+                                          0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,1}, 19},
+    {str8_lit("overflowing-indexed-length"), {DW_RLE_StartxLength,0,
+                                            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,1}, 12, 1},
+    {str8_lit("empty-indexed-range"), {DW_RLE_StartxEndx,0,0}, 3, 1},
+    {str8_lit("empty-length-range"), {DW_RLE_StartLength,0,0x10,0,0,0,0,0,0,0}, 10},
+    {str8_lit("missing-base-index"), {DW_RLE_BaseAddressx}, 1, 1, 0, 5},
+    {str8_lit("truncated-base-index"), {DW_RLE_BaseAddressx,0x80}, 2, 1, 0, 5},
+    {str8_lit("missing-end-index"), {DW_RLE_StartxEndx,0}, 2, 1, 0, 5},
+    {str8_lit("truncated-indexed-length"), {DW_RLE_StartxLength,0,0x80}, 3, 1, 0, 5},
+    {str8_lit("missing-end-offset"), {DW_RLE_OffsetPair,0}, 2, 0, 0, 5},
+    {str8_lit("overflowing-length-operand"), {DW_RLE_StartxLength,0,
+                                           0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,2}, 12, 1, 0, 3},
+    {str8_lit("overlong-index"), {DW_RLE_StartxEndx,
+                                0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0,1}, 13, 1, 0, 3},
+    {str8_lit("padded-indices"), {DW_RLE_StartxEndx,0x80,0,0x81,0}, 5, 1, 1},
+    {str8_lit("ten-byte-index"), {DW_RLE_StartxEndx,
+                                0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0,1}, 12, 1, 1},
+    {str8_lit("truncated-base-address"), {DW_RLE_BaseAddress,0,0x10}, 3, 0, 0, 5},
+    {str8_lit("truncated-start-address"), {DW_RLE_StartLength,0,0x10}, 3, 0, 0, 5},
   };
   Arch arches[] = {Arch_x64, Arch_arm64};
   B32 all_cases_match = 1;
@@ -1772,7 +1802,7 @@ Test(d2r_rnglist_base_state)
     String8 second_entry = cases[case_idx].second_kind == 1 ? str8_array_fixed(second_base) :
                           cases[case_idx].second_kind == 2 ? str8_array_fixed(second_indexed_base) :
                           cases[case_idx].second_kind == 4 ? str8_array_fixed(second_absolute_then_offset) : str8_array_fixed(second);
-    str8_list_push(arena, &rng_parts, second_entry);
+    if(cases[case_idx].second_kind != 5) {str8_list_push(arena, &rng_parts, second_entry);}
     String8 rnglists = str8_list_join(arena, &rng_parts, 0);
     U32 rng_size = rnglists.size-4;
     MemoryCopy(rnglists.str, &rng_size, 4);
@@ -1799,7 +1829,8 @@ Test(d2r_rnglist_base_state)
     TestCheck(procs_count == 2);
     RDI_Scope *scope = rdi_element_from_name_idx(&rdi, Scopes, procs[1].root_scope_idx);
     U64 range_size = scope->voff_range_opl-scope->voff_range_first;
-    U64 expected_size = 2*(cases[case_idx].first_available + (cases[case_idx].second_kind != 3));
+    B32 second_available = cases[case_idx].second_kind != 3 && cases[case_idx].second_kind != 5;
+    U64 expected_size = 2*(cases[case_idx].first_available + second_available);
     test_outf("%S %S: range endpoints %I64u, expected %I64u\n",
               string_from_arch(arches[arch_idx]), cases[case_idx].name, range_size, expected_size);
     all_cases_match &= range_size == expected_size;
@@ -1808,13 +1839,13 @@ Test(d2r_rnglist_base_state)
       U64 *voffs = rdi_element_from_name_idx(&rdi, ScopeVOffData, scope->voff_range_first);
       U64 idx = 0;
       if(cases[case_idx].first_available) {all_cases_match &= voffs[idx] == 0x1000 && voffs[idx+1] == 0x1008; idx += 2;}
-      if(cases[case_idx].second_kind != 3) {all_cases_match &= voffs[idx] == 0x1008 && voffs[idx+1] == 0x1010;}
+      if(second_available) {all_cases_match &= voffs[idx] == 0x1008 && voffs[idx+1] == 0x1010;}
     }
     U64 probes[] = {0,0xfff,0x1000,0x1007,0x1008,0x100f,0x1010};
     for EachElement(probe_idx, probes)
     {
       B32 available = probe_idx >= 2 && probe_idx < 4 ? cases[case_idx].first_available :
-                      probe_idx >= 4 && probe_idx < 6 && cases[case_idx].second_kind != 3;
+                      probe_idx >= 4 && probe_idx < 6 && second_available;
       RDI_Scope *found = rdi_scope_from_voff(&rdi, probes[probe_idx]);
       all_cases_match &= available ? found == scope : found->proc_idx == 0;
     }
@@ -1874,6 +1905,37 @@ Test(d2r_loclist_consumption)
     {str8_lit("unknown-entry"), {0xff}, 1, 0, 0, 4},
     {str8_lit("unknown-after-valid"), {DW_LLE_StartxLength,0,8, 2,DW_ExprOp_Reg0,DW_ExprOp_Nop,0xff}, 7, 1, 1, 4},
     {str8_lit("end-before-suffix"), {DW_LLE_EndOfList}, 1, 0, 0, 4},
+    {str8_lit("overflowing-index"), {DW_LLE_StartxEndx,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,2,1,
+                                   1,DW_ExprOp_Reg0}, 14, 1, 0, 4},
+    {str8_lit("reversed-addresses"), {DW_LLE_StartEnd,8,0x10,0,0,0,0,0,0, 0,0x10,0,0,0,0,0,0,
+                                    1,DW_ExprOp_Reg0}, 19},
+    {str8_lit("reversed-indices"), {DW_LLE_StartxEndx,1,0,1,DW_ExprOp_Reg0}, 5, 1},
+    {str8_lit("reversed-offsets"), {DW_LLE_OffsetPair,8,0,1,DW_ExprOp_Reg0}, 5},
+    {str8_lit("overflowing-base-offsets"), {DW_LLE_BaseAddress,0xf0,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+                                          DW_LLE_OffsetPair,0x90,0x20,0x98,0x20,1,DW_ExprOp_Reg0}, 16},
+    {str8_lit("overflowing-start-length"), {DW_LLE_StartLength,0,0x10,0,0,0,0,0,0,
+                                          0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,1,1,DW_ExprOp_Reg0}, 21},
+    {str8_lit("overflowing-indexed-length"), {DW_LLE_StartxLength,0,
+                                            0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,1,1,DW_ExprOp_Reg0}, 14, 1},
+    {str8_lit("empty-indexed-range"), {DW_LLE_StartxEndx,0,0,1,DW_ExprOp_Reg0}, 5, 1},
+    {str8_lit("empty-length-range"), {DW_LLE_StartLength,0,0x10,0,0,0,0,0,0,0,1,DW_ExprOp_Reg0}, 12},
+    {str8_lit("missing-base-index"), {DW_LLE_BaseAddressx}, 1, 1, 0, 3},
+    {str8_lit("truncated-base-index"), {DW_LLE_BaseAddressx,0x80}, 2, 1, 0, 3},
+    {str8_lit("missing-end-index"), {DW_LLE_StartxEndx,0}, 2, 1, 0, 3},
+    {str8_lit("truncated-indexed-length"), {DW_LLE_StartxLength,0,0x80}, 3, 1, 0, 3},
+    {str8_lit("missing-end-offset"), {DW_LLE_OffsetPair,0}, 2, 0, 0, 3},
+    {str8_lit("overflowing-length-operand"), {DW_LLE_StartxLength,0,
+                                           0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,2,1,DW_ExprOp_Reg0}, 14, 1, 0, 4},
+    {str8_lit("overlong-index"), {DW_LLE_StartxEndx,
+                                0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0,1,1,DW_ExprOp_Reg0}, 15, 1, 0, 4},
+    {str8_lit("padded-indices"), {DW_LLE_StartxEndx,0x80,0,0x81,0,1,DW_ExprOp_Reg0}, 7, 1, 1},
+    {str8_lit("ten-byte-index"), {DW_LLE_StartxEndx,
+                                0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0,1,1,DW_ExprOp_Reg0}, 14, 1, 1},
+    {str8_lit("truncated-base-address"), {DW_LLE_BaseAddress,0,0x10}, 3, 0, 0, 3},
+    {str8_lit("truncated-start-address"), {DW_LLE_StartLength,0,0x10}, 3, 0, 0, 3},
+    {str8_lit("missing-end-address"), {DW_LLE_StartEnd,0,0x10,0,0,0,0,0,0}, 9, 0, 0, 3},
+    {str8_lit("truncated-after-valid"), {DW_LLE_StartxLength,0,8,1,DW_ExprOp_Reg0,
+                                       DW_LLE_StartEnd,0,0x10,0,0,0,0,0,0,8,0x10}, 16, 1, 1, 3},
   };
   Arch arches[] = {Arch_x64, Arch_arm64};
   B32 all_cases_match = 1;
@@ -1937,6 +1999,12 @@ Test(d2r_loclist_consumption)
     U64 locals_count = 0;
     RDI_Symbol *locals = rdi_table_from_name(&rdi, LocalVariables, &locals_count);
     TestCheck(locals_count == 2);
+    U64 expected_count = cases[case_idx].first_available + (cases[case_idx].second_kind < 3);
+    U64 location_count = rdi_kind_from_location(locals[1].location) == RDI_LocationKind_Set ?
+                         rdi_set_count_from_location(locals[1].location) : 0;
+    test_outf("%S %S: locations %I64u, expected %I64u\n",
+              string_from_arch(arches[arch_idx]), cases[case_idx].name, location_count, expected_count);
+    all_cases_match &= location_count == expected_count;
     U64 voffs[] = {0x1000, 0x1007, 0x1008, 0x100f, 0x1010};
     for EachElement(voff_idx, voffs)
     {
@@ -1963,6 +2031,123 @@ Test(d2r_loclist_consumption)
     arena_release(convert_arena);
   }
   TestCheck(all_cases_match);
+}
+
+Test(d2r_list_address_width)
+{
+  // Four-byte DWARF addresses must not grow beyond 32 bits, even when the
+  // converter runs on a 64-bit host. Default locations are not bounded ranges.
+  Arch arches[] = {Arch_x64, Arch_arm64};
+  String8 case_names[] = {str8_lit("width-overflow"), str8_lit("width-boundary"), str8_lit("default-location")};
+  for EachElement(arch_idx, arches) for(U8 addr_size = 4; addr_size <= 8; addr_size += 4)
+  for EachElement(case_idx, case_names)
+  {
+    U8 abbrev[] = {1,0x11,1, 3,8, 0x11,1, 0x12,7, 0,0,
+                   2,0x2e,1, 3,8, 0x55,0x17, 0,0,
+                   3,0x34,0, 3,8, 0x49,0x13, 2,0x17, 0,0,
+                   4,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0, 0};
+    U8 info_header[] = {0,0,0,0, 5,0,1,addr_size, 0,0,0,0, 1,'a',0};
+    U64 unit_base = 0;
+    U8 info_body[] = {0,0,0,0,0,0,0,0, 4,'i','3','2',0,5,4,
+                      2,'f',0, 12,0,0,0, 3,'x',0, 0,0,0,0, 12,0,0,0, 0,0};
+    U64 unit_opl = addr_size == 4 ? 0xffffffff : 0x100000008;
+    MemoryCopy(info_body, &unit_opl, 8);
+    U32 type_off = sizeof(info_header)+addr_size+8;
+    MemoryCopy(info_body+25, &type_off, 4); // DW_FORM_ref4 follows the variable's name.
+    String8List info_parts = {0};
+    str8_list_push(arena, &info_parts, str8_array_fixed(info_header));
+    str8_list_push(arena, &info_parts, str8((U8 *)&unit_base, addr_size));
+    str8_list_push(arena, &info_parts, str8_array_fixed(info_body));
+    String8 info = str8_list_join(arena, &info_parts, 0);
+    U32 info_size = info.size-4;
+    MemoryCopy(info.str, &info_size, 4);
+    U64 start = case_idx == 0 ? 0xfffffffc : case_idx == 1 ? 0xfffffff8 : 0x1000;
+    U8 length = case_idx == 1 ? 7 : 8;
+    U8 list_header[] = {0,0,0,0, 5,0,addr_size,0, 0,0,0,0};
+    String8 lists[2] = {0};
+    for(U8 list_idx = 0; list_idx < 2; list_idx += 1)
+    {
+      B32 default_location = list_idx == 1 && case_idx == 2;
+      U8 kind = default_location ? DW_LLE_DefaultLocation : list_idx == 0 ? DW_RLE_StartLength : DW_LLE_StartLength;
+      String8List parts = {0};
+      str8_list_push(arena, &parts, str8_array_fixed(list_header));
+      str8_list_push(arena, &parts, str8(&kind, 1));
+      if(!default_location)
+      {
+        str8_list_push(arena, &parts, str8((U8 *)&start, addr_size));
+        str8_list_push(arena, &parts, str8(&length, 1));
+      }
+      U8 expr[] = {1,DW_ExprOp_Reg0};
+      if(list_idx == 1) {str8_list_push(arena, &parts, str8_array_fixed(expr));}
+      str8_list_push(arena, &parts, str8_lit("\0"));
+      lists[list_idx] = str8_list_join(arena, &parts, 0);
+      U32 size = lists[list_idx].size-4;
+      MemoryCopy(lists[list_idx].str, &size, 4);
+    }
+    D2R_ConvertParams params = {0};
+    params.arch = arches[arch_idx];
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    RDIM_BinarySectionNode section = {0};
+    section.v.voff_opl = max_U64;
+    params.binary_sections.first = params.binary_sections.last = &section;
+    params.binary_sections.count = 1;
+    params.raw.sec[DW_SectionKind_Info].data = info;
+    params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+    params.raw.sec[DW_SectionKind_RngLists].data = lists[0];
+    params.raw.sec[DW_SectionKind_LocLists].data = lists[1];
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+    RDIM_BakeResults baked = rdim_bake(convert_arena, &result);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
+    String8 data = str8_list_join(convert_arena, &blobs, 0);
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    U64 procs_count = 0, locals_count = 0;
+    RDI_Symbol *procs = rdi_table_from_name(&rdi, Procedures, &procs_count);
+    RDI_Symbol *locals = rdi_table_from_name(&rdi, LocalVariables, &locals_count);
+    TestCheck(procs_count == 2 && locals_count == 2);
+    String8 name = str8f(arena, "%S-%u-%S", string_from_arch(arches[arch_idx]), addr_size, case_names[case_idx]);
+    TestCheck(t_write_file(str8f(arena, "%S.info", name), info));
+    TestCheck(t_write_file(str8f(arena, "%S.abbrev", name), str8_array_fixed(abbrev)));
+    TestCheck(t_write_file(str8f(arena, "%S.rnglists", name), lists[0]));
+    TestCheck(t_write_file(str8f(arena, "%S.loclists", name), lists[1]));
+    TestCheck(t_write_file(str8f(arena, "%S.rdi", name), data));
+    B32 available = case_idx != 0 || addr_size == 8;
+    RDI_Scope *scope = rdi_element_from_name_idx(&rdi, Scopes, procs[1].root_scope_idx);
+    test_outf("%S width %u %S: endpoints %I64u, location kind %u\n",
+              string_from_arch(arches[arch_idx]), addr_size, case_names[case_idx],
+              scope->voff_range_opl-scope->voff_range_first, rdi_kind_from_location(locals[1].location));
+    TestCheck(scope->voff_range_opl-scope->voff_range_first == (available ? 2 : 0));
+    if(available)
+    {
+      U64 *voffs = rdi_element_from_name_idx(&rdi, ScopeVOffData, scope->voff_range_first);
+      U64 expected_opl = case_idx == 0 ? 0x100000004 : case_idx == 1 ? 0xffffffff : 0x1008;
+      TestCheck(voffs[0] == start && voffs[1] == expected_opl);
+      if(case_idx != 2)
+      {
+        TestCheck(rdi_kind_from_location(locals[1].location) == RDI_LocationKind_Set);
+        TestCheck(rdi_set_count_from_location(locals[1].location) == 1);
+        U64 first = rdi_set_first_index_from_location(locals[1].location);
+        RDI_LocationSetElement *elem = rdi_element_from_name_idx(&rdi, LocationsSetElements, first);
+        TestCheck(elem->voff_first == start && elem->voff_opl == expected_opl);
+      }
+      // A sole default location bakes directly, without a location set.
+      else {TestCheck(rdi_kind_from_location(locals[1].location) != RDI_LocationKind_Set);}
+      RDI_Location location = rdi_location_from_location_voff(&rdi, locals[1].location, start);
+      // These targets have eight-byte registers. Four-byte units keep the bytecode form.
+      TestCheck(rdi_kind_from_location(location) == (addr_size == 8 ? RDI_LocationKind_ValReg : RDI_LocationKind_ValBytecodeStream));
+      if(addr_size == 8)
+      {
+        TestCheck(rdi_regcode_from_location(location) == (arches[arch_idx] == Arch_x64 ? RDI_RegCodeX64_rax : RDI_RegCodeARM64_x0));
+      }
+    }
+    else {TestCheck(rdi_kind_from_location(locals[1].location) == RDI_LocationKind_NULL);}
+    arena_release(convert_arena);
+  }
 }
 
 Test(d2r_module_types)

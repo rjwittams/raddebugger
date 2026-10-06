@@ -439,6 +439,7 @@ internal DW2_OffsetTableSet dw2_offset_table_set_from_raw(Arena *arena, DW_Raw *
 ////////////////////////////////
 //~ rjf: Range List Parsing (.debug_rnglists)
 
+internal B32 dw2_try_read_list_uleb128(String8 data, U64 *off, U64 *out);
 internal Rng1U64List dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_FormVal form_val);
 
 ////////////////////////////////
