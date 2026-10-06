@@ -3094,7 +3094,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           
           // rjf: unpack basic attributes
           String8 name = name_attrib->val.string;
-          U64 off = off_attrib->val.u128.u64[0];
+          U64 member_off = off_attrib->val.u128.u64[0];
           U64 val = val_attrib->val.u128.u64[0];
           
           // rjf: unpack type
@@ -3154,11 +3154,31 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
             default:{}break;
             case DW_TagKind_Member:
             {
-              RDIM_UDTMember *member = rdim_udt_push_member(arena, &lane_udts, udt);
-              member->kind = RDI_MemberKind_DataField;
-              member->name = name;
-              member->type = type;
-              member->off = (RDI_U32)off; // TODO(rjf): @u64_to_u32
+              // RDI represents fixed byte offsets, not member-location expressions.
+              B32 good_member_off = (off_attrib == &dw2_attrib_nil);
+              switch(off_attrib->val.kind)
+              {
+                default:{}break;
+                case DW_FormKind_Data1:
+                case DW_FormKind_Data2:
+                case DW_FormKind_Data4:
+                case DW_FormKind_Data8:
+                case DW_FormKind_Data16:
+                case DW_FormKind_UData:
+                case DW_FormKind_SData:
+                case DW_FormKind_ImplicitConst:
+                {
+                  good_member_off = member_off <= max_U32 && off_attrib->val.u128.u64[1] == 0;
+                }break;
+              }
+              if(good_member_off)
+              {
+                RDIM_UDTMember *member = rdim_udt_push_member(arena, &lane_udts, udt);
+                member->kind = RDI_MemberKind_DataField;
+                member->name = name;
+                member->type = type;
+                member->off = (RDI_U32)member_off;
+              }
             }break;
             case DW_TagKind_Enumerator:
             {

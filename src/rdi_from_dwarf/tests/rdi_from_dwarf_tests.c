@@ -1011,6 +1011,159 @@ Test(d2r_missing_stmt_list)
   TestCheck(all_units_match);
 }
 
+Test(d2r_member_location_refusal)
+{
+  struct
+  {
+    String8 name;
+    U8 form;
+    U8 value[16];
+    U8 value_size;
+    B32 accepted;
+    U32 off;
+    U8 type_tag; // Zero selects a structure; otherwise union or class.
+  }
+  cases[] =
+  {
+    {str8_lit("data1"), DW_FormKind_Data1, {4}, 1, 1, 4},
+    {str8_lit("block1"), DW_FormKind_Block1, {2,DW_ExprOp_PlusUConst,4}, 3},
+    {str8_lit("data1-zero"), DW_FormKind_Data1, {0}, 1, 1},
+    {str8_lit("data2"), DW_FormKind_Data2, {4,0}, 2, 1, 4},
+    {str8_lit("data4"), DW_FormKind_Data4, {4,0,0,0}, 4, 1, 4},
+    {str8_lit("data8"), DW_FormKind_Data8, {4,0,0,0,0,0,0,0}, 8, 1, 4},
+    {str8_lit("data8-overflow"), DW_FormKind_Data8, {4,0,0,0,1,0,0,0}, 8},
+    {str8_lit("data16"), DW_FormKind_Data16, {4}, 16, 1, 4},
+    {str8_lit("data16-high-half"), DW_FormKind_Data16, {4,0,0,0,0,0,0,0,1}, 16},
+    {str8_lit("udata"), DW_FormKind_UData, {4}, 1, 1, 4},
+    {str8_lit("udata-overflow"), DW_FormKind_UData, {0x80,0x80,0x80,0x80,0x10}, 5},
+    {str8_lit("sdata"), DW_FormKind_SData, {4}, 1, 1, 4},
+    {str8_lit("sdata-negative"), DW_FormKind_SData, {0x7c}, 1},
+    {str8_lit("implicit-constant"), DW_FormKind_ImplicitConst, {4}, 1, 1, 4},
+    {str8_lit("implicit-negative"), DW_FormKind_ImplicitConst, {0x7c}, 1},
+    {str8_lit("implicit-two-byte-negative"), DW_FormKind_ImplicitConst, {0xbc,0x7f}, 2},
+    {str8_lit("implicit-signed-positive"), DW_FormKind_ImplicitConst, {0xc0,0}, 2, 1, 64},
+    {str8_lit("block2"), DW_FormKind_Block2, {2,0,DW_ExprOp_PlusUConst,4}, 4},
+    {str8_lit("block4"), DW_FormKind_Block4, {2,0,0,0,DW_ExprOp_PlusUConst,4}, 6},
+    {str8_lit("block"), DW_FormKind_Block, {2,DW_ExprOp_PlusUConst,4}, 3},
+    {str8_lit("exprloc"), DW_FormKind_ExprLoc, {2,DW_ExprOp_PlusUConst,4}, 3},
+    {str8_lit("address-form"), DW_FormKind_Addr, {4,0,0,0,0,0,0,0}, 8},
+    {str8_lit("reference-form"), DW_FormKind_Ref4, {15,0,0,0}, 4},
+    {str8_lit("section-offset"), DW_FormKind_SecOffset, {12,0,0,0}, 4},
+    {str8_lit("flag-form"), DW_FormKind_Flag, {1}, 1},
+    {str8_lit("string-form"), DW_FormKind_String, {'a','b','c',0}, 4},
+    {str8_lit("absent-location"), DW_FormKind_Null, {0}, 0, 1},
+    {str8_lit("union-absent-location"), DW_FormKind_Null, {0}, 0, 1, 0, DW_TagKind_UnionType},
+    {str8_lit("class-constant"), DW_FormKind_Data1, {4}, 1, 1, 4, DW_TagKind_ClassType},
+    {str8_lit("offset-equals-die-position"), DW_FormKind_Data1, {38}, 1, 1, 38},
+    {str8_lit("indirect-constant"), DW_FormKind_Indirect, {DW_FormKind_Data1,4}, 2, 1, 4},
+  };
+  Arch arches[] = {Arch_x64, Arch_arm64};
+  B32 all_cases_match = 1;
+  for EachElement(arch_idx, arches) for EachElement(case_idx, cases)
+  {
+    // Only the middle member changes. Refusing its location must preserve
+    // the enclosing type and both independently known sibling offsets.
+    U8 abbrev_prefix[] = {1,0x11,1, 3,8, 0,0,
+                          2,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0};
+    U8 container_abbrev[] = {3, cases[case_idx].type_tag ? cases[case_idx].type_tag : DW_TagKind_StructureType,
+                            1, 3,8, 0x0b,0x0b, 0,0};
+    U8 member_abbrev[] = {4,0x0d,0, 3,8, 0x49,0x13, 0x38,0x0b, 0,0,
+                          5,0x0d,0, 3,8, 0x49,0x13};
+    String8List abbrev_parts = {0};
+    str8_list_push(arena, &abbrev_parts, str8_array_fixed(abbrev_prefix));
+    str8_list_push(arena, &abbrev_parts, str8_array_fixed(container_abbrev));
+    str8_list_push(arena, &abbrev_parts, str8_array_fixed(member_abbrev));
+    if(cases[case_idx].form != DW_FormKind_Null)
+    {
+      U8 attrib[] = {0x38,cases[case_idx].form};
+      str8_list_push(arena, &abbrev_parts, str8_array_fixed(attrib));
+      if(cases[case_idx].form == DW_FormKind_ImplicitConst)
+      {
+        str8_list_push(arena, &abbrev_parts, str8(cases[case_idx].value, cases[case_idx].value_size));
+      }
+    }
+    str8_list_push(arena, &abbrev_parts, str8_lit("\0\0\0"));
+    String8 abbrev = str8_list_join(arena, &abbrev_parts, 0);
+    U8 info_prefix[] = {0,0,0,0, 5,0,1,8, 0,0,0,0,
+                        1,'a',0, 2,'i','3','2',0,5,4, 3,'S',0,128,
+                        4,'f','i','r','s','t',0, 15,0,0,0, 0,
+                        5,'t','e','s','t',0, 15,0,0,0};
+    U8 info_suffix[] = {4,'l','a','s','t',0, 15,0,0,0, 12, 0,0};
+    if(cases[case_idx].type_tag == DW_TagKind_UnionType) {info_suffix[10] = 0;}
+    String8List info_parts = {0};
+    str8_list_push(arena, &info_parts, str8_array_fixed(info_prefix));
+    if(cases[case_idx].form != DW_FormKind_ImplicitConst)
+    {
+      str8_list_push(arena, &info_parts, str8(cases[case_idx].value, cases[case_idx].value_size));
+    }
+    str8_list_push(arena, &info_parts, str8_array_fixed(info_suffix));
+    String8 info = str8_list_join(arena, &info_parts, 0);
+    U32 info_size = info.size-4;
+    MemoryCopy(info.str, &info_size, 4);
+    D2R_ConvertParams params = {0};
+    params.arch = arches[arch_idx];
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    params.raw.sec[DW_SectionKind_Info].data = info;
+    params.raw.sec[DW_SectionKind_Abbrev].data = abbrev;
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+    RDIM_BakeResults baked = rdim_bake(convert_arena, &result);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
+    String8 data = str8_list_join(convert_arena, &blobs, 0);
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    U64 types_count = 0;
+    RDI_TypeNode *types = rdi_table_from_name(&rdi, TypeNodes, &types_count);
+    RDI_UDT *udt = 0;
+    for EachIndex(type_idx, types_count)
+    {
+      RDI_TypeNode *type = &types[type_idx];
+      RDI_TypeKind expected_kind = cases[case_idx].type_tag == DW_TagKind_UnionType ? RDI_TypeKind_Union :
+                                   cases[case_idx].type_tag == DW_TagKind_ClassType ? RDI_TypeKind_Class : RDI_TypeKind_Struct;
+      if(type->kind == expected_kind)
+      {
+        U64 size = 0;
+        U8 *name = rdi_string_from_idx(&rdi, type->user_defined.name_string_idx, &size);
+        if(str8_match(str8(name, size), str8_lit("S"), 0))
+        {
+          TestCheck(type->byte_size == 128);
+          udt = rdi_element_from_name_idx(&rdi, UDTs, type->user_defined.udt_idx);
+        }
+      }
+    }
+    TestCheck(udt != 0);
+    B32 first = 0, last = 0, suspect = 0;
+    U32 suspect_off = 0;
+    for EachIndex(member_idx, udt->member_count)
+    {
+      RDI_Member *member = rdi_element_from_name_idx(&rdi, Members, udt->member_first+member_idx);
+      U64 size = 0;
+      U8 *name_str = rdi_string_from_idx(&rdi, member->name_string_idx, &size);
+      String8 name = str8(name_str, size);
+      TestCheck(member->kind == RDI_MemberKind_DataField);
+      TestCheck(member->type_idx < types_count && types[member->type_idx].kind == RDI_TypeKind_Alias);
+      TestCheck(types[member->type_idx].byte_size == 4);
+      first |= str8_match(name, str8_lit("first"), 0) && member->off == 0;
+      last |= str8_match(name, str8_lit("last"), 0) && member->off == (cases[case_idx].type_tag == DW_TagKind_UnionType ? 0 : 12);
+      if(str8_match(name, str8_lit("test"), 0)) {suspect = 1; suspect_off = member->off;}
+    }
+    test_outf("%S %S: members %u, test present %u, offset %u\n",
+              string_from_arch(arches[arch_idx]), cases[case_idx].name, udt->member_count, suspect, suspect_off);
+    all_cases_match &= first && last && udt->member_count == 2+cases[case_idx].accepted &&
+                       suspect == cases[case_idx].accepted && (!suspect || suspect_off == cases[case_idx].off);
+    String8 name = str8f(arena, "%S-%S", string_from_arch(arches[arch_idx]), cases[case_idx].name);
+    TestCheck(t_write_file(str8f(arena, "%S.info", name), info));
+    TestCheck(t_write_file(str8f(arena, "%S.abbrev", name), abbrev));
+    TestCheck(t_write_file(str8f(arena, "%S.rdi", name), data));
+    arena_release(convert_arena);
+  }
+  TestCheck(all_cases_match);
+}
+
 Test(d2r_unit_refusal)
 {
   struct
