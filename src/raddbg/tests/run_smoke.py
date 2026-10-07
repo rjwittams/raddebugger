@@ -71,7 +71,7 @@ def main():
     p.add_argument('--debugger', required=True, type=Path)
     p.add_argument('--sender', type=Path, help='Default: same binary as debugger')
     p.add_argument('--compiler', default='cl' if os.name == 'nt' else 'clang')
-    p.add_argument('--case', choices=['all', 'languages', *['language-'+x for x in language_basics.LANGUAGES], 'c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-source-case', 'c-gcc-unwind', 'c-assert', 'c-assert-optimized', *ELF_CASES, 'symbol-library', *ARM_CASES], default='c')
+    p.add_argument('--case', choices=['all', 'languages', *['language-'+x for x in language_basics.LANGUAGES], 'c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-function-breakpoint', 'c-source-case', 'c-gcc-unwind', 'c-assert', 'c-assert-optimized', *ELF_CASES, 'symbol-library', *ARM_CASES], default='c')
     p.add_argument('--examples', type=Path, help='Explicit raddebugger_examples checkout for language cases')
     p.add_argument('--output-root', type=Path, help='Existing directory for retained, unique run directories')
     a = p.parse_args()
@@ -79,7 +79,7 @@ def main():
     a.sender = (a.sender or a.debugger).resolve()
     if a.output_root:
         a.output_root = a.output_root.resolve()
-    cases = ['c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-source-case', 'c-gcc-unwind', 'c-assert', 'c-assert-optimized', *ELF_CASES, 'symbol-library', *ARM_CASES] if a.case == 'all' else [a.case]
+    cases = ['c', 'c-eval', 'c-memory', 'c-exit-37', 'c-detach', 'c-inline', 'c-inline-nested', 'c-function-breakpoint', 'c-source-case', 'c-gcc-unwind', 'c-assert', 'c-assert-optimized', *ELF_CASES, 'symbol-library', *ARM_CASES] if a.case == 'all' else [a.case]
     if a.case == 'languages':
         cases = ['language-'+x for x in language_basics.LANGUAGES]
     elif a.case == 'all' and a.examples:
@@ -143,6 +143,9 @@ def run_case(a, case):
         if case == 'c-source-case' and os.name == 'nt':
             record.update(status='skipped', reason='DWARF logical-path fixture requires Clang; Windows runner uses MSVC')
             return record
+        if case == 'c-function-breakpoint' and platform.system() != 'Darwin':
+            record.update(status='skipped', reason='Requires the Mach-O dead-strip DWARF fixture')
+            return record
         if case == 'symbol-library' and platform.system() != 'Darwin':
             record.update(status='skipped', reason='Mach-O name-only symbol provider; ELF/PE providers not implemented')
             return record
@@ -166,6 +169,8 @@ def run_case(a, case):
             stem = 'inline'
         if case == 'c-inline-nested':
             stem = 'inline_nested'
+        if case == 'c-function-breakpoint':
+            stem = 'function_breakpoint'
         if case == 'c-source-case':
             stem = 'source_case'
         if case.startswith('c-assert'):
@@ -201,18 +206,29 @@ def run_case(a, case):
             record['compiler_version'] = run([compiler, '--version'], timeout=10)
             compile_flags = []
             link_flags = []
+            if case == 'c-function-breakpoint':
+                link_flags = ['-Wl,-dead_strip']
             if case in ELF_CASES:
                 compile_flags = ['-fno-pie' if case.startswith('c-elf-exec') else '-fPIE']
                 link_flags = ['-no-pie' if case.startswith('c-elf-exec') else '-pie']
             objects = []
             for index, src in enumerate(sources):
                 obj = f'fixture-{index}.o'
-                optimization = '-O2' if case == 'c-assert-optimized' else '-O1' if case.startswith('c-inline') else '-O0'
+                optimization = '-O2' if case == 'c-assert-optimized' else '-O1' if case.startswith('c-inline') or case == 'c-function-breakpoint' else '-O0'
                 run([compiler, '-g', optimization, *compile_flags, *['-D'+d for d in defines], '-c', str(src), '-o', obj], timeout=60)
                 objects.append(obj)
             run([compiler, '-g', *link_flags, *objects, '-o', str(target)], timeout=60)
             if platform.system() == 'Darwin':
                 run(['xcrun', 'dsymutil', str(target)], timeout=60)
+            if case == 'c-function-breakpoint':
+                symbols = run(['xcrun', 'nm', str(target)], timeout=10)
+                assert '_leaf' in symbols and '_wrapper' not in symbols and '_dead_function' not in symbols, symbols
+                record['target_symbols'] = symbols
+                dwarf = run(['xcrun', 'dwarfdump', '--debug-info', '--name=wrapper', str(target)+'.dSYM'], timeout=10)
+                abstract = dwarf.split('DW_TAG_inlined_subroutine')[0]
+                assert 'DW_TAG_subprogram' in abstract and 'DW_AT_inline' in abstract, dwarf
+                assert 'DW_AT_low_pc' not in abstract and 'DW_AT_ranges' not in abstract, dwarf
+                record['abstract_procedure'] = dwarf
         if case == 'c-gcc-unwind':
             cfi = run(['xcrun', 'dwarfdump', '--eh-frame', str(target)], timeout=60)
             versions = [line.split()[-1] for line in cfi.splitlines() if line.strip().startswith('Version:')]
@@ -238,7 +254,7 @@ def run_case(a, case):
             stop_line = next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'SNAPSHOT_STOP' in line)
         if case == 'c-gcc-unwind':
             stop_line = next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'volatile int doubled' in line)
-        breakpoint = '' if case.startswith('c-assert') or case == 'symbol-library' else f'breakpoint:\n{{\n source_location: {json.dumps(str(source)+f":{stop_line}:1")}\n enabled: 1\n}}\n'
+        breakpoint = '' if case.startswith('c-assert') or case in ('symbol-library', 'c-function-breakpoint') else f'breakpoint:\n{{\n source_location: {json.dumps(str(source)+f":{stop_line}:1")}\n enabled: 1\n}}\n'
         if case == 'c-source-case':
             breakpoint = ''.join('breakpoint:\n{\n source_location: '+
                                  json.dumps(str(output/'CaseLookup'/name)+':4:1')+
@@ -287,6 +303,23 @@ def run_case(a, case):
         else:
             raise AssertionError('Debugger did not become ready; see ipc.jsonl')
         record['debugger_build'] = initial['build']
+        if case == 'c-function-breakpoint':
+            for name in ('wrapper', 'dead_function'):
+                client.command(['add_function_breakpoint', name])
+            ended = client.stopped('run')
+            assert ended['process_count'] == 0 and ended['last_process_end']['exit_code'] == 0, ended
+            client.command(['add_function_breakpoint', 'leaf'])
+            for cycle in range(2):
+                stopped = client.stopped('restart')
+                assert stopped['stop']['cause'] == 'breakpoint', stopped
+                assert stopped['stack']['frames'][0]['function'] == 'leaf', stopped
+                assert Path(stopped['stack']['frames'][0]['source']['path']) == source, stopped
+                evaluated = client.evaluated(stopped, 0, 'wrapper')
+                assert evaluated['status'] == 'error' and evaluated['value'] is None, evaluated
+                ended = client.stopped('run')
+                assert ended['process_count'] == 0 and ended['last_process_end']['exit_code'] == 0, ended
+            record['status'] = 'pass'
+            return record
         if case == 'c-gcc-unwind':
             caller_line = next(i for i, line in enumerate(source.read_text().splitlines(), 1) if 'result = leaf(seed)' in line)
             for cycle in range(2):

@@ -20,6 +20,78 @@ Test(d2r_high_pc_voff)
   TestCheck(d2r_voff_opl_from_high_pc(&unit_parse_ctx, base_vaddr, voff_base, &high_pc_size) == 0x180);
 }
 
+Test(d2r_empty_procedure_address)
+{
+  // An abstract inline procedure has a name, but no out-of-line entry address.
+  // Put it between real procedures so a read past its empty range is observable.
+  U8 abbrev[] = {1,0x11,1, 3,8, 0,0,
+                 2,0x2e,0, 3,8, 0x11,1, 0x12,6, 0,0,
+                 3,0x2e,0, 3,8, 0x20,0x0b, 0,0,
+                 4,0x2e,0, 3,8, 0,0, 0};
+  U8 info[] = {0,0,0,0, 4,0, 0,0,0,0, 8,
+               1,'a',0,
+               2,'f','i','r','s','t',0, 0,0x10,0,0,0,0,0,0, 8,0,0,0,
+               3,'i','n','l','i','n','e','d',0, 3,
+               2,'l','a','s','t',0, 0,0x20,0,0,0,0,0,0, 8,0,0,0,
+               4,'e','m','p','t','y',0,
+               2,'z','e','r','o',0, 0,0,0,0,0,0,0,0, 8,0,0,0,
+               4,'t','a','i','l',0, 0};
+  U32 info_size = sizeof(info)-4;
+  MemoryCopy(info, &info_size, 4);
+  U8 info5[sizeof(info)+1] = {0,0,0,0, 5,0, 1,8, 0,0,0,0};
+  MemoryCopy(info5+12, info+11, sizeof(info)-11);
+  U32 info5_size = sizeof(info5)-4;
+  MemoryCopy(info5, &info5_size, 4);
+  Arch arches[] = {Arch_x64, Arch_arm64};
+  for EachElement(arch_idx, arches) for(U64 version = 4; version <= 5; version += 1)
+  {
+    D2R_ConvertParams params = {0};
+    params.arch = arches[arch_idx];
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    params.raw.sec[DW_SectionKind_Info].data = version == 4 ? str8_array_fixed(info) : str8_array_fixed(info5);
+    params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count=1, .broadcast_memory=&broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams converted = d2r_convert(convert_arena, &params);
+    RDIM_BakeResults baked = rdim_bake(convert_arena, &converted);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
+    String8 data = str8_list_join(convert_arena, &blobs, 0);
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    RDI_ParsedNameMap map = {0};
+    rdi_parsed_from_name_map(&rdi, rdi_element_from_name_idx(&rdi, NameMaps, RDI_NameMapKind_Procedures), &map);
+    struct {String8 name; U64 first, opl;} cases[] =
+    {
+      {str8_lit("first"), 0x1000, 0x1008}, {str8_lit("inlined"), 0, 0},
+      {str8_lit("last"), 0x2000, 0x2008}, {str8_lit("empty"), 0, 0},
+      {str8_lit("zero"), 0, 8}, {str8_lit("tail"), 0, 0},
+    };
+    for EachElement(idx, cases)
+    {
+      U32 count = 0;
+      U32 *ids = rdi_matches_from_map_node(&rdi, rdi_name_map_lookup(&rdi, &map, cases[idx].name.str, cases[idx].name.size), &count);
+      TestCheck(count == 1);
+      RDI_Symbol *procedure = rdi_element_from_name_idx(&rdi, Procedures, ids[0]);
+      U64 name_size = 0;
+      U8 *name = rdi_name_from_procedure(&rdi, procedure, &name_size);
+      TestCheck(str8_match(str8(name, name_size), cases[idx].name, 0));
+      RDI_Scope *scope = rdi_root_scope_from_procedure(&rdi, procedure);
+      U64 address = rdi_first_voff_from_procedure(&rdi, procedure);
+      U64 opl = rdi_opl_voff_from_procedure(&rdi, procedure);
+      test_outf("%S v%I64u %S: range indices [%u, %u), addresses [0x%I64x, 0x%I64x)\n",
+                string_from_arch(params.arch), version, cases[idx].name,
+                scope->voff_range_first, scope->voff_range_opl, address, opl);
+      TestCheck(address == cases[idx].first && opl == cases[idx].opl);
+      TestCheck((scope->voff_range_first < scope->voff_range_opl) == (cases[idx].opl != 0));
+    }
+    TestCheck(t_write_file(str8f(arena, "%S-v%I64u.rdi", string_from_arch(params.arch), version), data));
+    arena_release(convert_arena);
+  }
+}
+
 Test(d2r_line_extended_opcode)
 {
   U8 abbrev[] = {1,0x11,1, 3,8, 0x1b,8, 0x10,0x17, 0x11,1, 0x12,6, 0,0,

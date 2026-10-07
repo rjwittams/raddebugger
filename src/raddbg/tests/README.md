@@ -123,10 +123,18 @@ from the wrapper's body line. `c-inline-nested` requires
 in a header and its call inside a lexical block. It checks each frame's
 source file/line, inline depth and shared physical registers, then normal exit.
 Both cases pass on macOS ARM64 and Linux x64 with Clang/DWARF, and on Windows
-x64 with MSVC/PDB. `all` contains 26 built-in cases; the eleven ARM64-only cases remain
+x64 with MSVC/PDB. `c-function-breakpoint` checks an addressless abstract inline
+procedure and a dead-stripped function name using Mach-O/DWARF. Those names
+must not stop the target; adding a real `leaf` function breakpoint must hit
+`leaf` on two launches and then exit normally. At the leaf stop, evaluating
+the addressless inline name must return an error, not the module base.
+The fixture checks its symbol table and abstract DIE before launching RAD.
+Kiwi ARM64 passes; this case skips other operating systems and does not cover
+ELF linker tombstones, inline-site name breakpoints, or live Intel Mac behavior.
+`all` contains 28 built-in cases; the eleven ARM64-only cases remain
 skipped on other hosts. The Mach-O `symbol-library` case is also skipped
 on Linux and Windows; the four ELF cases are skipped outside Linux.
-Supplying `--examples` adds the five language cases, for 31 total.
+Supplying `--examples` adds the five language cases, for 33 total.
 These results do not cover Intel Mac live debugging.
 
 `c-source-case` builds three C translation units; two use `#line` to name

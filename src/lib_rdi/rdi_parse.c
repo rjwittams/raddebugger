@@ -819,8 +819,12 @@ rdi_procedure_from_voff(RDI_Parsed *rdi, RDI_U64 voff)
 RDI_PROC RDI_U64
 rdi_first_voff_from_scope(RDI_Parsed *rdi, RDI_Scope *scope)
 {
-  RDI_U64 *voffs = rdi_element_from_name_idx(rdi, ScopeVOffData, scope->voff_range_first);
-  RDI_U64 result = *voffs;
+  RDI_U64 result = 0;
+  if(scope->voff_range_first < scope->voff_range_opl)
+  {
+    RDI_U64 *voffs = rdi_element_from_name_idx(rdi, ScopeVOffData, scope->voff_range_first);
+    result = *voffs;
+  }
   return result;
 }
 
@@ -828,7 +832,7 @@ RDI_PROC RDI_U64
 rdi_opl_voff_from_scope(RDI_Parsed *rdi, RDI_Scope *scope)
 {
   RDI_U64 result = 0;
-  if(scope->voff_range_opl != 0)
+  if(scope->voff_range_first < scope->voff_range_opl)
   {
     RDI_U64 *voffs = rdi_element_from_name_idx(rdi, ScopeVOffData, scope->voff_range_opl-1);
     result = *voffs;
