@@ -32,7 +32,13 @@ entry_point(CmdLine *cmdline)
 {
   char *target_path = getenv("RAD_TRAP_TEST_TARGET");
   char *mode = getenv("RAD_TRAP_TEST_MODE");
-  if(target_path == 0 || mode == 0)
+  char *marker_path = getenv("RAD_TRAP_TEST_MARKER");
+  B32 detach_init = mode != 0 && strcmp(mode, "detach-init") == 0;
+  B32 detach_healthy = mode != 0 && strcmp(mode, "detach-healthy") == 0;
+  B32 detach_trap = mode != 0 && strcmp(mode, "detach-trap") == 0;
+  B32 detach_moved_pc = mode != 0 && strcmp(mode, "detach-moved-pc") == 0;
+  B32 detach = detach_init || detach_healthy || detach_trap || detach_moved_pc;
+  if(target_path == 0 || mode == 0 || (detach && marker_path == 0))
   {
     fprintf(stderr, "Run through run_trap_lifecycle.sh.\n");
     exit(2);
@@ -52,6 +58,12 @@ entry_point(CmdLine *cmdline)
   DMN_CtrlCtx *ctx = dmn_ctrl_begin();
   ProcessLaunchParams launch = {0};
   str8_list_push(arena, &launch.cmd_line, str8_cstring(target_path));
+  if(detach)
+  {
+    unlink(marker_path);
+    str8_list_push(arena, &launch.cmd_line, str8_cstring(detach_init ? "init" : detach_healthy ? "healthy" : "trap"));
+    str8_list_push(arena, &launch.cmd_line, str8_cstring(marker_path));
+  }
   launch.path = get_process_info()->initial_path;
   launch.inherit_env = 1;
   test_pid = dmn_ctrl_launch(ctx, &launch);
@@ -74,7 +86,59 @@ entry_point(CmdLine *cmdline)
     for(DMN_EventNode *n = events.first; n != 0 && !done; n = n->next)
     {
       DMN_Event *event = &n->v;
-      if(event->kind == DMN_EventKind_Trap)
+      if((detach_init && event->kind == DMN_EventKind_HandshakeComplete) ||
+         (detach_healthy && event->kind == DMN_EventKind_Exception && event->code == SIGSTOP) ||
+         ((detach_trap || detach_moved_pc) && event->kind == DMN_EventKind_Trap))
+      {
+        if(detach_moved_pc)
+        {
+          ARM64_RegBlock regs = {0};
+          if(!dmn_thread_read_reg_block(event->thread, &regs))
+          {
+            fprintf(stderr, "Could not read trap registers.\n");
+            done = 1;
+            break;
+          }
+          regs.pc = regs.x21;
+          if(!dmn_thread_write_reg_block(event->thread, &regs))
+          {
+            fprintf(stderr, "Could not move PC to the alternate resume address.\n");
+            done = 1;
+            break;
+          }
+        }
+        if(dmn_ctrl_detach(ctx, event->process))
+        {
+          // The API's success (or a synthetic ExitProcess) is not proof that
+          // the target resumed. Require the target's post-detach completion.
+          for(U64 attempt = 0; attempt < 500 && !passed; attempt += 1)
+          {
+            char marker[32] = {0};
+            int fd = open(marker_path, O_RDONLY);
+            if(fd >= 0)
+            {
+              ssize_t size = read(fd, marker, sizeof(marker));
+              close(fd);
+              char *expected = detach_moved_pc ? "moved\n" : "completed\n";
+              passed = size == (ssize_t)strlen(expected) && memcmp(marker, expected, size) == 0;
+            }
+            if(!passed)
+            {
+              usleep(10000);
+            }
+          }
+          if(!passed)
+          {
+            fprintf(stderr, "FAIL: Detached target did not reach completion.\n");
+          }
+        }
+        else
+        {
+          fprintf(stderr, "FAIL: Detach was rejected.\n");
+        }
+        done = 1;
+      }
+      else if(event->kind == DMN_EventKind_Trap)
       {
         if(saw_trap)
         {
@@ -106,7 +170,7 @@ entry_point(CmdLine *cmdline)
       }
       else if(event->kind == DMN_EventKind_ExitProcess)
       {
-        passed = saw_trap && event->code == 23;
+        passed = !detach && saw_trap && event->code == 23;
         test_pid = 0;
         done = 1;
       }
@@ -117,11 +181,11 @@ entry_point(CmdLine *cmdline)
       }
     }
   }
-  if(test_pid > 0)
+  if(test_pid > 0 && !passed)
   {
     kill(test_pid, SIGKILL);
     kill(test_pid, SIGCONT);
   }
-  printf("%s: %s\n", mode, passed ? "PASS (target exited 23)" : "FAIL");
+  printf("%s: %s\n", mode, passed ? (detach ? "PASS (target completed after detach)" : "PASS (target exited 23)") : "FAIL");
   exit(passed ? 0 : 1);
 }

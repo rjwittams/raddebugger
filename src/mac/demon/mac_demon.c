@@ -2168,6 +2168,20 @@ mac_dmn_thread_trap_instruction_size(MAC_DMN_Thread *thread)
   return result;
 }
 
+internal void
+mac_dmn_thread_advance_pending_trap(MAC_DMN_Thread *thread)
+{
+  if(thread->pending_trap_size != 0)
+  {
+    if(mac_dmn_thread_read_ip(thread) == thread->pending_trap_vaddr &&
+       mac_dmn_thread_trap_instruction_size(thread) == thread->pending_trap_size)
+    {
+      mac_dmn_thread_write_ip(thread, thread->pending_trap_vaddr + thread->pending_trap_size);
+    }
+    thread->pending_trap_size = 0;
+  }
+}
+
 internal B32
 mac_dmn_set_single_step_flag(MAC_DMN_Thread *thread, B32 is_on)
 {
@@ -3434,13 +3448,18 @@ dmn_ctrl_detach(DMN_CtrlCtx *ctx, DMN_Handle handle)
     MAC_DMN_Process *process = &entity->process;
     if(process->is_attached)
     {
+      // Detach resumes the target too. Apply the pending advance before the
+      // stop-for-detach handshake can reply to its trap exception.
+      for(MAC_DMN_Entity *thread_entity = process->first_thread_entity; thread_entity != 0; thread_entity = thread_entity->next)
+      {
+        mac_dmn_thread_advance_pending_trap(&thread_entity->thread);
+      }
       mac_dmn_process_stop_for_detach(process);
       mac_dmn_process_resume_suspended_threads(process);
       mac_dmn_process_reply_pending_exception(process, 0);
-      if(ptrace(PT_DETACH, process->pid, (caddr_t)1, 0) == 0)
-      {
-        kill(process->pid, SIGCONT);
-      }
+      // PT_DETACH resumes the trace stop. An extra SIGCONT can overwrite the
+      // pending signal state while the target finishes handling that stop.
+      ptrace(PT_DETACH, process->pid, (caddr_t)1, 0);
       mac_dmn_process_end_mach_exceptions(process);
       process->is_attached = 0;
     }
@@ -3522,12 +3541,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
           MAC_DMN_Thread *thread = &thread_entity->thread;
           if(thread->pending_trap_size != 0 && mac_dmn_thread_should_run(thread_entity, ctrls))
           {
-            if(mac_dmn_thread_read_ip(thread) == thread->pending_trap_vaddr &&
-               mac_dmn_thread_trap_instruction_size(thread) == thread->pending_trap_size)
-            {
-              mac_dmn_thread_write_ip(thread, thread->pending_trap_vaddr + thread->pending_trap_size);
-            }
-            thread->pending_trap_size = 0;
+            mac_dmn_thread_advance_pending_trap(thread);
           }
         }
       }

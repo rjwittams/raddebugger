@@ -7,6 +7,13 @@ if [[ "$(uname -s)" != Darwin || "$(uname -m)" != arm64 ]]; then
   exit 2
 fi
 
+# Repetition helps catch signal handoff races without rebuilding every time.
+repeats=${RAD_TRAP_TEST_REPEAT:-1}
+if [[ ! "$repeats" =~ ^[1-9][0-9]*$ ]]; then
+  echo "RAD_TRAP_TEST_REPEAT must be a positive integer." >&2
+  exit 2
+fi
+
 # Keep each run isolated and leave its binaries available for inspection.
 mkdir -p build
 test_dir=$(mktemp -d "$PWD/build/trap-lifecycle.XXXXXX")
@@ -17,6 +24,17 @@ clang -x objective-c -Isrc -Ilocal -g -O0 -D_GNU_SOURCE \
   src/mac/demon/tests/trap_lifecycle.c -framework Cocoa -framework Security \
   -o "$test_dir/test"
 codesign --force --sign - --entitlements src/mac/raddbg_debug.entitlements "$test_dir/test"
-for mode in continue call; do
-  RAD_TRAP_TEST_TARGET="$test_dir/target" RAD_TRAP_TEST_MODE="$mode" "$test_dir/test"
+modes=("$@")
+if [[ ${#modes[@]} -eq 0 ]]; then
+  modes=(continue call detach-init detach-healthy detach-moved-pc detach-trap)
+fi
+for mode in "${modes[@]}"; do
+  case "$mode" in
+    continue|call|detach-init|detach-healthy|detach-moved-pc|detach-trap) ;;
+    *) echo "Unknown trap lifecycle mode: $mode" >&2; exit 2 ;;
+  esac
+  for ((iteration = 0; iteration < repeats; iteration += 1)); do
+    RAD_TRAP_TEST_TARGET="$test_dir/target" RAD_TRAP_TEST_MODE="$mode" \
+      RAD_TRAP_TEST_MARKER="$test_dir/$mode.marker" "$test_dir/test"
+  done
 done
