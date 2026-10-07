@@ -92,6 +92,133 @@ Test(d2r_empty_procedure_address)
   }
 }
 
+Test(d2r_procedure_code_ranges)
+{
+  // Section coordinates are offsets; DIE coordinates are virtual addresses.
+  // Keep real zero-offset code without admitting linker tombstones or holes.
+  struct
+  {
+    String8 name;
+    U64 base;
+    Rng1U64 input, code[2];
+    B32 no_sections;
+    Rng1U64 expected;
+  }
+  cases[] =
+  {
+    {str8_lit("zero-code"), 0, {0,8}, {{0,8}}, 0, {0,8}},
+    {str8_lit("zero-tombstone"), 0, {0,8}, {{0x1000,0x1010}}},
+    {str8_lit("one-tombstone"), 0, {1,9}, {{0x1000,0x1010}}},
+    {str8_lit("ordinary"), 0, {0x1000,0x1008}, {{0x1000,0x1010}}, 0, {0x1000,0x1008}},
+    {str8_lit("section-end"), 0, {0x1008,0x1010}, {{0x1000,0x1010}}, 0, {0x1008,0x1010}},
+    {str8_lit("overrun"), 0, {0x1008,0x1018}, {{0x1000,0x1010}}},
+    {str8_lit("data"), 0, {0x80,0x88}, {{0x1000,0x1010}}},
+    {str8_lit("hole"), 0, {0x1010,0x1018}, {{0x1000,0x1010},{0x1020,0x1030}}},
+    {str8_lit("cross-hole"), 0, {0x1008,0x1028}, {{0x1000,0x1010},{0x1020,0x1030}}},
+    {str8_lit("adjacent"), 0, {0x1008,0x1018}, {{0x1010,0x1020},{0x1000,0x1010}}, 0, {0x1008,0x1018}},
+    {str8_lit("overlap"), 0, {0x1004,0x1018}, {{0x1008,0x1020},{0x1000,0x1010}}, 0, {0x1004,0x1018}},
+    {str8_lit("biased-zero"), 0x100000000, {0x100000000,0x100000008}, {{0,8}}, 0, {0,8}},
+    {str8_lit("below-base"), 0x100000000, {0,8}, {{0,8}}},
+    {str8_lit("empty"), 0, {0x1000,0x1000}, {{0x1000,0x1010}}},
+    {str8_lit("wrapped"), 0, {max_U64-4,3}, {{0x1000,0x1010}}},
+    {str8_lit("no-code"), 0, {0,8}},
+    {str8_lit("no-sections"), 0, {0,8}, {{0,0}}, 1, {0,8}},
+  };
+  U8 abbrev[] = {1,0x11,1, 3,8, 0,0,
+                 2,0x2e,0, 3,8, 0x11,1, 0x12,6, 0,0,
+                 3,0x2e,0, 3,8, 0x11,1, 0x12,1, 0,0,
+                 4,0x2e,0, 3,8, 0x55,0x17, 0,0, 0};
+  U8 header4[] = {0,0,0,0, 4,0, 0,0,0,0, 8};
+  U8 header5[] = {0,0,0,0, 5,0, 1,8, 0,0,0,0};
+  Arch arches[] = {Arch_x64, Arch_arm64};
+  for EachElement(arch_idx, arches) for(U64 version = 4; version <= 5; version += 1)
+  for(U64 encoding = 2; encoding <= 4; encoding += 1) for EachElement(case_idx, cases)
+  {
+    String8List parts = {0};
+    str8_list_push(arena, &parts, version == 4 ? str8_array_fixed(header4) : str8_array_fixed(header5));
+    U8 prefix[] = {1,'a',0, (U8)encoding,'f',0};
+    str8_list_push(arena, &parts, str8_array_fixed(prefix));
+    U64 low = cases[case_idx].input.min, high = cases[case_idx].input.max;
+    U32 length = (U32)(high-low), list_offset = version == 4 ? 0 : 12;
+    if(encoding != 4)
+    {
+      str8_list_push(arena, &parts, str8_struct(&low));
+      str8_list_push(arena, &parts, encoding == 2 ? str8_struct(&length) : str8_struct(&high));
+    }
+    else {str8_list_push(arena, &parts, str8_struct(&list_offset));}
+    str8_list_push(arena, &parts, str8_lit("\0"));
+    String8 info = str8_list_join(arena, &parts, 0);
+    U32 info_size = info.size-4;
+    MemoryCopy(info.str, &info_size, 4);
+    U8 ranges4[32] = {0};
+    MemoryCopy(ranges4, &low, 8);
+    MemoryCopy(ranges4+8, &high, 8);
+    U8 ranges5[30] = {26,0,0,0, 5,0,8,0, 0,0,0,0, DW_RLE_StartEnd};
+    MemoryCopy(ranges5+13, &low, 8);
+    MemoryCopy(ranges5+21, &high, 8);
+    RDIM_BinarySectionNode sections[3] = {0};
+    for(U64 idx = 0; idx < 2; idx += 1)
+    {
+      sections[idx].v.flags = RDI_BinarySectionFlag_Execute;
+      sections[idx].v.voff_first = cases[case_idx].code[idx].min;
+      sections[idx].v.voff_opl = cases[case_idx].code[idx].max;
+      sections[idx].next = &sections[idx+1];
+    }
+    sections[2].v.flags = RDI_BinarySectionFlag_Read;
+    sections[2].v.voff_opl = 0x100;
+    D2R_ConvertParams params = {0};
+    params.arch = arches[arch_idx];
+    params.base_vaddr = cases[case_idx].base;
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    if(!cases[case_idx].no_sections)
+    {
+      params.binary_sections.first = &sections[0];
+      params.binary_sections.last = &sections[2];
+      params.binary_sections.count = ArrayCount(sections);
+    }
+    params.raw.sec[DW_SectionKind_Info].data = info;
+    params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+    if(encoding == 4)
+    {
+      params.raw.sec[version == 4 ? DW_SectionKind_Ranges : DW_SectionKind_RngLists].data =
+        version == 4 ? str8_array_fixed(ranges4) : str8_array_fixed(ranges5);
+    }
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count=1, .broadcast_memory=&broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams converted = d2r_convert(convert_arena, &params);
+    RDIM_BakeResults baked = rdim_bake(convert_arena, &converted);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
+    String8 data = str8_list_join(convert_arena, &blobs, 0);
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    RDI_Symbol *procedure = rdi_procedure_from_name_cstr(&rdi, "f");
+    TestCheck(procedure->name_string_idx != 0);
+    RDI_Scope *scope = rdi_root_scope_from_procedure(&rdi, procedure);
+    B32 has_range = scope->voff_range_first < scope->voff_range_opl;
+    Rng1U64 expected = cases[case_idx].expected;
+    B32 executable = expected.min < expected.max;
+    test_outf("%S v%I64u encoding %I64u %S: range %i, expected %i\n",
+              string_from_arch(params.arch), version, encoding, cases[case_idx].name, has_range, executable);
+    TestCheck(has_range == executable);
+    TestCheck(rdi_first_voff_from_procedure(&rdi, procedure) == expected.min);
+    TestCheck(rdi_opl_voff_from_procedure(&rdi, procedure) == expected.max);
+    if(executable)
+    {
+      TestCheck(rdi_procedure_from_voff(&rdi, expected.min) == procedure);
+      TestCheck(rdi_procedure_from_voff(&rdi, expected.max-1) == procedure);
+      TestCheck(rdi_procedure_from_voff(&rdi, expected.max)->name_string_idx == 0);
+    }
+    else if(low >= params.base_vaddr)
+    {
+      TestCheck(rdi_procedure_from_voff(&rdi, low-params.base_vaddr)->name_string_idx == 0);
+    }
+    arena_release(convert_arena);
+  }
+}
+
 Test(d2r_line_extended_opcode)
 {
   U8 abbrev[] = {1,0x11,1, 3,8, 0x1b,8, 0x10,0x17, 0x11,1, 0x12,6, 0,0,
@@ -621,6 +748,7 @@ Test(d2r_inline_sequence_end)
   U32 line_size = lines.size-4;
   MemoryCopy(lines.str, &line_size, 4);
   RDIM_BinarySectionNode section = {0};
+  section.v.flags = RDI_BinarySectionFlag_Read|RDI_BinarySectionFlag_Execute;
   section.v.voff_first = 0x1000;
   section.v.voff_opl = 0x3000;
   D2R_ConvertParams params = {0};
@@ -2161,6 +2289,7 @@ Test(d2r_list_address_width)
     params.subset_flags = RDIM_SubsetFlag_All;
     params.deterministic = 1;
     RDIM_BinarySectionNode section = {0};
+    section.v.flags = RDI_BinarySectionFlag_Read|RDI_BinarySectionFlag_Execute;
     section.v.voff_opl = max_U64;
     params.binary_sections.first = params.binary_sections.last = &section;
     params.binary_sections.count = 1;
