@@ -39,7 +39,9 @@ macho_symbol_table_vranges(String8 header, MachO_Bin *bin, U64 slide, Rng1U64 *s
       U64 off = file_range.min - seg.fileoff, size = dim_1u64(file_range);
       if(off > seg.vmsize || size > seg.vmsize-off) {continue;}
       U64 start = seg.vmaddr + slide;
-      if(off > max_U64-start || size > max_U64-(start+off)) {continue;}
+      if(((S64)slide >= 0 && slide > max_U64-seg.vmaddr) ||
+         ((S64)slide < 0 && 0-slide > seg.vmaddr) ||
+         off > max_U64-start || size > max_U64-(start+off)) {continue;}
       *ranges[rng_idx] = r1u64(start+off, start+off+size);
       break;
     }
@@ -490,9 +492,9 @@ macho_linkedit_data_vrange_from_bin(String8 data, MachO_Bin *bin, U32 cmd, U64 s
   for EachIndex(idx, bin->load_commands.count)
   {
     MachO_LoadCommandInfo *info = &bin->load_commands.v[idx];
-    if(info->cmd == cmd && info->offset + sizeof(MachO_LinkeditDataCommand) <= data.size)
+    if(info->cmd == cmd && info->cmd_size >= sizeof(linkedit_data) &&
+       str8_deserial_read_struct(data, info->offset, &linkedit_data) == sizeof(linkedit_data))
     {
-      str8_deserial_read_struct(data, info->offset, &linkedit_data);
       found_linkedit_data = 1;
       break;
     }
@@ -503,14 +505,22 @@ macho_linkedit_data_vrange_from_bin(String8 data, MachO_Bin *bin, U32 cmd, U64 s
     for EachIndex(idx, bin->load_commands.count)
     {
       MachO_LoadCommandInfo *info = &bin->load_commands.v[idx];
-      if(info->cmd == MACHO_LC_SEGMENT_64 && info->offset + sizeof(MachO_SegmentCommand64) <= data.size)
+      if(info->cmd == MACHO_LC_SEGMENT_64 && info->cmd_size >= sizeof(MachO_SegmentCommand64))
       {
         MachO_SegmentCommand64 segment = {0};
-        str8_deserial_read_struct(data, info->offset, &segment);
+        if(str8_deserial_read_struct(data, info->offset, &segment) != sizeof(segment)) {continue;}
         Rng1U64 segment_file_range = r1u64(segment.fileoff, segment.fileoff + segment.filesize);
         if(segment_file_range.min <= file_range.min && file_range.max <= segment_file_range.max)
         {
-          U64 min = slide + segment.vmaddr + file_range.min - segment.fileoff;
+          U64 off = file_range.min - segment.fileoff;
+          U64 size = dim_1u64(file_range);
+          if(off > segment.vmsize || size > segment.vmsize-off) {continue;}
+          // The U64 slide holds a signed displacement, including downward relocation.
+          U64 min = segment.vmaddr + slide;
+          if(((S64)slide >= 0 && slide > max_U64-segment.vmaddr) ||
+             ((S64)slide < 0 && 0-slide > segment.vmaddr) ||
+             off > max_U64-min || size > max_U64-(min+off)) {continue;}
+          min += off;
           if(vrange_out != 0)
           {
             *vrange_out = r1u64(min, min + dim_1u64(file_range));
