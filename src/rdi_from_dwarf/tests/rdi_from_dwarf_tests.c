@@ -1900,6 +1900,240 @@ Test(d2r_expression_rejection)
   TestCheck(all_cases_match);
 }
 
+Test(d2r_indexed_rnglist_contribution)
+{
+  Arch arches[] = {Arch_x64, Arch_arm64};
+  B32 all_cases_match = 1;
+  for EachElement(arch_idx, arches) for(U64 wide = 0; wide < 2; wide += 1)
+  for(U64 case_idx = 0; case_idx < 5; case_idx += 1)
+  {
+    // CU rnglists_base is 12; its procedure refers to offset-table index 0.
+    U8 abbrev[] = {1,0x11,1, 3,8, 0x74,0x17, 0x11,1, 0x12,6, 0,0,
+                   2,0x2e,0, 3,8, 0x55,0x23, 0,0, 0};
+    U8 info[] = {0,0,0,0, 5,0,1,8, 0,0,0,0,
+                 1,'a',0, 12,0,0,0, 0,0x10,0,0,0,0,0,0, 16,0,0,0,
+                 2,'f',0, 0, 0};
+    U32 info_size = sizeof(info)-4;
+    MemoryCopy(info, &info_size, 4);
+    U8 info64[] = {0xff,0xff,0xff,0xff, 0,0,0,0,0,0,0,0,
+                   5,0,1,8, 0,0,0,0,0,0,0,0,
+                   1,'a',0, 20,0,0,0,0,0,0,0, 0,0x10,0,0,0,0,0,0, 16,0,0,0,
+                   2,'f',0, 0, 0};
+    U64 info64_size = sizeof(info64)-12;
+    MemoryCopy(info64+4, &info64_size, 8);
+    U8 rnglists[] =
+    {
+      16,0,0,0, 5,0,8,0, 1,0,0,0, 4,0,0,0, // first header and offset table
+      DW_RLE_OffsetPair,0,8,DW_RLE_EndOfList,  // first list at section offset 16
+      16,0,0,0, 5,0,8,0, 1,0,0,0, 4,0,0,0, // second header and offset table
+      DW_RLE_OffsetPair,8,16,DW_RLE_EndOfList, // second list at section offset 36
+    };
+    U8 rnglists64[] =
+    {
+      0xff,0xff,0xff,0xff, 20,0,0,0,0,0,0,0, 5,0,8,0, 1,0,0,0, 8,0,0,0,0,0,0,0,
+      DW_RLE_OffsetPair,0,8,DW_RLE_EndOfList,
+      0xff,0xff,0xff,0xff, 20,0,0,0,0,0,0,0, 5,0,8,0, 1,0,0,0, 8,0,0,0,0,0,0,0,
+      DW_RLE_OffsetPair,8,16,DW_RLE_EndOfList,
+    };
+    String8 info_data = wide ? str8_array_fixed(info64) : str8_array_fixed(info);
+    String8 list_data = wide ? str8_array_fixed(rnglists64) : str8_array_fixed(rnglists);
+    U64 base_off = wide ? 20 : 12;
+    U64 first_end = wide ? 32 : 20;
+    U64 entry_size = wide ? 8 : 4;
+    B32 second = case_idx == 2 || case_idx == 3;
+    if(second)
+    {
+      U64 second_base = first_end+base_off;
+      // CU rnglists_base field is at 27 in DWARF64, 15 in DWARF32.
+      MemoryCopy(info_data.str+(wide ? 27 : 15), &second_base, entry_size);
+    }
+    if(case_idx == 1)
+    {
+      U64 cross_offset = wide ? 40 : 24; // first base -> second contribution's list
+      MemoryCopy(list_data.str+base_off, &cross_offset, entry_size);
+    }
+    if(case_idx == 3)
+    {
+      // DWARF64 addition would wrap from second base 52 to first list 28.
+      U64 bad_offset = wide ? max_U64-23 : max_U32;
+      MemoryCopy(list_data.str+first_end+base_off, &bad_offset, entry_size);
+    }
+    if(case_idx == 4)
+    {
+      // First list ends after OffsetPair's start operand. The neighbouring
+      // header must not supply the missing end operand.
+      U64 length = wide ? 18 : 14;
+      MemoryCopy(list_data.str+(wide ? 4 : 0), &length, entry_size);
+      String8List parts = {0};
+      str8_list_push(arena, &parts, str8_prefix(list_data, first_end-2));
+      str8_list_push(arena, &parts, str8_skip(list_data, first_end));
+      list_data = str8_list_join(arena, &parts, 0);
+    }
+    D2R_ConvertParams params = {0};
+    params.arch = arches[arch_idx];
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    params.raw.sec[DW_SectionKind_Info].data = info_data;
+    params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+    params.raw.sec[DW_SectionKind_RngLists].data = list_data;
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+    RDIM_BakeResults baked = rdim_bake(convert_arena, &result);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
+    String8 data = str8_list_join(convert_arena, &blobs, 0);
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    U64 procs_count = 0;
+    RDI_Symbol *procs = rdi_table_from_name(&rdi, Procedures, &procs_count);
+    TestCheck(procs_count == 2);
+    RDI_Scope *scope = rdi_element_from_name_idx(&rdi, Scopes, procs[1].root_scope_idx);
+    U64 range_size = scope->voff_range_opl-scope->voff_range_first;
+    B32 available = case_idx == 0 || case_idx == 2;
+    test_outf("%S wide=%I64u case=%I64u: range endpoints %I64u, expected %u\n",
+              string_from_arch(arches[arch_idx]), wide, case_idx, range_size, available ? 2 : 0);
+    all_cases_match &= range_size == (available ? 2 : 0);
+    if(available && range_size == 2)
+    {
+      U64 *voffs = rdi_element_from_name_idx(&rdi, ScopeVOffData, scope->voff_range_first);
+      all_cases_match &= voffs[0] == (second ? 0x1008 : 0x1000) && voffs[1] == (second ? 0x1010 : 0x1008);
+    }
+    all_cases_match &= (rdi_scope_from_voff(&rdi, 0x1000) == scope) == (available && !second);
+    all_cases_match &= (rdi_scope_from_voff(&rdi, 0x1008) == scope) == (available && second);
+    arena_release(convert_arena);
+  }
+  TestCheck(all_cases_match);
+}
+
+Test(d2r_indexed_loclist_contribution)
+{
+  Arch arches[] = {Arch_x64, Arch_arm64};
+  B32 all_cases_match = 1;
+  for EachElement(arch_idx, arches) for(U64 wide = 0; wide < 2; wide += 1)
+  for(U64 case_idx = 0; case_idx < 5; case_idx += 1)
+  {
+    // CU loclists_base is 12; local x refers to offset-table index 0.
+    U8 abbrev[] = {1,0x11,1, 3,8, 0x8c,1,0x17, 0x11,1, 0x12,6, 0,0,
+                   2,0x2e,1, 3,8, 0x11,1, 0x12,6, 0,0,
+                   3,0x34,0, 3,8, 0x49,0x13, 2,0x22, 0,0,
+                   4,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0, 0};
+    U8 info[] = {0,0,0,0, 5,0,1,8, 0,0,0,0,
+                 1,'a',0, 12,0,0,0, 0,0x10,0,0,0,0,0,0, 16,0,0,0,
+                 4,'i','3','2',0,5,4,
+                 2,'f',0, 0,0x10,0,0,0,0,0,0, 16,0,0,0,
+                 3,'x',0, 31,0,0,0, 0, 0,0};
+    U32 info_size = sizeof(info)-4;
+    MemoryCopy(info, &info_size, 4);
+    U8 info64[] = {0xff,0xff,0xff,0xff, 0,0,0,0,0,0,0,0,
+                   5,0,1,8, 0,0,0,0,0,0,0,0,
+                   1,'a',0, 20,0,0,0,0,0,0,0, 0,0x10,0,0,0,0,0,0, 16,0,0,0,
+                   4,'i','3','2',0,5,4,
+                   2,'f',0, 0,0x10,0,0,0,0,0,0, 16,0,0,0,
+                   3,'x',0, 47,0,0,0, 0, 0,0};
+    U64 info64_size = sizeof(info64)-12;
+    MemoryCopy(info64+4, &info64_size, 8);
+    U8 loclists[] =
+    {
+      18,0,0,0, 5,0,8,0, 1,0,0,0, 4,0,0,0, // first header and offset table
+      DW_LLE_OffsetPair,0,8,1,DW_ExprOp_Reg0,DW_LLE_EndOfList,
+      18,0,0,0, 5,0,8,0, 1,0,0,0, 4,0,0,0, // second header and offset table
+      DW_LLE_OffsetPair,8,16,1,DW_ExprOp_Reg1,DW_LLE_EndOfList,
+    };
+    U8 loclists64[] =
+    {
+      0xff,0xff,0xff,0xff, 22,0,0,0,0,0,0,0, 5,0,8,0, 1,0,0,0, 8,0,0,0,0,0,0,0,
+      DW_LLE_OffsetPair,0,8,1,DW_ExprOp_Reg0,DW_LLE_EndOfList,
+      0xff,0xff,0xff,0xff, 22,0,0,0,0,0,0,0, 5,0,8,0, 1,0,0,0, 8,0,0,0,0,0,0,0,
+      DW_LLE_OffsetPair,8,16,1,DW_ExprOp_Reg1,DW_LLE_EndOfList,
+    };
+    String8 info_data = wide ? str8_array_fixed(info64) : str8_array_fixed(info);
+    String8 list_data = wide ? str8_array_fixed(loclists64) : str8_array_fixed(loclists);
+    U64 base_off = wide ? 20 : 12;
+    U64 first_end = wide ? 34 : 22;
+    U64 entry_size = wide ? 8 : 4;
+    B32 second = case_idx == 2 || case_idx == 3;
+    if(second)
+    {
+      U64 second_base = first_end+base_off;
+      // CU loclists_base field is at 27 in DWARF64, 15 in DWARF32.
+      MemoryCopy(info_data.str+(wide ? 27 : 15), &second_base, entry_size);
+    }
+    if(case_idx == 1)
+    {
+      U64 cross_offset = wide ? 42 : 26; // first base -> second contribution's list
+      MemoryCopy(list_data.str+base_off, &cross_offset, entry_size);
+    }
+    if(case_idx == 3)
+    {
+      // DWARF64 addition would wrap from second base 54 to first list 28.
+      U64 bad_offset = wide ? max_U64-25 : max_U32;
+      MemoryCopy(list_data.str+first_end+base_off, &bad_offset, entry_size);
+    }
+    if(case_idx == 4)
+    {
+      // Two expression bytes are declared, but only Reg0 belongs to this
+      // contribution. Its neighbour's unit_length starts with DW_OP_nop.
+      list_data.str[base_off+entry_size+3] = 2;
+      U64 length = wide ? 21 : 17;
+      MemoryCopy(list_data.str+(wide ? 4 : 0), &length, entry_size);
+      U8 neighbour[154] = {150,0,0,0, 5,0,8,0, 0,0,0,0,
+                           DW_LLE_OffsetPair,8,16,1,DW_ExprOp_Reg1,DW_LLE_EndOfList};
+      String8List parts = {0};
+      str8_list_push(arena, &parts, str8_prefix(list_data, first_end-1));
+      str8_list_push(arena, &parts, str8_array_fixed(neighbour));
+      list_data = str8_list_join(arena, &parts, 0);
+    }
+    D2R_ConvertParams params = {0};
+    params.arch = arches[arch_idx];
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.deterministic = 1;
+    params.exe_name = str8_lit("loclists");
+    RDIM_BinarySectionNode section = {0};
+    section.v.flags = RDI_BinarySectionFlag_Read|RDI_BinarySectionFlag_Execute;
+    section.v.voff_first = 0x1000;
+    section.v.voff_opl = 0x1010;
+    params.binary_sections.first = params.binary_sections.last = &section;
+    params.binary_sections.count = 1;
+    params.raw.sec[DW_SectionKind_Info].data = info_data;
+    params.raw.sec[DW_SectionKind_Abbrev].data = str8_array_fixed(abbrev);
+    params.raw.sec[DW_SectionKind_LocLists].data = list_data;
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
+    Arena *convert_arena = arena_alloc();
+    RDIM_BakeParams result = d2r_convert(convert_arena, &params);
+    RDIM_BakeResults baked = rdim_bake(convert_arena, &result);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
+    String8 data = str8_list_join(convert_arena, &blobs, 0);
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    U64 locals_count = 0;
+    RDI_Symbol *locals = rdi_table_from_name(&rdi, LocalVariables, &locals_count);
+    TestCheck(locals_count == 2);
+    U64 location_count = rdi_kind_from_location(locals[1].location) == RDI_LocationKind_Set ?
+                         rdi_set_count_from_location(locals[1].location) : 0;
+    B32 available = case_idx == 0 || case_idx == 2;
+    test_outf("%S wide=%I64u case=%I64u: locations %I64u, expected %u\n",
+              string_from_arch(arches[arch_idx]), wide, case_idx, location_count, available ? 1 : 0);
+    all_cases_match &= location_count == (available ? 1 : 0);
+    RDI_Location first = rdi_location_from_location_voff(&rdi, locals[1].location, 0x1000);
+    RDI_Location second_loc = rdi_location_from_location_voff(&rdi, locals[1].location, 0x1008);
+    all_cases_match &= rdi_kind_from_location(first) == (available && !second ? RDI_LocationKind_ValReg : RDI_LocationKind_NULL);
+    all_cases_match &= rdi_kind_from_location(second_loc) == (available && second ? RDI_LocationKind_ValReg : RDI_LocationKind_NULL);
+    RDI_Location selected = available && second ? second_loc : first;
+    if(available && rdi_kind_from_location(selected) == RDI_LocationKind_ValReg)
+    {
+      RDI_RegCode expected = second ? (arches[arch_idx] == Arch_x64 ? RDI_RegCodeX64_rdx : RDI_RegCodeARM64_x1) :
+                                     (arches[arch_idx] == Arch_x64 ? RDI_RegCodeX64_rax : RDI_RegCodeARM64_x0);
+      all_cases_match &= rdi_regcode_from_location(selected) == expected;
+    }
+    arena_release(convert_arena);
+  }
+  TestCheck(all_cases_match);
+}
+
 Test(d2r_rnglist_base_state)
 {
   struct
