@@ -1900,11 +1900,12 @@ Test(d2r_expression_rejection)
   TestCheck(all_cases_match);
 }
 
-Test(d2r_indexed_rnglist_contribution)
+Test(d2r_rnglist_contribution_bounds)
 {
   Arch arches[] = {Arch_x64, Arch_arm64};
   B32 all_cases_match = 1;
   for EachElement(arch_idx, arches) for(U64 wide = 0; wide < 2; wide += 1)
+  for(U64 direct = 0; direct < 2; direct += 1)
   for(U64 case_idx = 0; case_idx < 5; case_idx += 1)
   {
     // CU rnglists_base is 12; its procedure refers to offset-table index 0.
@@ -1969,6 +1970,20 @@ Test(d2r_indexed_rnglist_contribution)
       str8_list_push(arena, &parts, str8_skip(list_data, first_end));
       list_data = str8_list_join(arena, &parts, 0);
     }
+    if(direct)
+    {
+      // Procedure DW_AT_ranges form changes from rnglistx to sec_offset.
+      abbrev[19] = DW_FormKind_SecOffset;
+      U64 list_off = case_idx == 1 || second ? (wide ? 60 : 36) : (wide ? 28 : 16);
+      if(case_idx == 3) {list_off = wide ? max_U64 : max_U32;}
+      String8List parts = {0};
+      str8_list_push(arena, &parts, str8_prefix(info_data, info_data.size-2));
+      str8_list_push(arena, &parts, str8((U8 *)&list_off, entry_size));
+      str8_list_push(arena, &parts, str8_lit("\0")); // CU child-list terminator
+      info_data = str8_list_join(arena, &parts, 0);
+      U64 length = info_data.size-(wide ? 12 : 4);
+      MemoryCopy(info_data.str+(wide ? 4 : 0), &length, entry_size);
+    }
     D2R_ConvertParams params = {0};
     params.arch = arches[arch_idx];
     params.subset_flags = RDIM_SubsetFlag_All;
@@ -1991,9 +2006,10 @@ Test(d2r_indexed_rnglist_contribution)
     TestCheck(procs_count == 2);
     RDI_Scope *scope = rdi_element_from_name_idx(&rdi, Scopes, procs[1].root_scope_idx);
     U64 range_size = scope->voff_range_opl-scope->voff_range_first;
-    B32 available = case_idx == 0 || case_idx == 2;
-    test_outf("%S wide=%I64u case=%I64u: range endpoints %I64u, expected %u\n",
-              string_from_arch(arches[arch_idx]), wide, case_idx, range_size, available ? 2 : 0);
+    B32 available = case_idx == 0 || case_idx == 2 || (direct && case_idx == 1);
+    second |= direct && case_idx == 1;
+    test_outf("%S wide=%I64u direct=%I64u case=%I64u: range endpoints %I64u, expected %u\n",
+              string_from_arch(arches[arch_idx]), wide, direct, case_idx, range_size, available ? 2 : 0);
     all_cases_match &= range_size == (available ? 2 : 0);
     if(available && range_size == 2)
     {
@@ -2007,11 +2023,12 @@ Test(d2r_indexed_rnglist_contribution)
   TestCheck(all_cases_match);
 }
 
-Test(d2r_indexed_loclist_contribution)
+Test(d2r_loclist_contribution_bounds)
 {
   Arch arches[] = {Arch_x64, Arch_arm64};
   B32 all_cases_match = 1;
   for EachElement(arch_idx, arches) for(U64 wide = 0; wide < 2; wide += 1)
+  for(U64 direct = 0; direct < 2; direct += 1)
   for(U64 case_idx = 0; case_idx < 5; case_idx += 1)
   {
     // CU loclists_base is 12; local x refers to offset-table index 0.
@@ -2085,6 +2102,20 @@ Test(d2r_indexed_loclist_contribution)
       str8_list_push(arena, &parts, str8_array_fixed(neighbour));
       list_data = str8_list_join(arena, &parts, 0);
     }
+    if(direct)
+    {
+      // Local DW_AT_location form changes from loclistx to sec_offset.
+      abbrev[33] = DW_FormKind_SecOffset;
+      U64 list_off = case_idx == 1 || second ? (wide ? 62 : 38) : (wide ? 28 : 16);
+      if(case_idx == 3) {list_off = wide ? max_U64 : max_U32;}
+      String8List parts = {0};
+      str8_list_push(arena, &parts, str8_prefix(info_data, info_data.size-3));
+      str8_list_push(arena, &parts, str8((U8 *)&list_off, entry_size));
+      str8_list_push(arena, &parts, str8_lit("\0\0")); // procedure and CU child-list terminators
+      info_data = str8_list_join(arena, &parts, 0);
+      U64 length = info_data.size-(wide ? 12 : 4);
+      MemoryCopy(info_data.str+(wide ? 4 : 0), &length, entry_size);
+    }
     D2R_ConvertParams params = {0};
     params.arch = arches[arch_idx];
     params.subset_flags = RDIM_SubsetFlag_All;
@@ -2114,9 +2145,10 @@ Test(d2r_indexed_loclist_contribution)
     TestCheck(locals_count == 2);
     U64 location_count = rdi_kind_from_location(locals[1].location) == RDI_LocationKind_Set ?
                          rdi_set_count_from_location(locals[1].location) : 0;
-    B32 available = case_idx == 0 || case_idx == 2;
-    test_outf("%S wide=%I64u case=%I64u: locations %I64u, expected %u\n",
-              string_from_arch(arches[arch_idx]), wide, case_idx, location_count, available ? 1 : 0);
+    B32 available = case_idx == 0 || case_idx == 2 || (direct && case_idx == 1);
+    second |= direct && case_idx == 1;
+    test_outf("%S wide=%I64u direct=%I64u case=%I64u: locations %I64u, expected %u\n",
+              string_from_arch(arches[arch_idx]), wide, direct, case_idx, location_count, available ? 1 : 0);
     all_cases_match &= location_count == (available ? 1 : 0);
     RDI_Location first = rdi_location_from_location_voff(&rdi, locals[1].location, 0x1000);
     RDI_Location second_loc = rdi_location_from_location_voff(&rdi, locals[1].location, 0x1008);

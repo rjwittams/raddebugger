@@ -710,6 +710,7 @@ dw2_parse_ctx_equip_unit_root_tag(DW2_ParseCtx *ctx_out, DW2_Tag *tag, DW2_Offse
   ctx_out->unit_base_addr = low_pc_attrib->val.addr;
   ctx_out->language = lang_attrib->val.u128.u64[0];
   ctx_out->unit_dir = comp_dir_attrib->val.string;
+  ctx_out->offset_tables = offset_tables;
   
   // rjf: find offset tables
   Rng1U64Array rnglists_tables_ranges_array = {offset_tables->rnglists_tables_ranges, offset_tables->rnglists_tables_count};
@@ -1486,6 +1487,17 @@ dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
         case DW_FormKind_SecOffset:
         {
           rnglist_off = form_val.u128.u64[0];
+          if(ctx->offset_tables == 0) {return result;}
+          DW2_OffsetTableSet *tables = ctx->offset_tables;
+          Rng1U64Array ranges = {tables->rnglists_tables_ranges, tables->rnglists_tables_count};
+          U64 table_num = rng1u64_array_num_from_value__binary_search(&ranges, rnglist_off);
+          if(table_num == 0 || table_num > ranges.count) {return result;}
+          Rng1U64 list_range = tables->rnglists_tables[table_num-1].list_range;
+          if(rnglist_off < list_range.min || rnglist_off >= list_range.max || list_range.max > data.size)
+          {
+            return result;
+          }
+          data = str8_prefix(data, list_range.max);
         }break;
         case DW_FormKind_RngListx:
         {
@@ -1731,6 +1743,17 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
         case DW_FormKind_SecOffset:
         {
           loclist_off = form_val.u128.u64[0];
+          if(ctx->offset_tables == 0) {return result;}
+          DW2_OffsetTableSet *tables = ctx->offset_tables;
+          Rng1U64Array ranges = {tables->loclists_tables_ranges, tables->loclists_tables_count};
+          U64 table_num = rng1u64_array_num_from_value__binary_search(&ranges, loclist_off);
+          if(table_num == 0 || table_num > ranges.count) {return result;}
+          Rng1U64 list_range = tables->loclists_tables[table_num-1].list_range;
+          if(loclist_off < list_range.min || loclist_off >= list_range.max || list_range.max > data.size)
+          {
+            return result;
+          }
+          data = str8_prefix(data, list_range.max);
         }break;
         case DW_FormKind_LocListx:
         {
