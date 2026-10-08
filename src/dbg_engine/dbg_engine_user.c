@@ -146,6 +146,8 @@ internal D_LineKind
 d_line_kind_from_num(S64 line_num)
 {
   D_LineKind result = D_LineKind_Source;
+  // MSVC exports line info at these line numbers when /JMC (Just My Code) debugging
+  // is enabled. This is enabled by default normally.
   if(line_num <= 0)          {result = D_LineKind_Unattributed;}
   else if(line_num == 0xfeefee) {result = D_LineKind_AlwaysStepInto;}
   else if(line_num == 0xf00f00) {result = D_LineKind_NeverStepInto;}
