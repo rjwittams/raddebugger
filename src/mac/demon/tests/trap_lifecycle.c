@@ -38,6 +38,7 @@ entry_point(CmdLine *cmdline)
   B32 detach_trap = mode != 0 && strcmp(mode, "detach-trap") == 0;
   B32 detach_moved_pc = mode != 0 && strcmp(mode, "detach-moved-pc") == 0;
   B32 detach = detach_init || detach_healthy || detach_trap || detach_moved_pc;
+  B32 fault_address = mode != 0 && strcmp(mode, "fault-address") == 0;
   if(target_path == 0 || mode == 0 || (detach && marker_path == 0))
   {
     fprintf(stderr, "Run through run_trap_lifecycle.sh.\n");
@@ -138,6 +139,14 @@ entry_point(CmdLine *cmdline)
         }
         done = 1;
       }
+      else if(fault_address && event->kind == DMN_EventKind_Exception)
+      {
+        passed = (event->address == 0x12345 && event->instruction_pointer != 0 &&
+                  event->instruction_pointer != event->address);
+        printf("Fault address: 0x%llx, PC: 0x%llx\n",
+               (unsigned long long)event->address, (unsigned long long)event->instruction_pointer);
+        done = 1;
+      }
       else if(event->kind == DMN_EventKind_Trap)
       {
         if(saw_trap)
@@ -181,11 +190,12 @@ entry_point(CmdLine *cmdline)
       }
     }
   }
-  if(test_pid > 0 && !passed)
+  if(test_pid > 0 && (!passed || fault_address))
   {
     kill(test_pid, SIGKILL);
     kill(test_pid, SIGCONT);
   }
-  printf("%s: %s\n", mode, passed ? (detach ? "PASS (target completed after detach)" : "PASS (target exited 23)") : "FAIL");
+  printf("%s: %s\n", mode, passed ? (fault_address ? "PASS (fault address differs from PC)" :
+                                      detach ? "PASS (target completed after detach)" : "PASS (target exited 23)") : "FAIL");
   exit(passed ? 0 : 1);
 }
