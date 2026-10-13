@@ -1464,7 +1464,10 @@ process_launch(ProcessLaunchParams *params)
       // spawn process
       pid_t pid = 0;
       // Match Linux: bare names use PATH; explicit paths retain their meaning.
-      int spawn_code = posix_spawnp(&pid, argv[0], &file_actions, &attr, argv, envp);
+      // macOS spawnp can misreport relative-path success when the child cwd differs.
+      int spawn_code = (strchr(argv[0], '/') != 0
+                        ? posix_spawn(&pid, argv[0], &file_actions, &attr, argv, envp)
+                        : posix_spawnp(&pid, argv[0], &file_actions, &attr, argv, envp));
       if(spawn_code == 0)
       {
         handle.u64[0] = (U64)pid;
