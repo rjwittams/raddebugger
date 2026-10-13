@@ -76,7 +76,7 @@ macho_code_symbols(Arena *arena, String8 header, MachO_Bin *bin, String8 symbols
     {
       MachO_Section64 sec = {0};
       str8_deserial_read_struct(header, info->offset+sizeof(seg)+idx2*sizeof(sec), &sec);
-      if(section_idx < ArrayCount(sections) && (seg.initprot & 4) &&
+      if(section_idx < ArrayCount(sections) && (seg.initprot & MACHO_VM_PROT_EXECUTE) &&
          (sec.flags & (MACHO_S_ATTR_PURE_INSTRUCTIONS|MACHO_S_ATTR_SOME_INSTRUCTIONS)) &&
          sec.addr >= base && sec.addr >= seg.vmaddr && sec.addr-seg.vmaddr <= seg.vmsize &&
          sec.size <= seg.vmsize-(sec.addr-seg.vmaddr) && sec.size <= max_U64-sec.addr)
@@ -138,8 +138,8 @@ macho_code_symbols_from_matching_file(Arena *arena, String8 file, MachO_Header64
   Temp scratch = scratch_begin(&arena, 1);
   U32 magic = 0, count = 1;
   str8_deserial_read_struct(file, 0, &magic);
-  B32 fat = magic == 0xbebafeca || magic == 0xbfbafeca;
-  U64 fat_entry_size = magic == 0xbfbafeca ? 32 : 20;
+  B32 fat = magic == MACHO_FAT_CIGAM_32 || magic == MACHO_FAT_CIGAM_64;
+  U64 fat_entry_size = magic == MACHO_FAT_CIGAM_64 ? 32 : 20;
   if(fat)
   {
     str8_deserial_read_struct(file, 4, &count);
