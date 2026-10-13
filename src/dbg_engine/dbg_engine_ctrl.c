@@ -5015,6 +5015,13 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
     ctx->primary_dbg_info = eval_dbg_infos_primary;
     ctx->dbg_info_from_name_map = eval_dbg_info_from_name_map;
     ctx->debug_info_match_endt_us = max_U64;
+    ctx->debug_info_match_scope = push_array(arena, DI_KeyArray, 1);
+    ctx->debug_info_match_scope->count = eval_dbg_infos_count;
+    ctx->debug_info_match_scope->v = push_array(arena, DI_Key, eval_dbg_infos_count);
+    for EachIndex(idx, eval_dbg_infos_count)
+    {
+      ctx->debug_info_match_scope->v[idx] = eval_dbg_infos[idx].dbgi_key;
+    }
     
     //- rjf: fill modules
     ctx->modules        = eval_modules;

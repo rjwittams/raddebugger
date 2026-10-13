@@ -169,6 +169,135 @@ Test(source_path_resolution)
   TestCheck(all_lines_match && all_traps_match);
 }
 
+Test(control_function_breakpoint_scope)
+{
+  dmn_init();
+  Arena *bake_arena = arena_alloc();
+  RDIM_BakeParams params = {0};
+  params.subset_flags = RDIM_SubsetFlag_All;
+  params.top_level_info.arch = RDI_Arch_X64;
+  RDIM_Unit *unit = rdim_unit_chunk_list_push(bake_arena, &params.units, 1);
+  RDIM_Type *result_type = rdim_type_chunk_list_push(bake_arena, &params.types, 1);
+  result_type->kind = RDI_TypeKind_S32;
+  result_type->byte_size = 4;
+  RDIM_Type *function_type = rdim_type_chunk_list_push(bake_arena, &params.types, 1);
+  function_type->kind = RDI_TypeKind_Function;
+  function_type->direct_type = result_type;
+  RDIM_Symbol *procedure = rdim_symbol_chunk_list_push(bake_arena, &unit->procedures, 1);
+  procedure->name = str8_lit("control_scope_leaf");
+  procedure->type = function_type;
+  procedure->root_scope = rdim_scope_chunk_list_push(bake_arena, &unit->scopes, 1);
+  procedure->root_scope->symbol = procedure;
+  rdim_scope_push_voff_range(bake_arena, &unit->scopes, procedure->root_scope, (RDIM_Rng1U64){0x1000, 0x1010});
+  U64 broadcast = 0;
+  LaneCtx restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
+  RDIM_BakeResults baked = rdim_bake(bake_arena, &params);
+  lane_ctx(restore);
+  String8List blobs = rdim_file_blobs_from_section_bundle(bake_arena, &baked.section_bundle);
+  TestCheck(t_write_file_list(str8_lit("control_scope.rdi"), blobs));
+  arena_release(bake_arena);
+
+  String8 path = t_make_file_path(arena, str8_lit("control_scope.rdi"));
+  DI_Key keys[2] = {0};
+  Access *access = access_open();
+  for EachElement(idx, keys)
+  {
+    keys[idx] = di_key_from_path_timestamp(path, idx+1);
+    di_open(keys[idx]);
+    TestCheck(di_rdi_from_key(access, keys[idx], 1, now_time_us()+5000000)->raw_data_size != 0);
+  }
+  DI_Match outside = di_match_from_string(str8_lit("control_scope_leaf"), 0, 0, 1, di_key_zero(), now_time_us()+5000000, 0);
+  TestCheck(!outside.stale && outside.idx != 0);
+  // Keep the unscoped match loaded, but represent only the other identity in control.
+  DI_Key represented = di_key_match(outside.key, keys[0]) ? keys[1] : keys[0];
+  TestCheck(!di_key_match(outside.key, represented));
+
+  D_EntityCtxRWStore *store = d_entity_ctx_rw_store_alloc();
+  D_EntityCtx *previous_entities = d_select_entity_ctx(&store->ctx);
+  D_CtrlState *previous_ctrl = d_ctrl_state;
+  E_Cache *previous_cache = e_cache;
+  E_BaseCtx *previous_base = e_base_ctx;
+  E_IRCtx *previous_ir = e_ir_ctx;
+  E_InterpretCtx *previous_interpret = e_interpret_ctx;
+  E_Cache *cache = e_cache_alloc();
+  D_CtrlState ctrl = {.ctrl_thread_entity_store = store, .ctrl_thread_eval_cache = cache};
+  d_ctrl_state = &ctrl;
+  D_Handle process_handle = d_handle_from_dmn(D_MachineID_Local, (DMN_Handle){.u64={1}});
+  D_Handle module_handle = d_handle_from_dmn(D_MachineID_Local, (DMN_Handle){.u64={2}});
+  D_Entity *process = d_entity_alloc(store, store->ctx.root->first, D_EntityKind_Process, Arch_x64, process_handle, 1);
+  D_Entity *image = d_entity_alloc(store, process, D_EntityKind_Module, Arch_x64, module_handle, 2);
+  image->vaddr_range = r1u64(0x100000000, 0x100004000);
+  d_entity_equip_string(store, image, str8_lit("/scope/target"));
+  D_Entity *debug_path = d_entity_alloc(store, image, D_EntityKind_DebugInfoPath, Arch_Null, d_handle_zero(), 0);
+  debug_path->dbg_info_key = represented;
+  d_entity_equip_string(store, debug_path, path);
+  D_BreakpointNode node = {.v = {.vaddr_expr = str8_lit("control_scope_leaf")}};
+  D_BreakpointList bps = {.first = &node, .last = &node, .count = 1};
+  String8 expressions[] =
+  {
+    str8_lit("control_scope_leaf"),
+    str8_lit("target!control_scope_leaf"),
+    str8_lit("control_scope.rdi!control_scope_leaf"),
+  };
+  B32 matches = 1;
+  for EachElement(idx, expressions)
+  {
+    node.v.vaddr_expr = expressions[idx];
+    D_EvalScope *scope = d_ctrl_thread__eval_scope_begin(arena, &bps, &d_entity_nil);
+    DMN_TrapChunkList traps = {0};
+    d_ctrl_thread__append_resolved_module_user_bp_traps(arena, scope, process_handle, module_handle, &bps, &traps);
+    B32 hit = traps.trap_count == 1 && traps.first->count == 1 &&
+              traps.first->v[0].vaddr == 0x100001000 && traps.first->v[0].process.u64[0] == 1;
+    test_outf("%S -> %I64u traps, expected 0x100001000: %u\n", expressions[idx], traps.trap_count, hit);
+    matches &= hit;
+    d_ctrl_thread__eval_scope_end(scope);
+  }
+
+  D_Handle other_process_handle = d_handle_from_dmn(D_MachineID_Local, (DMN_Handle){.u64={3}});
+  D_Handle other_module_handle = d_handle_from_dmn(D_MachineID_Local, (DMN_Handle){.u64={4}});
+  D_Entity *other_process = d_entity_alloc(store, store->ctx.root->first, D_EntityKind_Process, Arch_x64, other_process_handle, 3);
+  D_Entity *other_image = d_entity_alloc(store, other_process, D_EntityKind_Module, Arch_x64, other_module_handle, 4);
+  other_image->vaddr_range = r1u64(0x200000000, 0x200004000);
+  d_entity_equip_string(store, other_image, str8_lit("/scope/other_target"));
+  D_Entity *other_debug_path = d_entity_alloc(store, other_image, D_EntityKind_DebugInfoPath, Arch_Null, d_handle_zero(), 0);
+  other_debug_path->dbg_info_key = outside.key;
+  d_entity_equip_string(store, other_debug_path, path);
+  for(U64 idx = 0; idx < 2; idx += 1)
+  {
+    node.v.vaddr_expr = idx ? str8_lit("other_target!control_scope_leaf") : str8_lit("target!control_scope_leaf");
+    D_EvalScope *scope = d_ctrl_thread__eval_scope_begin(arena, &bps, &d_entity_nil);
+    DMN_TrapChunkList traps = {0};
+    d_ctrl_thread__append_resolved_module_user_bp_traps(arena, scope, idx ? other_process_handle : process_handle,
+                                                     idx ? other_module_handle : module_handle, &bps, &traps);
+    U64 expected = idx ? 0x200001000 : 0x100001000;
+    B32 hit = traps.trap_count == 1 && traps.first->count == 1 && traps.first->v[0].vaddr == expected &&
+              traps.first->v[0].process.u64[0] == (idx ? 3 : 1);
+    test_outf("two processes: %S -> %I64u traps, expected 0x%I64x: %u\n", node.v.vaddr_expr, traps.trap_count, expected, hit);
+    matches &= hit;
+    d_ctrl_thread__eval_scope_end(scope);
+  }
+
+  d_entity_release(store, process);
+  d_entity_release(store, other_process);
+  node.v.vaddr_expr = expressions[0];
+  D_EvalScope *empty = d_ctrl_thread__eval_scope_begin(arena, &bps, &d_entity_nil);
+  DMN_TrapChunkList empty_traps = {0};
+  d_ctrl_thread__append_resolved_module_user_bp_traps(arena, empty, d_handle_zero(), d_handle_zero(), &bps, &empty_traps);
+  matches &= (empty_traps.trap_count == 0);
+  d_ctrl_thread__eval_scope_end(empty);
+  d_ctrl_state = previous_ctrl;
+  e_base_ctx = previous_base;
+  e_ir_ctx = previous_ir;
+  e_interpret_ctx = previous_interpret;
+  e_select_cache(previous_cache);
+  e_cache_release(cache);
+  d_select_entity_ctx(previous_entities);
+  d_entity_ctx_rw_store_release(store);
+  access_close(access);
+  for EachElement(idx, keys) {di_close(keys[idx], 0);}
+  TestCheck(matches);
+}
+
 ////////////////////////////////
 //~ rjf: Debugger Testing IPC Driving Helpers
 
