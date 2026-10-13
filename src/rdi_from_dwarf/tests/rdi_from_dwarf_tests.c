@@ -378,8 +378,8 @@ Test(d2r_line_operation_advance)
   for EachElement(case_idx, cases)
   for(U64 standard = 0; standard <= 1; standard += 1)
   {
-    header4[10] = header5[12] = cases[case_idx].min_inst;
-    header4[11] = header5[13] = cases[case_idx].max_ops;
+    header4[10] = header5[12] = cases[case_idx].min_inst; // minimum_instruction_length
+    header4[11] = header5[13] = cases[case_idx].max_ops; // maximum_operations_per_instruction
     String8List parts = {0};
     str8_serial_begin(arena, &parts);
     str8_serial_push_data(arena, &parts, version == 5 ? header5 : header4,
@@ -499,7 +499,7 @@ Test(d2r_line_tombstones)
     U32 info_size = info.size-4;
     MemoryCopy(info.str, &info_size, 4);
 
-    header5[6] = (U8)addr_size;
+    header5[6] = (U8)addr_size; // DWARF 5 line-header address_size
     String8List line_parts = {0};
     str8_serial_begin(arena, &line_parts);
     str8_serial_push_data(arena, &line_parts,
@@ -1269,13 +1269,13 @@ Test(d2r_member_location_refusal)
                             1, 3,8, 0x0b,0x0b, 0,0};
     U8 member_abbrev[] = {4,0x0d,0, 3,8, 0x49,0x13, 0x38,0x0b, 0,0,
                           5,0x0d,0, 3,8, 0x49,0x13};
+    U8 attrib[] = {0x38,cases[case_idx].form};
     String8List abbrev_parts = {0};
     str8_list_push(arena, &abbrev_parts, str8_array_fixed(abbrev_prefix));
     str8_list_push(arena, &abbrev_parts, str8_array_fixed(container_abbrev));
     str8_list_push(arena, &abbrev_parts, str8_array_fixed(member_abbrev));
     if(cases[case_idx].form != DW_FormKind_Null)
     {
-      U8 attrib[] = {0x38,cases[case_idx].form};
       str8_list_push(arena, &abbrev_parts, str8_array_fixed(attrib));
       if(cases[case_idx].form == DW_FormKind_ImplicitConst)
       {
@@ -1289,6 +1289,7 @@ Test(d2r_member_location_refusal)
                         4,'f','i','r','s','t',0, 15,0,0,0, 0,
                         5,'t','e','s','t',0, 15,0,0,0};
     U8 info_suffix[] = {4,'l','a','s','t',0, 15,0,0,0, 12, 0,0};
+    // The last member's DW_AT_data_member_location is zero in a union.
     if(cases[case_idx].type_tag == DW_TagKind_UnionType) {info_suffix[10] = 0;}
     String8List info_parts = {0};
     str8_list_push(arena, &info_parts, str8_array_fixed(info_prefix));
@@ -1403,6 +1404,7 @@ Test(d2r_unit_refusal)
     U8 abbrev_prefix[] = {1,0x11,1, 3,8, 0,0,
                           2,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0,
                           3,0x24,0, 0x34};
+    // Replace the root's DW_AT_name form with an unknown form.
     if(cases[case_idx].position == 1) {abbrev_prefix[4] = 0x7f;}
     U8 abbrev_suffix[] = {3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0,
                           4,0x11,1, 3,8, 0,0,
@@ -1416,30 +1418,34 @@ Test(d2r_unit_refusal)
     String8 abbrev = str8_list_join(arena, &abbrev_parts, 0);
     U8 first_prefix[] = {0,0,0,0, 5,0,1,8, 0,0,0,0,
                         1,'a',0, 2,'b','e','f','o','r','e',0,5,4, 3};
+    // Unit-header unit_type; 0 is reserved, while 7 is an unknown kind.
     if(cases[case_idx].unit_kind) {first_prefix[6] = cases[case_idx].unit_kind == 0xff ? 0 : cases[case_idx].unit_kind;}
+    // The final byte selects the test child DIE's abbreviation.
     if(cases[case_idx].position == 3) {first_prefix[sizeof(first_prefix)-1] = 2;}
     if(cases[case_idx].position == 4) {first_prefix[sizeof(first_prefix)-1] = 99;}
     if(cases[case_idx].position == 5) {first_prefix[sizeof(first_prefix)-1] = 7;}
     B32 type_unit = cases[case_idx].unit_kind == 2 || cases[case_idx].unit_kind == 6;
+    // The root DIE uses a type-unit or partial-unit abbreviation.
     if(type_unit) {first_prefix[12] = 5;}
     if(cases[case_idx].unit_kind == 3) {first_prefix[12] = 6;}
     U8 first_suffix[] = {'b','a','d',0,5,4, 0};
+    // Keep optional fragments in scope until first_parts is joined.
+    U8 type_header[] = {0,0,0,0,0,0,0,0, 27,0,0,0};
+    U8 sibling[] = {0,0,0,0, 3};
+    U8 unknown[] = {0x81,0x3e};
     String8List first_parts = {0};
     str8_list_push(arena, &first_parts, str8(first_prefix, 12));
     if(type_unit)
     {
-      U8 type_header[] = {0,0,0,0,0,0,0,0, 27,0,0,0};
       str8_list_push(arena, &first_parts, str8_array_fixed(type_header));
     }
     str8_list_push(arena, &first_parts, str8(first_prefix+12, sizeof(first_prefix)-12));
     if(cases[case_idx].position == 5)
     {
-      U8 sibling[] = {0,0,0,0, 3};
       str8_list_push(arena, &first_parts, str8_array_fixed(sibling));
     }
     if(cases[case_idx].position == 2)
     {
-      U8 unknown[] = {0x81,0x3e};
       str8_list_push(arena, &first_parts, cases[case_idx].accepted ? str8_lit("\x19") : str8_array_fixed(unknown));
     }
     if((cases[case_idx].form[0] == 0x81 && cases[case_idx].position != 3) ||
@@ -1538,7 +1544,7 @@ Test(d2r_sparse_units)
     U64 info_size = sizeof(info);
     if(test_case == 0)
     {
-      abbrev[2] = 0;
+      abbrev[2] = 0; // CU abbreviation's DW_CHILDREN_no
       info_size = 18;
     }
     U32 unit_size = info_size-4;
@@ -1552,7 +1558,7 @@ Test(d2r_sparse_units)
     if(test_case == 2)
     {
       lines[14] = 0; // Invalid line_range, used by const_add_pc.
-      lines[sizeof(lines)-5] = 8;
+      lines[sizeof(lines)-5] = 8; // Replace DW_LNS_advance_pc with DW_LNS_const_add_pc.
     }
     if(test_case == 3) lines[11] = 0; // Invalid max_ops_per_inst.
     if(test_case == 4) {TestCheck(t_write_file(str8_lit("empty.line"), str8_array_fixed(lines)));}
@@ -1744,6 +1750,7 @@ Test(d2r_expression_rejection)
                    4,'i','3','2',0,5,4,
                    2,'f',0, 0,0x10,0,0,0,0,0,0, 16,0,0,0};
     U8 local[] = {3,'x',0, 27,0,0,0};
+    // Procedure DIE abbreviation 5 adds an exprloc DW_AT_frame_base.
     if(cases[case_idx].framebase_size != 0) {header[34] = 5;}
     U8 list_offset[] = {12,0,0,0};
     String8 loclists = {0};
@@ -1763,13 +1770,13 @@ Test(d2r_expression_rejection)
       str8_list_push(arena, &loc_parts, str8_array_fixed(second));
       if(cases[case_idx].list_kind == 1)
       {
-        header[34] = 6;
+        header[34] = 6; // Procedure DW_AT_frame_base uses a sec_offset location list.
         str8_list_push(arena, &loc_parts, str8_array_fixed(valid_framebase));
       }
       else
       {
-        header[34] = 2;
-        local[0] = 7;
+        header[34] = 2; // Procedure abbreviation without DW_AT_frame_base.
+        local[0] = 7; // Local DW_AT_location uses a sec_offset location list.
         str8_list_push(arena, &loc_parts, str8(&cases[case_idx].expr_size, 1));
         str8_list_push(arena, &loc_parts, str8(cases[case_idx].expr, cases[case_idx].expr_size));
       }
