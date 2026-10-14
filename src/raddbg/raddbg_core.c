@@ -3430,14 +3430,14 @@ rd_view_ui(Rng2F32 rect)
           Rng1S64 visible_row_rng = {0};
           UI_ScrollListParams scroll_list_params = {0};
           {
-            scroll_list_params.flags         = UI_ScrollListFlag_All;
-            scroll_list_params.row_height_px = row_height_px;
+            scroll_list_params.flags          = UI_ScrollListFlag_All;
+            scroll_list_params.row_height_px  = row_height_px;
             scroll_list_params.precise_scroll = 1;
-            scroll_list_params.dim_px        = rect_dim;
-            scroll_list_params.cursor_range  = r2s64(v2s64(0, 0), v2s64(0, 0));
-            scroll_list_params.item_range    = r1s64(0, block_tree.total_row_count - !!implicit_root);
+            scroll_list_params.dim_px         = rect_dim;
+            scroll_list_params.cursor_range   = r2s64(v2s64(0, 0), v2s64(0, 0));
+            scroll_list_params.item_range     = r1s64(0, block_tree.total_row_count - !!implicit_root);
             scroll_list_params.cursor_min_is_empty_selection[Axis2_Y] = 1;
-            scroll_list_params.row_blocks    = row_blocks;
+            scroll_list_params.row_blocks     = row_blocks;
           }
           UI_BoxFlags disabled_flags = ui_top_flags();
           if(d_ctrl_targets_running())
@@ -17708,15 +17708,15 @@ rd_frame(void)
                   case WM_EventKind_FileDrop:  {kind = UI_EventKind_FileDrop;}break;
                 }
               }
-              ui_event.kind         = kind;
-              ui_event.key          = wm_event->key;
-              ui_event.modifiers    = wm_event->modifiers;
-              ui_event.string       = wm_event->character ? str8_from_32(ui_build_arena(), str32(&wm_event->character, 1)) : str8_zero();
-              ui_event.paths        = str8_list_copy(ui_build_arena(), &wm_event->strings);
-              ui_event.pos          = wm_event->pos;
-              ui_event.delta_2f32   = wm_event->delta;
+              ui_event.kind              = kind;
+              ui_event.key               = wm_event->key;
+              ui_event.modifiers         = wm_event->modifiers;
+              ui_event.string            = wm_event->character ? str8_from_32(ui_build_arena(), str32(&wm_event->character, 1)) : str8_zero();
+              ui_event.paths             = str8_list_copy(ui_build_arena(), &wm_event->strings);
+              ui_event.pos               = wm_event->pos;
+              ui_event.delta_2f32        = wm_event->delta;
               ui_event.scroll_is_precise = wm_event->scroll_is_precise;
-              ui_event.timestamp_us = wm_event->timestamp_us;
+              ui_event.timestamp_us      = wm_event->timestamp_us;
               ui_event_list_push(scratch.arena, &ws->ui_events, &ui_event);
             }
           }break;
