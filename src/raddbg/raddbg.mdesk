@@ -323,7 +323,7 @@ RD_VocabTable:
         'use_native_file_system_dialog': bool,
       
       //- query activation
-      @default(1) @display_name('Repeated Query Command Closes Input') @description("Repeating Search, Go to Line, or Go to Address closes its input. When disabled, repeating the command focuses the input and selects its text.")
+      @default(1) @default_mac(0) @display_name('Repeated Query Command Closes Input') @description("Repeating Search, Go to Line, or Go to Address closes its input. When disabled, repeating the command focuses the input and selects its text.")
         'repeat_query_closes_input': bool,
 
       //- rjf: transient tabs
