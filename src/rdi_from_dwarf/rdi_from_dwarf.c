@@ -18,6 +18,33 @@ d2r_unique_tag_node_is_less_than(D2R_UniqueTagNode **l, D2R_UniqueTagNode **r)
   return is_less_than;
 }
 
+internal RDIM_Rng1U64
+d2r_voff_range_from_vaddr_range(U64 base_vaddr, Rng1U64 range)
+{
+  RDIM_Rng1U64 result = {range.min, range.max};
+  if(range.min >= base_vaddr && range.max >= base_vaddr)
+  {
+    result.min -= base_vaddr;
+    result.max -= base_vaddr;
+  }
+  return result;
+}
+
+internal U64
+d2r_voff_opl_from_high_pc(DW2_ParseCtx *unit_parse_ctx, U64 base_vaddr, U64 voff_base, DW2_FormVal *hipc_val)
+{
+  U64 result = 0;
+  if(dw_attrib_class_from_form_kind(unit_parse_ctx->version, unit_parse_ctx->exts, hipc_val->kind) & DW_AttribClass_Address)
+  {
+    result = hipc_val->addr - base_vaddr;
+  }
+  else
+  {
+    result = voff_base + hipc_val->u128.u64[0];
+  }
+  return result;
+}
+
 ////////////////////////////////
 //~ rjf: Main Conversion Entry Point (New)
 
@@ -439,7 +466,19 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
         if(f->file_name.size != 0)
         {
           DW2_LineTableFile *dir = &hdr->dirs.v[f->dir_idx];
-          String8 full_file_path = str8f(scratch2.arena, "%S%s%S", dir->file_name, dir->file_name.size != 0 ? "/" : "", f->file_name);
+          PathStyle file_name_style = path_style_from_str8(f->file_name);
+          String8 full_file_path = f->file_name;
+          if(file_name_style == PathStyle_Relative)
+          {
+            String8 dir_path = dir->file_name;
+            PathStyle dir_path_style = path_style_from_str8(dir_path);
+            if(dir_path_style == PathStyle_Relative && hdr->dirs.count != 0)
+            {
+              DW2_LineTableFile *comp_dir = &hdr->dirs.v[0];
+              dir_path = path_absolute_dst_from_relative_dst_src(scratch2.arena, dir_path, comp_dir->file_name);
+            }
+            full_file_path = path_absolute_dst_from_relative_dst_src(scratch2.arena, f->file_name, dir_path);
+          }
           U64 hash = u64_hash_from_str8(full_file_path);
           U64 slot_idx = hash%slots_count;
           SrcFileNode *node = 0;
@@ -757,7 +796,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
         }
         
         //- rjf: sequence ended explicitly, or file change, or end of stream? -> push to line table
-        if(line_seq_src_file != 0 && (vm_regs.end_sequence || (src_file != line_seq_src_file && first_line_seq_chunk != 0) || off >= unit_line_table_data.size))
+        if(line_seq_src_file != 0 && (vm_regs.end_sequence || (emit_line && src_file != line_seq_src_file && first_line_seq_chunk != 0) || off >= unit_line_table_data.size))
         {
           // rjf: combine voffs/lines/cols
           U64 seq_line_count = total_line_seq_count;
@@ -825,7 +864,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
         }
         
         //- rjf: emit lines
-        if(emit_line && vm_regs.address != 0 && vm_regs.line != 0)
+        if(emit_line && vm_regs.address != 0)
         {
           emit_line = 0;
           
@@ -2980,7 +3019,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           Rng1U64List ranges = dw2_rnglist_from_form_val(scratch.arena, unit_parse_ctx, raw, ranges_attrib->val);
           for EachNode(n, Rng1U64Node, ranges.first)
           {
-            rdim_rng1u64_chunk_list_push(arena, &unit_voff_ranges, 256, (RDIM_Rng1U64){n->v.min - base_vaddr, n->v.max - base_vaddr});
+            rdim_rng1u64_chunk_list_push(arena, &unit_voff_ranges, 256, d2r_voff_range_from_vaddr_range(base_vaddr, n->v));
           }
         }
         
@@ -2988,15 +3027,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
         if(lopc_attrib != &dw2_attrib_nil && hipc_attrib != &dw2_attrib_nil)
         {
           U64 voff_base = lopc_attrib->val.addr - base_vaddr;
-          U64 voff_opl = 0;
-          if(dw_attrib_class_from_form_kind(unit_parse_ctx->version, unit_parse_ctx->exts, hipc_attrib->val.kind) & DW_AttribClass_Address)
-          {
-            voff_opl = voff_base + hipc_attrib->val.u128.u64[0];
-          }
-          else
-          {
-            voff_opl = hipc_attrib->val.addr;
-          }
+          U64 voff_opl = d2r_voff_opl_from_high_pc(unit_parse_ctx, base_vaddr, voff_base, &hipc_attrib->val);
           rdim_rng1u64_chunk_list_push(arena, &unit_voff_ranges, 256, (RDIM_Rng1U64){voff_base, voff_opl});
         }
       }
@@ -3163,22 +3194,14 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
               Rng1U64List tag_ranges = dw2_rnglist_from_form_val(temp.arena, unit_parse_ctx, raw, ranges_attrib->val);
               for EachNode(n, Rng1U64Node, tag_ranges.first)
               {
-                rdim_rng1u64_list_push(arena, &ranges, (RDIM_Rng1U64){.min = n->v.min, .max = n->v.max});
+                rdim_rng1u64_list_push(arena, &ranges, d2r_voff_range_from_vaddr_range(base_vaddr, n->v));
               }
               temp_end(temp);
             }
             if(lopc_attrib != &dw2_attrib_nil && hipc_attrib != &dw2_attrib_nil)
             {
               U64 voff_base = lopc_attrib->val.addr - base_vaddr;
-              U64 voff_opl = 0;
-              if(dw_attrib_class_from_form_kind(unit_parse_ctx->version, unit_parse_ctx->exts, hipc_attrib->val.kind) & DW_AttribClass_Address)
-              {
-                voff_opl = hipc_attrib->val.addr;
-              }
-              else
-              {
-                voff_opl = voff_base + hipc_attrib->val.u128.u64[0];
-              }
+              U64 voff_opl = d2r_voff_opl_from_high_pc(unit_parse_ctx, base_vaddr, voff_base, &hipc_attrib->val);
               rdim_rng1u64_list_push(arena, &ranges, (RDIM_Rng1U64){voff_base, voff_opl});
             }
           }
@@ -3311,7 +3334,12 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                 //- rjf: iterate each frame base location case, or once if there are none,
                 // and convert the location in that context
                 RDIM_LocationCase nil_framebase_loc_case = {0, {0}, {0, max_U64}};
-                for(RDIM_LocationCase *framebase_loc_n = top_parent ? top_parent->framebase_location_cases.first : &nil_framebase_loc_case;
+                RDIM_LocationCase *first_framebase_loc_case = &nil_framebase_loc_case;
+                if(top_parent != 0 && top_parent->framebase_location_cases.first != 0)
+                {
+                  first_framebase_loc_case = top_parent->framebase_location_cases.first;
+                }
+                for(RDIM_LocationCase *framebase_loc_n = first_framebase_loc_case;
                     framebase_loc_n != 0;
                     framebase_loc_n = framebase_loc_n->next)
                 {
@@ -3516,7 +3544,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       case DW_ExprOp_BReg30: case DW_ExprOp_BReg31:
                       {
                         regcode_dw = (U64)(opcode - DW_ExprOp_BReg0);
-                        regval_off = operand_s64s[1];
+                        regval_off = operand_s64s[0];
                         regread_is_addr = 1;
                       }goto reg_read;
                       case DW_ExprOp_BRegX:
@@ -3979,7 +4007,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                   
                   //- rjf: collect
                   {
-                    RDIM_Rng1U64 voff_range = {range.min - base_vaddr, range.max - base_vaddr};
+                    RDIM_Rng1U64 voff_range = d2r_voff_range_from_vaddr_range(base_vaddr, range);
                     if(bytecode_is_framebase_dependent)
                     {
                       voff_range.min = Max(voff_range.min, framebase_voff_range.min);
