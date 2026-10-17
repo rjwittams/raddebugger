@@ -12099,8 +12099,9 @@ rd_frame(void)
       cfg_node_release(rd_state->cfg, cfg_node_from_id(rd_state->bind_change_binding_id));
       rd_state->bind_change_active = 0;
     }
-    for(WM_Event *event = events.first, *next = 0; event != 0; event = next)
+    for(WM_Event *event = events.first, *next = 0; event != 0 && rd_state->bind_change_active; event = next)
     {
+      next = event->next;
       if(event->kind == WM_EventKind_Press &&
          event->key != WM_Key_Esc &&
          event->key != WM_Key_Return &&
