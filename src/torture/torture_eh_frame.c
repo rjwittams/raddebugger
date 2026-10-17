@@ -4,6 +4,32 @@
 #undef T_Group
 #define T_Group "EHFrame"
 
+TEST(eh_frame_header_optional_table)
+{
+  // Zig 0.16's Linux header has a relative pointer and omits both table fields.
+  U8 zig_bytes[] = {1,0x1b,0xff,0xff, 0x7c,0x43,0xfe,0xff};
+  EH_PtrCtx ptr_ctx = {.pc_vaddr = 0x1023e48};
+  EH_FrameHdr header = eh_parse_frame_hdr(str8_array_fixed(zig_bytes), 8, &ptr_ctx);
+  T_Ok(header.eh_frame_ptr == 0x10081c8);
+  T_Ok(header.version == 1 && header.fde_count == 0 && header.table.size == 0);
+  T_Ok(header.field_byte_size == 0 && header.entry_byte_size == 0);
+
+  for(U64 scenario = 0; scenario < 5; scenario += 1)
+  {
+    U8 bytes[] = {1,3,3,3, 0,0x10,0,0, 1,0,0,0, 0,0x20,0,0, 0,0x30,0,0};
+    U64 size = sizeof(bytes);
+    if(scenario == 1 || scenario == 3) {bytes[2] = EH_PtrEnc_Omit; size = 8;}
+    if(scenario == 2 || scenario == 3) {bytes[3] = EH_PtrEnc_Omit; size = scenario == 2 ? 12 : 8;}
+    if(scenario == 4) {bytes[8] = 0; size = 12;}
+    EH_PtrCtx ptr_ctx = {0};
+    EH_FrameHdr header = eh_parse_frame_hdr(str8(bytes, size), 8, &ptr_ctx);
+    T_Ok(header.version == 1 && header.eh_frame_ptr == 0x1000);
+    T_Ok(header.fde_count == (scenario == 0 ? 1 : 0));
+    T_Ok(header.table.size == (scenario == 0 ? 8 : 0));
+    T_Ok(header.entry_byte_size == (scenario == 0 || scenario == 4 ? 8 : 0));
+  }
+}
+
 TEST(eh_frame_fde_augmentation_length)
 {
   // A personality-bearing CIE and an FDE with an independently sized LSDA.
@@ -28,6 +54,37 @@ TEST(eh_frame_fde_augmentation_length)
   // A zero-length FDE augmentation still has its own length byte.
   fde_bytes[24] = 0;
   T_Ok(eh_read_fde(str8_array_fixed(fde_bytes), 0, DW_Format_32Bit, Arch_arm64, 0, &ptr_ctx, &cie, &fde) == 25);
+}
+
+TEST(eh_frame_index_termination)
+{
+  U8 bytes[88] = {16,0,0,0, 0,0,0,0, 1,'z','R',0, 1,0x78,16,1,4,0x0c,7,8,
+                  28,0,0,0, 24,0,0,0, 0,0x10,0,0,0,0,0,0, 0,1,0,0,0,0,0,0,
+                  0,0x0c,6,16,0x90,1,0x86,2};
+  // A second valid-looking FDE after the terminator must not enter the index.
+  MemoryCopy(bytes+56, bytes+20, 32);
+  bytes[60] = 60;
+  bytes[65] = 0x20;
+  EH_PtrCtx ptr_ctx = {0};
+  for(B32 require_terminator = 0; require_terminator <= 1; require_terminator += 1)
+  {
+    String8 data = d_eh_frame_hdr_from_eh_frame(arena, str8_array_fixed(bytes), 0x4000, Arch_x64, &ptr_ctx, require_terminator);
+    EH_FrameHdr header = eh_parse_frame_hdr(data, 8, &ptr_ctx);
+    T_Ok(header.fde_count == 1);
+    U64 pc = 0, fde = 0;
+    eh_read_ptr(header.table, 0, 0, &ptr_ctx, header.table_enc, &pc);
+    eh_read_ptr(header.table, 8, 8, &ptr_ctx, header.table_enc, &fde);
+    T_Ok(pc == 0x1000 && fde == 0x4014);
+  }
+  // Exact Mach-O section extents do not require an ELF-style terminator.
+  T_Ok(d_eh_frame_hdr_from_eh_frame(arena, str8(bytes, 52), 0x4000, Arch_x64, &ptr_ctx, 0).size != 0);
+  T_Ok(d_eh_frame_hdr_from_eh_frame(arena, str8(bytes, 52), 0x4000, Arch_x64, &ptr_ctx, 1).size == 0);
+  T_Ok(d_eh_frame_hdr_from_eh_frame(arena, str8(bytes, 54), 0x4000, Arch_x64, &ptr_ctx, 1).size == 0);
+  bytes[20] = 255; // FDE extends beyond available data.
+  T_Ok(d_eh_frame_hdr_from_eh_frame(arena, str8_array_fixed(bytes), 0x4000, Arch_x64, &ptr_ctx, 1).size == 0);
+  bytes[20] = 28;
+  bytes[24] = 255; // CIE pointer precedes the section.
+  T_Ok(d_eh_frame_hdr_from_eh_frame(arena, str8(bytes, 56), 0x4000, Arch_x64, &ptr_ctx, 1).size == 0);
 }
 
 TEST(eh_frame_register_availability_rules)
@@ -135,6 +192,40 @@ TEST(eh_frame_register_availability_rules)
         if(arch == Arch_arm64) {T_Ok(uwnd_reg_is_valid(arch, valid, ARM64_RegCode_lr));}
       }break;
     }
+  }
+}
+
+TEST(eh_frame_signed_cfa_offset)
+{
+  Arch arches[] = {Arch_x64, Arch_arm64};
+  for EachElement(arch_idx, arches) for(U64 scenario = 0; scenario < 4; scenario += 1)
+  {
+    Arch arch = arches[arch_idx];
+    ARCH_Info *ai = arch_info_from_arch(arch);
+    U8 ra = arch == Arch_arm64 ? 30 : 16, sp = arch == Arch_arm64 ? 31 : 7;
+    S64 factor = scenario < 2 ? -8 : 8;
+    S64 operand = scenario % 2 == 0 ? -2 : 2;
+    U8 bytes[] = {16,0,0,0, 0,0,0,0, 1,'z','R',0, 1,(U8)(factor & 0x7f),ra,1,4,0x0c,sp,0,
+                  28,0,0,0, 24,0,0,0, 0,0x10,0,0,0,0,0,0, 0,1,0,0,0,0,0,0,
+                  0,0x0c,sp,0,(U8)(0x80|ra),1,0x13,(U8)(operand & 0x7f)};
+    U64 expected_cfa = 0x2000 + factor*operand;
+    U64 stack[8] = {0};
+    stack[(expected_cfa + factor - 0x1fe0)/8] = 0x3000;
+    MemoryMap map = {0};
+    memory_map_push(arena, &map, r1u64(0x4000, 0x4000+sizeof(bytes)), bytes);
+    memory_map_push(arena, &map, r1u64(0x1fe0, 0x2020), stack);
+    EH_UWND_ModuleUnwindInfo info = {.override_fde_vaddr = 0x4014};
+    UWND_ModuleInfo module = {.unwind_info = &info, .os = OperatingSystem_Linux};
+    void *regs = push_array(arena, U8, ai->reg_block_size);
+    U8 *valid = push_array(arena, U8, ai->reg_block_size);
+    MemorySet(valid, 1, ai->reg_block_size);
+    arch_reg_block_write_ip(ai, regs, 0x1004);
+    arch_reg_block_write_sp(ai, regs, 0x2000);
+    U64 cfa = 0;
+    UWND_StepResult step = eh_uwnd_step(arch, &map, &module, 0, regs, valid, &cfa);
+    T_Ok(step.status == UWND_StepStatus_Good);
+    T_Ok(cfa == expected_cfa && arch_sp_from_reg_block(ai, regs) == expected_cfa);
+    T_Ok(arch_ip_from_reg_block(ai, regs) == 0x3000);
   }
 }
 
