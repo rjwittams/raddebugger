@@ -315,6 +315,7 @@ internal DI_Key di_key_zero(void);
 internal B32 di_key_match(DI_Key a, DI_Key b);
 internal void di_key_list_push(Arena *arena, DI_KeyList *list, DI_Key key);
 internal DI_KeyArray di_key_array_from_list(Arena *arena, DI_KeyList *list);
+internal String8 di_rdi_path_from_original_path(Arena *arena, String8 path);
 
 ////////////////////////////////
 //~ rjf: Main Layer Initialization
