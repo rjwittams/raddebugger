@@ -1331,11 +1331,10 @@ rd_watch_row_info_from_row(Arena *arena, EV_Row *row)
         D_CallStack call_stack = d_call_stack_from_thread(access, entity->handle, call_stack_high_priority, call_stack_high_priority ? rd_state->frame_eval_memread_endt_us : 0);
         if(1 <= frame_num && frame_num <= call_stack.frames_count)
         {
-          ARCH_Info *arch_info = arch_info_from_arch(entity->arch);
           D_CallStackFrame *f = &call_stack.frames[frame_num-1];
           info.callstack_unwind_index = f->unwind_count;
           info.callstack_inline_depth = f->inline_depth;
-          info.callstack_vaddr = arch_ip_from_reg_block(arch_info, f->regs);
+          info.callstack_vaddr = f->lookup_vaddr;
         }
         access_close(access);
       }
@@ -3589,7 +3588,7 @@ RD_VIEW_UI_FUNCTION_DEF(memory)
     {
       ARCH_Info *arch_info = arch_info_from_arch(selected_thread->arch);
       Vec4F32 symbol_color = ui_color_from_name(str8_lit("code_symbol"));
-      U64 last_rip = arch_ip_from_reg_block(arch_info, selected_call_stack.concrete_frames[0]->regs);
+      U64 last_rip = selected_call_stack.concrete_frames[0]->lookup_vaddr;
       U64 last_stack_top = arch_sp_from_reg_block(arch_info, selected_call_stack.concrete_frames[0]->regs);
       for(U64 idx = 1; idx < selected_call_stack.concrete_frames_count; idx += 1)
       {
@@ -3602,7 +3601,7 @@ RD_VIEW_UI_FUNCTION_DEF(memory)
         {
           Access *access = access_open();
           U64 f_rip_vaddr = last_rip;
-          last_rip = arch_ip_from_reg_block(arch_info, f->regs);
+          last_rip = f->lookup_vaddr;
           D_Entity *module = d_module_from_process_vaddr(selected_process, f_rip_vaddr);
           U64 f_rip_voff = d_voff_from_vaddr(module, f_rip_vaddr);
           DI_Key dbgi_key = d_dbgi_key_from_module(module);

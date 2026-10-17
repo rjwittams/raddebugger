@@ -1126,10 +1126,9 @@ E_TYPE_ACCESS_FUNCTION_DEF(call_stack_frame)
     {
       if(str8_match(expr->first->next->string, s("address"), 0))
       {
-        ARCH_Info *arch_info = arch_info_from_arch(accel->arch);
         D_CallStackFrame *f = accel->call_stack_frame;
         D_Entity *process = d_entity_from_handle(accel->process);
-        result.root = e_irtree_set_space(arena, rd_eval_space_from_ctrl_entity(process, D_EvalSpaceKind_Entity), e_irtree_const_u(arena, arch_ip_from_reg_block(arch_info, f->regs)));
+        result.root = e_irtree_set_space(arena, rd_eval_space_from_ctrl_entity(process, D_EvalSpaceKind_Entity), e_irtree_const_u(arena, f->lookup_vaddr));
         result.type_key = e_type_key_cons(.arch = process->arch, .kind = E_TypeKind_Ptr, .direct_key = e_type_key_basic(E_TypeKind_Function), .count = 1, .depth = f->inline_depth);
         result.mode = E_Mode_Value;
       }
