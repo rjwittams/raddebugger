@@ -1330,6 +1330,7 @@ process_launch(ProcessLaunchParams *params)
 
       // spawn process
       pid_t pid = 0;
+      // Match Linux: bare names use PATH; explicit paths retain their meaning.
       int spawn_code = posix_spawnp(&pid, argv[0], &file_actions, &attr, argv, envp);
       if(spawn_code == 0)
       {
