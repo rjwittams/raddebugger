@@ -7490,6 +7490,7 @@ rd_window_frame(void)
                   {
                     rd_cmd_kind_info_table[RD_CmdKind_OpenWindow].string,
                     rd_cmd_kind_info_table[RD_CmdKind_CloseWindow].string,
+                    rd_cmd_kind_info_table[RD_CmdKind_MinimizeWindow].string,
                     rd_cmd_kind_info_table[RD_CmdKind_ToggleFullscreen].string,
                     {0},//-
                     rd_cmd_kind_info_table[RD_CmdKind_WindowSettings].string,
@@ -7498,6 +7499,7 @@ rd_window_frame(void)
                   {
                     'w',
                     'c',
+                    'm',
                     'f',
                     0,//-
                     's',
@@ -14025,6 +14027,14 @@ rd_frame(void)
             else
             {
               cfg_node_release(rd_state->cfg, wcfg);
+            }
+          }break;
+          case RD_CmdKind_MinimizeWindow:
+          {
+            RD_WindowState *ws = rd_window_state_from_cfg(cfg_node_from_id(rd_regs()->window));
+            if(ws != &rd_nil_window_state)
+            {
+              wm_window_set_minimized(ws->os, 1);
             }
           }break;
           case RD_CmdKind_ToggleFullscreen:
