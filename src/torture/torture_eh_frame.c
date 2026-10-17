@@ -30,6 +30,46 @@ TEST(eh_frame_header_optional_table)
   }
 }
 
+TEST(eh_frame_cie_versions)
+{
+  for(U64 version = 1; version <= 3; version += 2)
+  {
+    for(U64 large_reg = 0; large_reg <= 1; large_reg += 1)
+    {
+      U8 bytes[21] = {0,0,0,0, 0,0,0,0, 0,'z','R',0, 1,0x78};
+      U64 off = 14;
+      bytes[8] = version;
+      bytes[off++] = large_reg ? 0x82 : 30;
+      if(version == 3 && large_reg) {bytes[off++] = 1;}
+      U64 aug_off = off;
+      bytes[off++] = 1;
+      bytes[off++] = EH_PtrEnc_UData8;
+      U64 inst_off = off;
+      bytes[off++] = 0x0c; bytes[off++] = 31; bytes[off++] = 0;
+      bytes[0] = off-4;
+      EH_PtrCtx ptr_ctx = {0};
+      DW_CIE cie = {0};
+      T_Ok(eh_read_cie(str8(bytes, off), 0, DW_Format_32Bit, Arch_arm64, 0, &ptr_ctx, &cie) == inst_off);
+      T_Ok(cie.version == version && cie.address_size == 8);
+      T_Ok(cie.code_align_factor == 1 && cie.data_align_factor == -8);
+      T_Ok(cie.ret_addr_reg == (large_reg ? 130 : 30));
+      T_Ok(cie.aug_string_range.min == 9 && cie.aug_string_range.max == 12);
+      T_Ok(cie.aug_data_range.min == aug_off && cie.aug_data_range.max == inst_off);
+      T_Ok(cie.ext[EH_CIE_Ext_AddrEnc] == EH_PtrEnc_UData8);
+    }
+  }
+  U8 unsupported_versions[] = {0,2,4,255};
+  for(U64 i = 0; i < ArrayCount(unsupported_versions); i += 1)
+  {
+    U8 bytes[] = {16,0,0,0, 0,0,0,0, 0,'z','R',0, 1,0x78,30,1,4,0x0c,31,0};
+    bytes[8] = unsupported_versions[i];
+    EH_PtrCtx ptr_ctx = {0};
+    DW_CIE cie = {0};
+    T_Ok(eh_read_cie(str8_array_fixed(bytes), 0, DW_Format_32Bit, Arch_arm64, 0, &ptr_ctx, &cie) == 0);
+    T_Ok(cie.version == 0 && cie.ext[EH_CIE_Ext_AddrEnc] == EH_PtrEnc_Omit);
+  }
+}
+
 TEST(eh_frame_fde_augmentation_length)
 {
   // A personality-bearing CIE and an FDE with an independently sized LSDA.
