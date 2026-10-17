@@ -113,7 +113,9 @@ ui_scroll_region_build(UI_Box *parent, UI_Key key, UI_ScrollRegion *region,
       F32 thickness = region->params.gutter_px;
       if(overlay)
       {
-        Rng2F32 hover_rect = shift_2f32(region->viewport, parent->rect.p0);
+        // The parent may be an unkeyed layout box with no previous-frame
+        // rectangle. Use the persistent content box's laid-out screen rect.
+        Rng2F32 hover_rect = ui_box_from_key(key)->rect;
         Axis2 cross = axis2_flip(axis);
         B32 hovered = contains_2f32(hover_rect, ui_mouse());
         B32 near_bar = hovered && ui_mouse().v[cross] >= hover_rect.p1.v[cross] - region->params.overlay_hover_px - region->params.overlay_inset_px;
