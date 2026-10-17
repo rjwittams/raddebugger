@@ -1147,38 +1147,38 @@ DW_ExprOpTable:
   {Lt                0x2d    3     0 2 1 Null      Null  1}
   {Ne                0x2e    3     0 2 1 Null      Null  1}
   {Skip              0x2f    3     1 0 0 S16       Null  1}
-  {Lit0              0x30    3     0 0 0 Null      Null  1}
-  {Lit1              0x31    3     0 0 0 Null      Null  1}
-  {Lit2              0x32    3     0 0 0 Null      Null  1}
-  {Lit3              0x33    3     0 0 0 Null      Null  1}
-  {Lit4              0x34    3     0 0 0 Null      Null  1}
-  {Lit5              0x35    3     0 0 0 Null      Null  1}
-  {Lit6              0x36    3     0 0 0 Null      Null  1}
-  {Lit7              0x37    3     0 0 0 Null      Null  1}
-  {Lit8              0x38    3     0 0 0 Null      Null  1}
-  {Lit9              0x39    3     0 0 0 Null      Null  1}
-  {Lit10             0x3a    3     0 0 0 Null      Null  1}
-  {Lit11             0x3b    3     0 0 0 Null      Null  1}
-  {Lit12             0x3c    3     0 0 0 Null      Null  1}
-  {Lit13             0x3d    3     0 0 0 Null      Null  1}
-  {Lit14             0x3e    3     0 0 0 Null      Null  1}
-  {Lit15             0x3f    3     0 0 0 Null      Null  1}
-  {Lit16             0x40    3     0 0 0 Null      Null  1}
-  {Lit17             0x41    3     0 0 0 Null      Null  1}
-  {Lit18             0x42    3     0 0 0 Null      Null  1}
-  {Lit19             0x43    3     0 0 0 Null      Null  1}
-  {Lit20             0x44    3     0 0 0 Null      Null  1}
-  {Lit21             0x45    3     0 0 0 Null      Null  1}
-  {Lit22             0x46    3     0 0 0 Null      Null  1}
-  {Lit23             0x47    3     0 0 0 Null      Null  1}
-  {Lit24             0x48    3     0 0 0 Null      Null  1}
-  {Lit25             0x49    3     0 0 0 Null      Null  1}
-  {Lit26             0x4a    3     0 0 0 Null      Null  1}
-  {Lit27             0x4b    3     0 0 0 Null      Null  1}
-  {Lit28             0x4c    3     0 0 0 Null      Null  1}
-  {Lit29             0x4d    3     0 0 0 Null      Null  1}
-  {Lit30             0x4e    3     0 0 0 Null      Null  1}
-  {Lit31             0x4f    3     0 0 0 Null      Null  1}
+  {Lit0              0x30    3     0 0 1 Null      Null  1}
+  {Lit1              0x31    3     0 0 1 Null      Null  1}
+  {Lit2              0x32    3     0 0 1 Null      Null  1}
+  {Lit3              0x33    3     0 0 1 Null      Null  1}
+  {Lit4              0x34    3     0 0 1 Null      Null  1}
+  {Lit5              0x35    3     0 0 1 Null      Null  1}
+  {Lit6              0x36    3     0 0 1 Null      Null  1}
+  {Lit7              0x37    3     0 0 1 Null      Null  1}
+  {Lit8              0x38    3     0 0 1 Null      Null  1}
+  {Lit9              0x39    3     0 0 1 Null      Null  1}
+  {Lit10             0x3a    3     0 0 1 Null      Null  1}
+  {Lit11             0x3b    3     0 0 1 Null      Null  1}
+  {Lit12             0x3c    3     0 0 1 Null      Null  1}
+  {Lit13             0x3d    3     0 0 1 Null      Null  1}
+  {Lit14             0x3e    3     0 0 1 Null      Null  1}
+  {Lit15             0x3f    3     0 0 1 Null      Null  1}
+  {Lit16             0x40    3     0 0 1 Null      Null  1}
+  {Lit17             0x41    3     0 0 1 Null      Null  1}
+  {Lit18             0x42    3     0 0 1 Null      Null  1}
+  {Lit19             0x43    3     0 0 1 Null      Null  1}
+  {Lit20             0x44    3     0 0 1 Null      Null  1}
+  {Lit21             0x45    3     0 0 1 Null      Null  1}
+  {Lit22             0x46    3     0 0 1 Null      Null  1}
+  {Lit23             0x47    3     0 0 1 Null      Null  1}
+  {Lit24             0x48    3     0 0 1 Null      Null  1}
+  {Lit25             0x49    3     0 0 1 Null      Null  1}
+  {Lit26             0x4a    3     0 0 1 Null      Null  1}
+  {Lit27             0x4b    3     0 0 1 Null      Null  1}
+  {Lit28             0x4c    3     0 0 1 Null      Null  1}
+  {Lit29             0x4d    3     0 0 1 Null      Null  1}
+  {Lit30             0x4e    3     0 0 1 Null      Null  1}
+  {Lit31             0x4f    3     0 0 1 Null      Null  1}
   {Reg0              0x50    3     0 0 1 Null      Null  1}
   {Reg1              0x51    3     0 0 1 Null      Null  1}
   {Reg2              0x52    3     0 0 1 Null      Null  1}
