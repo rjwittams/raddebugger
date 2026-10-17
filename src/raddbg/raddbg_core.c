@@ -791,7 +791,7 @@ rd_eval_space_read(E_Space space, void *out, E_SpaceRangeInfo *out_range_info, R
           String8 data = slice.data;
           if(data.size == dim_1u64(range))
           {
-            result = 1;
+            result = !slice.any_byte_bad;
             MemoryCopy(out, data.str, data.size);
             if(out_range_info != 0 && out_range_info->byte_bad_flags)
             {
