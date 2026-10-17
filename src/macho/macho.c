@@ -243,6 +243,80 @@ macho_image_size_from_bin(String8 data, MachO_Bin *bin)
   return result;
 }
 
+internal B32
+macho_linkedit_data_vrange_from_bin(String8 data, MachO_Bin *bin, U32 cmd, U64 slide, Rng1U64 *vrange_out)
+{
+  B32 result = 0;
+  if(vrange_out != 0)
+  {
+    MemoryZeroStruct(vrange_out);
+  }
+  MachO_LinkeditDataCommand linkedit_data = {0};
+  B32 found_linkedit_data = 0;
+  for EachIndex(idx, bin->load_commands.count)
+  {
+    MachO_LoadCommandInfo *info = &bin->load_commands.v[idx];
+    if(info->cmd == cmd && info->offset + sizeof(MachO_LinkeditDataCommand) <= data.size)
+    {
+      str8_deserial_read_struct(data, info->offset, &linkedit_data);
+      found_linkedit_data = 1;
+      break;
+    }
+  }
+  if(found_linkedit_data)
+  {
+    Rng1U64 file_range = r1u64(linkedit_data.dataoff, (U64)linkedit_data.dataoff + linkedit_data.datasize);
+    for EachIndex(idx, bin->load_commands.count)
+    {
+      MachO_LoadCommandInfo *info = &bin->load_commands.v[idx];
+      if(info->cmd == MACHO_LC_SEGMENT_64 && info->offset + sizeof(MachO_SegmentCommand64) <= data.size)
+      {
+        MachO_SegmentCommand64 segment = {0};
+        str8_deserial_read_struct(data, info->offset, &segment);
+        Rng1U64 segment_file_range = r1u64(segment.fileoff, segment.fileoff + segment.filesize);
+        if(segment_file_range.min <= file_range.min && file_range.max <= segment_file_range.max)
+        {
+          U64 min = slide + segment.vmaddr + file_range.min - segment.fileoff;
+          if(vrange_out != 0)
+          {
+            *vrange_out = r1u64(min, min + dim_1u64(file_range));
+          }
+          result = 1;
+          break;
+        }
+      }
+    }
+  }
+  return result;
+}
+
+internal U64Array
+macho_function_start_voffs_from_base_vaddr_data(Arena *arena, U64 image_base_vaddr, U64 text_vaddr, String8 function_starts_data)
+{
+  U64Array result = {0};
+  U64 max_start_count = function_starts_data.size;
+  result.v = push_array(arena, U64, max_start_count);
+  U64 cursor = 0;
+  U64 function_vaddr = text_vaddr;
+  for(; cursor < function_starts_data.size;)
+  {
+    U64 delta = 0;
+    U64 bytes_read = str8_deserial_read_uleb128(function_starts_data, cursor, &delta);
+    if(bytes_read == 0 || delta == 0)
+    {
+      break;
+    }
+    cursor += bytes_read;
+    function_vaddr += delta;
+    if(function_vaddr >= image_base_vaddr)
+    {
+      result.v[result.count] = function_vaddr - image_base_vaddr;
+      result.count += 1;
+    }
+  }
+  return result;
+}
+
 internal U64Array
 macho_function_start_voffs_from_data(Arena *arena, String8 data, MachO_Bin *bin)
 {
@@ -279,26 +353,7 @@ macho_function_start_voffs_from_data(Arena *arena, String8 data, MachO_Bin *bin)
   {
     U64 data_opl = Min(data.size, (U64)function_starts_command.dataoff + (U64)function_starts_command.datasize);
     String8 function_starts_data = str8_substr(data, r1u64(function_starts_command.dataoff, data_opl));
-    U64 max_start_count = function_starts_data.size;
-    result.v = push_array(arena, U64, max_start_count);
-    U64 cursor = 0;
-    U64 function_vaddr = text_vaddr;
-    for(; cursor < function_starts_data.size;)
-    {
-      U64 delta = 0;
-      U64 bytes_read = str8_deserial_read_uleb128(function_starts_data, cursor, &delta);
-      if(bytes_read == 0 || delta == 0)
-      {
-        break;
-      }
-      cursor += bytes_read;
-      function_vaddr += delta;
-      if(function_vaddr >= image_base_vaddr)
-      {
-        result.v[result.count] = function_vaddr - image_base_vaddr;
-        result.count += 1;
-      }
-    }
+    result = macho_function_start_voffs_from_base_vaddr_data(arena, image_base_vaddr, text_vaddr, function_starts_data);
   }
   return result;
 }
