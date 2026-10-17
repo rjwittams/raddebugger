@@ -31,7 +31,8 @@ struct FNT_Piece
 {
   R_Handle texture;
   Rng2S16 subrect;
-  Vec2S16 offset;
+  Vec2F32 offset;
+  Vec2F32 draw_dim;
   F32 advance;
   U16 decode_size;
 };
@@ -100,6 +101,7 @@ struct FNT_RasterCacheInfo
 {
   Rng2S16 subrect;
   Vec2S16 raster_dim;
+  Vec2F32 draw_dim;
   S16 atlas_num;
   F32 advance;
 };
@@ -270,7 +272,8 @@ internal FNT_PieceArray fnt_piece_array_copy(Arena *arena, FNT_PieceArray *src);
 //~ rjf: Cache Usage
 
 //- rjf: base cache lookups
-internal FNT_Hash2StyleRasterCacheNode *fnt_hash2style_from_tag_size_flags(FNT_Tag tag, F32 size, FNT_RasterFlags flags);
+internal FNT_Hash2StyleRasterCacheNode *fnt_hash2style_from_tag_size_raster_scale_flags(FNT_Tag tag, F32 size, F32 raster_scale, FNT_RasterFlags flags);
+internal FNT_Run fnt_run_from_string_scaled(FNT_Tag tag, F32 size, F32 raster_scale, F32 base_align_px, F32 tab_size_px, FNT_RasterFlags flags, String8 string);
 internal FNT_Run fnt_run_from_string(FNT_Tag tag, F32 size, F32 base_align_px, F32 tab_size_px, FNT_RasterFlags flags, String8 string);
 
 //- rjf: helpers
