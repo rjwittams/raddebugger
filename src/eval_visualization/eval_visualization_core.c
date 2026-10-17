@@ -1443,13 +1443,12 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
     E_TypeKind type_kind = e_type_kind_from_key(type_key);
     String8 expansion_opener_symbol = str8_lit("{");
     String8 expansion_closer_symbol = str8_lit("}");
+    E_Eval value_eval = eval;
     if(eval.irtree.mode == E_Mode_Offset && e_space_match(eval.space, e_interpret_ctx->reg_space))
     {
-      E_Eval value_eval = e_value_eval_from_eval(eval);
-      if(value_eval.code == E_InterpretationCode_BadRegRead) {eval.code = value_eval.code;}
+      value_eval = e_value_eval_from_eval(eval);
     }
-
-    if(eval.code == E_InterpretationCode_BadRegRead)
+    if(value_eval.code == E_InterpretationCode_BadRegRead || value_eval.code == E_InterpretationCode_BadMemRead)
     {
       *out_string = str8_lit("<unavailable>");
     }
@@ -1468,7 +1467,7 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
       //
       default:
       {
-        E_Eval value_eval = e_value_eval_from_eval(eval);
+        value_eval = e_value_eval_from_eval(eval);
         *out_string = ev_string_from_simple_typed_eval(arena, params, value_eval);
       }break;
       
@@ -1483,7 +1482,7 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
           case 0:
           {
             E_Type *type = e_type_from_key(type_key);
-            E_Eval value_eval = e_value_eval_from_eval(eval);
+            value_eval = e_value_eval_from_eval(eval);
             String8 constant_name = {0};
             for(U64 val_idx = 0; val_idx < type->count; val_idx += 1)
             {
@@ -1515,7 +1514,7 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
               need_pop = 1;
               need_new_task = 1;
               new_task.params = *params;
-              new_task.eval = e_value_eval_from_eval(eval);
+              new_task.eval = value_eval;
               new_task.eval.irtree.type_key = e_type_key_direct(eval.irtree.type_key);
             }
           }break;
@@ -1525,7 +1524,8 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
             need_pop = 0;
             need_new_task = 1;
             new_task.params = *params;
-            new_task.eval = e_value_eval_from_eval(eval);
+            value_eval = e_value_eval_from_eval(eval);
+            new_task.eval = value_eval;
             new_task.eval.irtree.type_key = e_type_key_direct(eval.irtree.type_key);
           }break;
           case 2:
@@ -1716,7 +1716,8 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
         need_pop = 1;
         need_new_task = 1;
         new_task.params = *params;
-        new_task.eval = e_value_eval_from_eval(eval);
+        value_eval = e_value_eval_from_eval(eval);
+        new_task.eval = value_eval;
         new_task.eval.irtree.type_key = e_type_key_direct(eval.irtree.type_key);
       }break;
       
@@ -1760,7 +1761,8 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
         if(ptr_data == 0)
         {
           ptr_data = it->top_task->user_data = push_array(arena, EV_StringPtrData, 1);
-          ptr_data->value_eval = e_value_eval_from_eval(eval);
+          value_eval = e_value_eval_from_eval(eval);
+          ptr_data->value_eval = value_eval;
           ptr_data->type = e_type_from_key(type_key);
           ptr_data->direct_type = e_type_from_key(e_type_key_unwrap(type_key, E_TypeUnwrapFlag_All));
           ptr_data->ptee_has_content = (ptr_data->value_eval.value.u64 != 0 && ptr_data->direct_type->kind != E_TypeKind_Null && ptr_data->direct_type->kind != E_TypeKind_Void);
@@ -2191,6 +2193,12 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
           }break;
         }
       }break;
+    }
+    if(value_eval.code == E_InterpretationCode_BadRegRead || value_eval.code == E_InterpretationCode_BadMemRead)
+    {
+      *out_string = str8_lit("<unavailable>");
+      need_pop = 1;
+      need_new_task = 0;
     }
   }
   
