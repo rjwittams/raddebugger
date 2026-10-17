@@ -52,6 +52,64 @@ TEST(software_breakpoint_pc_offsets)
   T_Ok(arch_software_breakpoint_pc_offset(OperatingSystem_Windows, Arch_arm64) == arch_info_from_arch(Arch_arm64)->trap_instruction.size);
 }
 
+TEST(step_over_line_call_trap_storage)
+{
+  DASM_CtrlFlowPoint point = {0};
+  point.vaddr = 0x1000;
+  point.vaddr_opl = 0x1004;
+  point.jump_dest_vaddr = 0x2000;
+  point.inst_flags = DASM_InstFlag_Call;
+
+  Rng1U64List same_line_ranges = {0};
+  rng1u64_list_push(arena, &same_line_ranges, r1u64(0x1000, 0x1004));
+
+  D_Trap x64_trap = d_trap_from_step_over_line_call(Arch_x64, &point, &same_line_ranges);
+  T_Ok(x64_trap.vaddr == point.vaddr);
+  T_Ok(x64_trap.flags == (D_TrapFlag_BeginSpoofMode|D_TrapFlag_SingleStepAfterHit));
+
+  D_Trap arm64_line_end_trap = d_trap_from_step_over_line_call(Arch_arm64, &point, &same_line_ranges);
+  T_Ok(arm64_line_end_trap.vaddr == point.vaddr_opl);
+  T_Ok(arm64_line_end_trap.flags == D_TrapFlag_EndStepping);
+
+  rng1u64_list_push(arena, &same_line_ranges, r1u64(0x1004, 0x1008));
+  D_Trap arm64_same_line_trap = d_trap_from_step_over_line_call(Arch_arm64, &point, &same_line_ranges);
+  T_Ok(arm64_same_line_trap.vaddr == point.vaddr_opl);
+  T_Ok(arm64_same_line_trap.flags == D_TrapFlag_SingleStepAfterHit);
+}
+
+TEST(step_out_return_exit_points_do_not_have_static_traps)
+{
+  DASM_CtrlFlowPoint ret_point = {0};
+  ret_point.vaddr = 0x1000;
+  ret_point.vaddr_opl = 0x1004;
+  ret_point.jump_dest_vaddr = 0;
+  ret_point.inst_flags = DASM_InstFlag_Return;
+
+  U64 trap_vaddr = 0xdeadbeef;
+  T_Ok(!d_step_out_static_trap_vaddr_from_exit_point(&ret_point, &trap_vaddr));
+  T_Ok(trap_vaddr == 0xdeadbeef);
+
+  DASM_CtrlFlowPoint branch_point = {0};
+  branch_point.vaddr = 0x2000;
+  branch_point.vaddr_opl = 0x2004;
+  branch_point.jump_dest_vaddr = 0x3000;
+  branch_point.inst_flags = DASM_InstFlag_UnconditionalJump;
+
+  T_Ok(d_step_out_static_trap_vaddr_from_exit_point(&branch_point, &trap_vaddr));
+  T_Ok(trap_vaddr == 0x3000);
+}
+
+TEST(step_out_return_traps_use_link_register_continuation)
+{
+  X64_RegBlock x64_regs = {0};
+  x64_regs.rip = 0x1000;
+  T_Ok(d_step_out_trap_vaddr_from_return_frame(Arch_x64, &x64_regs) == 0x1000);
+
+  ARM64_RegBlock arm64_regs = {0};
+  arm64_regs.pc = 0x2000;
+  T_Ok(d_step_out_trap_vaddr_from_return_frame(Arch_arm64, &arm64_regs) == 0x2000);
+}
+
 TEST(arm64_rdi_dwarf_mappings)
 {
   T_Ok(rdi_arch_from_arch(Arch_arm64) == RDI_Arch_ARM64);
