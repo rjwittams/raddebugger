@@ -10,7 +10,7 @@ dw_reg_range_from_code(Arch arch, DW_RegCode code, B32 unwind)
   ARCH_Info *info = arch_info_from_arch(arch);
   Rng1U16 range = info->reg_code_rng_table[arch_reg_code_from_dw(arch, code)];
   U64 size = dim_1u16(range);
-  if(arch == Arch_arm64 && unwind && code >= 64 && code <= 95) {size = Min(size, 8);}
+  if(arch == Arch_arm64 && unwind && code >= DW_RegCodeARM64_q0 && code <= DW_RegCodeARM64_q31) {size = Min(size, 8);}
   if(arch == Arch_x64 && ((code >= DW_RegCodeX64_zmm0 && code <= DW_RegCodeX64_zmm15) ||
                          (code >= DW_RegCodeX64_zmm16 && code <= DW_RegCodeX64_zmm31))) {size = Min(size, 16);}
   if(arch == Arch_x64 && code == DW_RegCodeX64_rflags) {size = Min(size, 4);}
