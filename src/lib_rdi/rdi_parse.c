@@ -858,6 +858,16 @@ rdi_procedure_from_scope(RDI_Parsed *rdi, RDI_Scope *scope)
   return procedure;
 }
 
+// Find this scope's nearest inline frame, crossing ordinary lexical blocks.
+RDI_PROC RDI_Scope *
+rdi_inline_scope_from_scope(RDI_Parsed *rdi, RDI_Scope *scope)
+{
+  for(; scope->inline_site_idx == 0 && scope->parent_scope_idx != 0;
+      scope = rdi_parent_from_scope(rdi, scope)) {}
+  if(scope->inline_site_idx == 0) {scope = rdi_element_from_name_idx(rdi, Scopes, 0);}
+  return scope;
+}
+
 RDI_PROC RDI_InlineSite *
 rdi_inline_site_from_scope(RDI_Parsed *rdi, RDI_Scope *scope)
 {
