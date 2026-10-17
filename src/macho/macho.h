@@ -122,5 +122,6 @@ internal Arch arch_from_macho_cpu_type(S32 cpu_type);
 internal MachO_UUID macho_uuid_from_bin(String8 data, MachO_Bin *bin);
 internal String8 macho_dsym_path_from_executable_path(Arena *arena, String8 executable_path);
 internal U64 macho_base_vaddr_from_bin(String8 data, MachO_Bin *bin);
+internal U64 macho_image_size_from_bin(String8 data, MachO_Bin *bin);
 
 #endif // MACHO_H
