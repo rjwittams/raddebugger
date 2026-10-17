@@ -45,6 +45,206 @@ d2r_voff_opl_from_high_pc(DW2_ParseCtx *unit_parse_ctx, U64 base_vaddr, U64 voff
   return result;
 }
 
+// DWARF supplies innermost-body lines in the CU table and caller coordinates
+// on each inline DIE. RDI has a separate line table for each logical frame.
+typedef struct D2R_FrameLine D2R_FrameLine;
+struct D2R_FrameLine
+{
+  D2R_FrameLine *next;
+  RDIM_SrcFile *file;
+  U64 min, max;
+  U32 line;
+  U16 col_first, col_opl;
+};
+
+typedef struct D2R_FrameLines D2R_FrameLines;
+struct D2R_FrameLines
+{
+  D2R_FrameLine *first, *last;
+};
+
+typedef struct D2R_InlineLines D2R_InlineLines;
+struct D2R_InlineLines
+{
+  D2R_InlineLines *next, *active_next;
+  RDIM_Scope *scope;
+  RDIM_SrcFile *call_file;
+  U32 call_line;
+  U16 call_column;
+  U64 depth;
+  D2R_FrameLines lines;
+};
+
+typedef struct D2R_LineEvent D2R_LineEvent;
+struct D2R_LineEvent
+{
+  RDIM_LineSequence *seq;
+  U64 line_idx;
+  D2R_InlineLines *inl;
+  B32 end;
+};
+
+internal void
+d2r_frame_lines_push(Arena *arena, D2R_FrameLines *dst, U64 min, U64 max,
+                    RDIM_SrcFile *file, U32 line, U16 col_first, U16 col_opl)
+{
+  if(file != 0 && min < max)
+  {
+    D2R_FrameLine *last = dst->last;
+    if(last != 0 && last->max == min && last->file == file && last->line == line &&
+       last->col_first == col_first && last->col_opl == col_opl)
+    {
+      last->max = max;
+    }
+    else
+    {
+      D2R_FrameLine *n = push_array(arena, D2R_FrameLine, 1);
+      n->file = file;
+      n->min = min;
+      n->max = max;
+      n->line = line;
+      n->col_first = col_first;
+      n->col_opl = col_opl;
+      SLLQueuePush(dst->first, dst->last, n);
+    }
+  }
+}
+
+internal void
+d2r_frame_lines_finish(Arena *arena, RDIM_LineTableChunkList *tables,
+                      RDIM_LineTable *table, D2R_FrameLines *lines)
+{
+  for(D2R_FrameLine *first = lines->first; first != 0;)
+  {
+    U64 count = 1;
+    D2R_FrameLine *last = first;
+    for(; last->next != 0 && last->next->file == first->file && last->max == last->next->min;
+        last = last->next, count += 1) {}
+    U64 *voffs = push_array(arena, U64, count+1);
+    U32 *nums = push_array(arena, U32, count);
+    U16 *cols = push_array(arena, U16, count*2);
+    D2R_FrameLine *n = first;
+    for EachIndex(idx, count)
+    {
+      voffs[idx] = n->min;
+      nums[idx] = n->line;
+      cols[2*idx] = n->col_first;
+      cols[2*idx+1] = n->col_opl;
+      n = n->next;
+    }
+    voffs[count] = last->max;
+    rdim_line_table_push_sequence(arena, tables, table, first->file, voffs, nums, cols, count);
+    first = n;
+  }
+}
+
+internal void
+d2r_inline_line_tables(Arena *arena, RDIM_LineTableChunkList *tables,
+                      RDIM_LineTable *unit_table, D2R_InlineLines *inlines)
+{
+  Temp scratch = scratch_begin(&arena, 1);
+  U64 event_count = unit_table->line_count + unit_table->seq_count;
+  for EachNode(n, D2R_InlineLines, inlines) {event_count += 2*n->scope->voff_ranges.count;}
+  D2R_LineEvent *events = push_array(scratch.arena, D2R_LineEvent, event_count);
+  RDIM_SortKey *keys = push_array(scratch.arena, RDIM_SortKey, event_count);
+  U64 event_idx = 0;
+  for EachNode(n, RDIM_LineSequenceNode, unit_table->first_seq)
+  {
+    for(U64 idx = 0; idx <= n->v.line_count; idx += 1, event_idx += 1)
+    {
+      events[event_idx].seq = &n->v;
+      events[event_idx].line_idx = idx;
+      events[event_idx].end = (idx == n->v.line_count);
+      keys[event_idx].key = n->v.voffs[idx];
+      keys[event_idx].val = &events[event_idx];
+    }
+  }
+  for EachNode(n, D2R_InlineLines, inlines)
+  {
+    for EachNode(r, RDIM_Rng1U64Node, n->scope->voff_ranges.first)
+    {
+      if(r->v.min >= r->v.max) {continue;}
+      for EachIndex(end, 2)
+      {
+        events[event_idx].inl = n;
+        events[event_idx].end = end;
+        keys[event_idx].key = end ? r->v.max : r->v.min;
+        keys[event_idx].val = &events[event_idx];
+        event_idx += 1;
+      }
+    }
+  }
+  keys = rdim_sort_key_array(scratch.arena, keys, event_idx);
+  D2R_FrameLines unit_lines = {0};
+  D2R_InlineLines *active = 0;
+  RDIM_LineSequence *seq = 0;
+  U64 line_idx = 0;
+  for(U64 idx = 0; idx < event_idx;)
+  {
+    U64 opl = idx+1;
+    for(; opl < event_idx && keys[opl].key == keys[idx].key; opl += 1) {}
+    // Half-open ranges: close old sequences/scopes before opening new ones.
+    for(B32 end = 1; end >= 0; end -= 1)
+    {
+      for(U64 i = idx; i < opl; i += 1)
+      {
+        D2R_LineEvent *e = keys[i].val;
+        if(e->end != end) {continue;}
+        if(e->inl != 0)
+        {
+          D2R_InlineLines **link = &active;
+          for(; *link != 0 && *link != e->inl && (*link)->depth < e->inl->depth; link = &(*link)->active_next) {}
+          if(end)
+          {
+            for(; *link != 0 && *link != e->inl; link = &(*link)->active_next) {}
+            if(*link != 0) {*link = e->inl->active_next;}
+          }
+          else if(*link != e->inl)
+          {
+            e->inl->active_next = *link;
+            *link = e->inl;
+          }
+        }
+        else if(!end)
+        {
+          seq = e->seq;
+          line_idx = e->line_idx;
+        }
+        else if(seq == e->seq) {seq = 0;}
+      }
+    }
+    if(opl < event_idx)
+    {
+      U64 min = keys[idx].key, max = keys[opl].key;
+      D2R_FrameLines *dst = &unit_lines;
+      for(D2R_InlineLines *n = active; n != 0; n = n->active_next)
+      {
+        d2r_frame_lines_push(scratch.arena, dst, min, max, n->call_file, n->call_line, n->call_column, 0);
+        dst = &n->lines;
+      }
+      if(seq != 0)
+      {
+        d2r_frame_lines_push(scratch.arena, dst, min, max, seq->src_file, seq->line_nums[line_idx],
+                            seq->col_nums ? seq->col_nums[2*line_idx] : 0,
+                            seq->col_nums ? seq->col_nums[2*line_idx+1] : 0);
+      }
+    }
+    idx = opl;
+  }
+  // Keep the original sequences alive for source-line breakpoint lookup, but
+  // replace the unit's forward table with the concrete frame's coordinates.
+  unit_table->first_seq = unit_table->last_seq = 0;
+  unit_table->seq_count = unit_table->line_count = unit_table->col_count = 0;
+  d2r_frame_lines_finish(arena, tables, unit_table, &unit_lines);
+  for EachNode(n, D2R_InlineLines, inlines)
+  {
+    RDIM_LineTable *table = rdim_line_table_chunk_list_push(arena, tables, 256);
+    n->scope->inline_site->line_table = table;
+    d2r_frame_lines_finish(arena, tables, table, &n->lines);
+  }
+  scratch_end(scratch);
+}
+
 ////////////////////////////////
 //~ rjf: Main Conversion Entry Point (New)
 
@@ -3073,6 +3273,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
     RDIM_SymbolChunkList procedures;
     RDIM_ScopeChunkList scopes;
     RDIM_InlineSiteChunkList inline_sites;
+    D2R_InlineLines *first_inline_lines, *last_inline_lines;
   };
   D2R_ScopeContainerMap *scope_container_map = 0;
   D2R_SubUnitWorkArtifacts *sub_unit_work_artifacts = 0;
@@ -3152,6 +3353,9 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           DW2_Attrib *framebase_attrib = &dw2_attrib_nil;
           DW2_Attrib *external_attrib = &dw2_attrib_nil;
           DW2_Attrib *decl_attrib = &dw2_attrib_nil;
+          DW2_Attrib *callfile_attrib = &dw2_attrib_nil;
+          DW2_Attrib *callline_attrib = &dw2_attrib_nil;
+          DW2_Attrib *callcolumn_attrib = &dw2_attrib_nil;
           for EachNode(n, DW2_AttribNode, tag.attribs.first)
           {
             switch(n->v.attrib_kind)
@@ -3170,10 +3374,59 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
               Case(framebase, FrameBase);
               Case(external,  External);
               Case(decl,      Declaration);
+              Case(callfile,  CallFile);
+              Case(callline,  CallLine);
+              Case(callcolumn, CallColumn);
 #undef Case
             }
           }
           
+          // Resolve identity through abstract origins/specifications, without
+          // inheriting concrete-instance ranges, locations, or declaration flags.
+          DW2_ParseCtx *type_attrib_ctx = unit_parse_ctx;
+          U64 function_info_off = start_off;
+          U64 function_unit_idx = unit_idx;
+          DW2_Tag identity_tag = tag;
+          DW2_ParseCtx *identity_ctx = unit_parse_ctx;
+          // Bound malformed or cyclic reference chains.
+          for(U64 hop = 0; hop < 32; hop += 1)
+          {
+            DW2_Attrib *reference = &dw2_attrib_nil;
+            for EachNode(n, DW2_AttribNode, identity_tag.attribs.first)
+            {
+              if(n->v.attrib_kind == DW_AttribKind_AbstractOrigin ||
+                 (n->v.attrib_kind == DW_AttribKind_Specification && reference == &dw2_attrib_nil))
+              {
+                reference = &n->v;
+              }
+            }
+            if(reference == &dw2_attrib_nil) {break;}
+            U64 identity_off = dw2_reference_info_off_from_form_val(identity_ctx, &reference->val);
+            U64 identity_unit_num = rng1u64_array_num_from_value__binary_search(&unit_info_tag_ranges_array, identity_off);
+            if(identity_unit_num == 0) {break;}
+            identity_ctx = &unit_parse_ctxs[identity_unit_num-1];
+            MemoryZeroStruct(&identity_tag);
+            if(dw2_read_tag(scratch2.arena, raw, identity_ctx, raw->sec[DW_SectionKind_Info].data, identity_off, &identity_tag) == 0) {break;}
+            if(identity_tag.kind == DW_TagKind_SubProgram)
+            {
+              function_info_off = identity_off;
+              function_unit_idx = identity_unit_num-1;
+            }
+            for EachNode(n, DW2_AttribNode, identity_tag.attribs.first)
+            {
+              switch(n->v.attrib_kind)
+              {
+                case DW_AttribKind_Name: {if(name_attrib == &dw2_attrib_nil) {name_attrib = &n->v;}}break;
+                case DW_AttribKind_LinkageName: {if(linkname_attrib == &dw2_attrib_nil) {linkname_attrib = &n->v;}}break;
+                case DW_AttribKind_Type:
+                {
+                  if(type_attrib == &dw2_attrib_nil) {type_attrib = &n->v; type_attrib_ctx = identity_ctx;}
+                }break;
+                default: {}break;
+              }
+            }
+          }
+
           ////////////////////////
           //- rjf: unpack basic attributes
           //
@@ -3210,18 +3463,18 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           //- rjf: unpack type
           //
           RDIM_Type *type = 0;
-          if(type_attrib != &dw2_attrib_nil || tag.kind == DW_TagKind_SubProgram)
+          if(type_attrib != &dw2_attrib_nil || tag.kind == DW_TagKind_SubProgram || tag.kind == DW_TagKind_InlinedSubroutine)
           {
             // rjf: functions need to get their type info from themselves; the type attrib
             // only references the return type. so, in that case, we'll use the procedure's
             // own info offset / unit index, rather than the type attribute's.
-            U64 type_info_off = start_off;
-            U64 type_unit_idx = unit_idx;
+            U64 type_info_off = function_info_off;
+            U64 type_unit_idx = function_unit_idx;
             
             // rjf: attrib -> (info_off, unit_idx)
-            if(tag.kind != DW_TagKind_SubProgram)
+            if(tag.kind != DW_TagKind_SubProgram && tag.kind != DW_TagKind_InlinedSubroutine)
             {
-              type_info_off = dw2_reference_info_off_from_form_val(unit_parse_ctx, &type_attrib->val);
+              type_info_off = dw2_reference_info_off_from_form_val(type_attrib_ctx, &type_attrib->val);
               type_unit_idx = unit_idx;
               if(!contains_1u64(unit_info_tag_range, type_info_off))
               {
@@ -4069,7 +4322,28 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
             //- rjf: inline site
             case DW_TagKind_InlinedSubroutine:
             {
-              // TODO(rjf)
+              RDIM_Scope *scope = rdim_scope_chunk_list_push(arena, &dst_artifacts->scopes, chunk_count);
+              RDIM_InlineSite *site = rdim_inline_site_chunk_list_push(arena, &dst_artifacts->inline_sites, chunk_count);
+              site->name = name;
+              site->type = type;
+              scope->inline_site = site;
+              scope->voff_ranges = ranges;
+              dst_artifacts->scopes.scope_voff_count += 2*ranges.count;
+              new_scope_open = scope;
+              D2R_InlineLines *lines = push_array(scratch.arena, D2R_InlineLines, 1);
+              lines->scope = scope;
+              lines->call_line = callline_attrib->val.u128.u64[0];
+              lines->call_column = callcolumn_attrib->val.u128.u64[0];
+              U64 file_idx = callfile_attrib->val.u128.u64[0];
+              if(callfile_attrib != &dw2_attrib_nil && file_idx < unit_line_table_headers[unit_idx].files.count)
+              {
+                lines->call_file = unit_src_file_maps[unit_idx].v[file_idx];
+              }
+              for(RDIM_Scope *s = top_parent ? top_parent->scope : 0; s != 0; s = s->parent_scope)
+              {
+                lines->depth += (s->inline_site != 0);
+              }
+              SLLQueuePush(dst_artifacts->first_inline_lines, dst_artifacts->last_inline_lines, lines);
             }break;
             
             //- rjf: variables
@@ -4305,6 +4579,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
         break;
       }
       RDIM_Unit *dst_unit = unit_from_idx_map[unit_idx];
+      D2R_InlineLines *first_inline = 0, *last_inline = 0;
       for EachIndex(work_idx, sub_unit_works_count)
       {
         if(sub_unit_works[work_idx].unit_idx == unit_idx)
@@ -4315,6 +4590,38 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           rdim_symbol_chunk_list_concat_in_place(&dst_unit->procedures, &sub_unit_work_artifacts[work_idx].procedures);
           rdim_scope_chunk_list_concat_in_place(&dst_unit->scopes, &sub_unit_work_artifacts[work_idx].scopes);
           rdim_inline_site_chunk_list_concat_in_place(&dst_unit->inline_sites, &sub_unit_work_artifacts[work_idx].inline_sites);
+          D2R_SubUnitWorkArtifacts *work = &sub_unit_work_artifacts[work_idx];
+          if(work->first_inline_lines != 0)
+          {
+            if(last_inline != 0) {last_inline->next = work->first_inline_lines;}
+            else {first_inline = work->first_inline_lines;}
+            last_inline = work->last_inline_lines;
+          }
+        }
+      }
+      if(first_inline != 0)
+      {
+        RDIM_LineTableChunkList *tables = &unit_line_table_chunk_lists[unit_idx];
+        d2r_inline_line_tables(arena, tables, dst_unit->line_table, first_inline);
+      }
+    }
+    lane_sync();
+    if(lane_idx() == 0)
+    {
+      for EachIndex(unit_idx, unit_count)
+      {
+        rdim_line_table_chunk_list_concat_in_place(all_line_tables, &unit_line_table_chunk_lists[unit_idx]);
+      }
+      // Unit tables were replaced in place; recount their rows as well as the
+      // newly joined inline tables before baking the shared arrays.
+      all_line_tables->total_seq_count = all_line_tables->total_line_count = all_line_tables->total_col_count = 0;
+      for EachNode(n, RDIM_LineTableChunkNode, all_line_tables->first)
+      {
+        for EachIndex(idx, n->count)
+        {
+          all_line_tables->total_seq_count += n->v[idx].seq_count;
+          all_line_tables->total_line_count += n->v[idx].line_count;
+          all_line_tables->total_col_count += n->v[idx].col_count;
         }
       }
     }
