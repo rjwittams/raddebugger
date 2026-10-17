@@ -1443,9 +1443,19 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
     E_TypeKind type_kind = e_type_kind_from_key(type_key);
     String8 expansion_opener_symbol = str8_lit("{");
     String8 expansion_closer_symbol = str8_lit("}");
+    if(eval.irtree.mode == E_Mode_Offset && e_space_match(eval.space, e_interpret_ctx->reg_space))
+    {
+      E_Eval value_eval = e_value_eval_from_eval(eval);
+      if(value_eval.code == E_InterpretationCode_BadRegRead) {eval.code = value_eval.code;}
+    }
+
+    if(eval.code == E_InterpretationCode_BadRegRead)
+    {
+      *out_string = str8_lit("<unavailable>");
+    }
     
     //- rjf: type evaluations -> display type string
-    if(eval.irtree.mode == E_Mode_Null && !e_type_key_match(e_type_key_zero(), eval.irtree.type_key))
+    else if(eval.irtree.mode == E_Mode_Null && !e_type_key_match(e_type_key_zero(), eval.irtree.type_key))
     {
       *out_string = e_type_string_from_key(arena, type_key);
     }
