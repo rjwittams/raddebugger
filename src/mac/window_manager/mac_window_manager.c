@@ -1300,6 +1300,11 @@ wm_get_events(Arena *arena, B32 wait)
            !([event modifierFlags] & (NSEventModifierFlagCommand|NSEventModifierFlagControl)))
         {
           mac_wm_push_text_events_from_ns_string(arena, &result, window, [event characters]);
+          for(WM_Event *text = wm_event->next; text != 0; text = text->next)
+          {
+            text->key = key;
+            text->modifiers = wm_event->modifiers;
+          }
         }
       }break;
       case NSEventTypeFlagsChanged:

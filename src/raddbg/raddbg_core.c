@@ -11524,6 +11524,19 @@ rd_init(CmdLine *cmdln)
     for EachElement(idx, rd_name_schema_info_table)
     {
       MD_Node *schema = md_tree_from_string(rd_state->arena, rd_name_schema_info_table[idx].schema)->first;
+      // Resolve platform defaults in the schema so settings UI and commands agree.
+      if(OS_MAC)
+      {
+        for(MD_Node *setting = schema->first; !md_node_is_nil(setting); setting = setting->next)
+        {
+          MD_Node *default_tag = md_tag_from_string(setting, str8_lit("default"), 0);
+          MD_Node *mac_default_tag = md_tag_from_string(setting, str8_lit("default_mac"), 0);
+          if(!md_node_is_nil(default_tag->first) && !md_node_is_nil(mac_default_tag->first))
+          {
+            default_tag->first->string = mac_default_tag->first->string;
+          }
+        }
+      }
       cfg_schema_table_insert(rd_state->arena, rd_state->cfg_schema_table, rd_name_schema_info_table[idx].name, schema);
     }
   }
