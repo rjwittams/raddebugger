@@ -630,6 +630,7 @@ d_serialized_string_from_event(Arena *arena, D_Event *event, U64 max)
     str8_serial_push_struct(scratch.arena, &srl, &event->stack_base);
     str8_serial_push_struct(scratch.arena, &srl, &event->tls_root);
     str8_serial_push_struct(scratch.arena, &srl, &event->timestamp);
+    str8_serial_push_struct(scratch.arena, &srl, &event->dbg_info_key);
     str8_serial_push_struct(scratch.arena, &srl, &event->exception_code);
     str8_serial_push_struct(scratch.arena, &srl, &event->rgba);
     str8_serial_push_struct(scratch.arena, &srl, &event->bp_flags);
@@ -666,6 +667,7 @@ d_event_from_serialized_string(Arena *arena, String8 string)
     read_off += str8_deserial_read_struct(string, read_off, &event.stack_base);
     read_off += str8_deserial_read_struct(string, read_off, &event.tls_root);
     read_off += str8_deserial_read_struct(string, read_off, &event.timestamp);
+    read_off += str8_deserial_read_struct(string, read_off, &event.dbg_info_key);
     read_off += str8_deserial_read_struct(string, read_off, &event.exception_code);
     read_off += str8_deserial_read_struct(string, read_off, &event.rgba);
     read_off += str8_deserial_read_struct(string, read_off, &event.bp_flags);
@@ -810,10 +812,11 @@ d_module_from_process_vaddr(D_Entity *process, U64 vaddr)
       child != &d_entity_nil;
       child = child->next)
   {
-    if(child->kind == D_EntityKind_Module && contains_1u64(child->vaddr_range, vaddr))
+    if(child->kind == D_EntityKind_Module &&
+       contains_1u64(child->vaddr_range, vaddr) &&
+       (result == &d_entity_nil || result->vaddr_range.min < child->vaddr_range.min))
     {
       result = child;
-      break;
     }
   }
   return result;
@@ -830,7 +833,11 @@ d_dbgi_key_from_module(D_Entity *module)
 internal DI_Key
 d_dbgi_key_from_debug_info_path(D_Entity *dbg_path)
 {
-  DI_Key dbgi_key = di_key_from_path_timestamp(dbg_path->string, dbg_path->timestamp);
+  DI_Key dbgi_key = dbg_path->dbg_info_key;
+  if(di_key_match(dbgi_key, di_key_zero()))
+  {
+    dbgi_key = di_key_from_path_timestamp(dbg_path->string, dbg_path->timestamp);
+  }
   return dbgi_key;
 }
 
@@ -1307,7 +1314,17 @@ d_entity_store_apply_events(D_EntityCtxRWStore *store, D_EventList *list)
       case D_EventKind_NewProc:
       {
         D_Entity *machine = d_entity_from_handle(d_handle_from_dmn(event->entity.machine_id, dmn_handle_zero()));
-        if(machine != &d_entity_nil)
+        D_Entity *existing_process = &d_entity_nil;
+        D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
+        for(U64 idx = 0; idx < processes.count; idx += 1)
+        {
+          if(processes.v[idx]->id == event->entity_id)
+          {
+            existing_process = processes.v[idx];
+            break;
+          }
+        }
+        if(machine != &d_entity_nil && existing_process == &d_entity_nil)
         {
           D_Entity *process = d_entity_alloc(store, machine, D_EntityKind_Process, event->arch, event->entity, (U64)event->entity_id);
           process->os = event->os;
@@ -1447,7 +1464,7 @@ d_entity_store_apply_events(D_EntityCtxRWStore *store, D_EventList *list)
         module->timestamp = event->timestamp;
         module->vaddr_range = event->vaddr_rng;
         D_Entity *first_module = d_entity_child_from_kind(process, D_EntityKind_Module);
-        if(first_module == module && process->string.size == 0)
+        if(first_module == module)
         {
           d_entity_equip_string(store, process, event->string);
         }
@@ -1469,6 +1486,7 @@ d_entity_store_apply_events(D_EntityCtxRWStore *store, D_EventList *list)
         }
         d_entity_equip_string(store, debug_info_path, path_normalized_from_string(scratch.arena, event->string));
         debug_info_path->timestamp = event->timestamp;
+        debug_info_path->dbg_info_key = event->dbg_info_key;
         scratch_end(scratch);
       }break;
       
@@ -1591,7 +1609,7 @@ d_thread_write_reg_block(D_Handle thread, void *block)
     {
       // TODO(rjf): @callstacks immediately reflect this in the call stack cache
       DMN_Handle handle_dmn = d_dmn_from_handle(thread);
-      B32 result = dmn_thread_write_reg_block(handle_dmn, block);
+      result = dmn_thread_write_reg_block(handle_dmn, block);
       if(result)
       {
         ins_atomic_u64_inc_eval(&d_ctrl_state->reg_gen);
@@ -6577,6 +6595,7 @@ d_call_stack_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_
               dst_e->vaddr_range      = src_e->vaddr_range;
               dst_e->stack_base       = src_e->stack_base;
               dst_e->timestamp        = src_e->timestamp;
+              dst_e->dbg_info_key     = src_e->dbg_info_key;
               dst_e->bp_flags         = src_e->bp_flags;
               dst_e->string           = str8_copy(scratch.arena, src_e->string);
               dst_e->os               = src_e->os;
