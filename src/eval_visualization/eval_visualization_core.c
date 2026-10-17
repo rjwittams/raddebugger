@@ -1911,18 +1911,11 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
                 
                 // rjf: scope -> # of max possible inline depth
                 U64 inline_site_count = 0;
-                for(U64 s_idx = scope_idx, s_idx_next = 0; s_idx != 0; s_idx = s_idx_next)
+                RDI_Scope *scope = rdi_inline_scope_from_scope(rdi, rdi_element_from_name_idx(rdi, Scopes, scope_idx));
+                for(RDI_Scope *s = scope; s->inline_site_idx != 0;
+                    s = rdi_inline_scope_from_scope(rdi, rdi_parent_from_scope(rdi, s)))
                 {
-                  RDI_Scope *s = rdi_element_from_name_idx(rdi, Scopes, s_idx);
-                  s_idx_next = s->parent_scope_idx;
-                  if(s->inline_site_idx != 0)
-                  {
-                    inline_site_count += 1;
-                  }
-                  else
-                  {
-                    break;
-                  }
+                  inline_site_count += 1;
                 }
                 
                 // rjf: depth in [1, max]? -> form name from inline site
@@ -1930,10 +1923,9 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
                 {
                   RDI_InlineSite *inline_site = 0;
                   U64 s_inline_depth = inline_site_count;
-                  for(U64 s_idx = scope_idx, s_idx_next = 0; s_idx != 0; s_idx = s_idx_next)
+                  for(RDI_Scope *s = scope; s->inline_site_idx != 0;
+                      s = rdi_inline_scope_from_scope(rdi, rdi_parent_from_scope(rdi, s)))
                   {
-                    RDI_Scope *s = rdi_element_from_name_idx(rdi, Scopes, s_idx);
-                    s_idx_next = s->parent_scope_idx;
                     if(s_inline_depth == ptr_data->type->depth)
                     {
                       inline_site = rdi_element_from_name_idx(rdi, InlineSites, s->inline_site_idx);
