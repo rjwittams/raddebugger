@@ -531,6 +531,9 @@ RD_VocabTable:
     ```
       x:
     {
+      @default(0) @display_name('Overlay Scrollbars') @description("Draws scrollbars over list and table contents without reserving a gutter. Source, disassembly, and memory views currently retain classic scrollbars.")
+        'overlay_scrollbars': bool,
+
       //- rjf: text rasterization settings
       @default(1) @display_name('Smooth UI Text') @description("Controls whether or not UI text is fully anti-aliased, for a smoother appearance.")
         'smooth_ui_text': bool,
