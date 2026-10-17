@@ -163,6 +163,18 @@ entry_point(CmdLine *cmdline)
             fprintf(stderr, "Could not read trap registers.\n");
             done = 1;
           }
+          else if(strcmp(mode, "call") == 0)
+          {
+            DMN_ThreadCallParams params = {0};
+            params.function_vaddr = regs.x20;
+            params.return_value_kind = DMN_ThreadCallValueKind_U64;
+            DMN_ThreadCallResult call = dmn_thread_call(arena, ctx, event->thread, &params);
+            if(!call.success || call.return_value.u64 != 42)
+            {
+              fprintf(stderr, "Target call failed: %.*s\n", (int)call.error.size, call.error.str);
+              done = 1;
+            }
+          }
         }
       }
       else if(event->kind == DMN_EventKind_ExitProcess)

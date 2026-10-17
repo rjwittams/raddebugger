@@ -31,13 +31,13 @@ modes=("$@")
 if [[ ${#modes[@]} -eq 0 ]]; then
   modes=(fault-address)
   if [[ "$(uname -m)" == arm64 ]]; then
-    modes+=(continue detach-init detach-healthy detach-moved-pc detach-trap)
+    modes+=(continue call detach-init detach-healthy detach-moved-pc detach-trap)
   fi
 fi
 for mode in "${modes[@]}"; do
   case "$mode" in
     fault-address) ;;
-    continue|detach-init|detach-healthy|detach-moved-pc|detach-trap)
+    continue|call|detach-init|detach-healthy|detach-moved-pc|detach-trap)
       if [[ "$(uname -m)" != arm64 ]]; then
         echo "Mode $mode requires an ARM64 macOS host." >&2
         exit 2
