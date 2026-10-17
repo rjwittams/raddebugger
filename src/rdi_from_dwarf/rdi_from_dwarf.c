@@ -1016,7 +1016,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
         }
         
         //- rjf: sequence ended explicitly, or file change, or end of stream? -> push to line table
-        B32 flush_line_seq = line_seq_src_file != 0 && (vm_regs.end_sequence || (emit_line && src_file != line_seq_src_file && first_line_seq_chunk != 0) || off >= unit_line_table_data.size);
+        B32 flush_line_seq = total_line_seq_count != 0 && (vm_regs.end_sequence || (emit_line && src_file != line_seq_src_file) || off >= unit_line_table_data.size);
         if(flush_line_seq)
         {
           // rjf: combine voffs/lines/cols
@@ -1045,6 +1045,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           
           // rjf: map src file -> file seq node
           FileSeqNode *file_seq_n = 0;
+          if(line_seq_src_file != 0)
           {
             U64 hash = u64_hash_from_str8(str8_struct(&line_seq_src_file));
             U64 slot_idx = hash%unit_file_seq_maps[unit_idx].slots_count;
@@ -1065,6 +1066,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           }
           
           // rjf: record sequence in file seq node
+          if(file_seq_n != 0)
           {
             RDIM_SrcFileLineMapFragment *f = push_array(scratch.arena, RDIM_SrcFileLineMapFragment, 1);
             SLLQueuePush(file_seq_n->first_line_map_fragment, file_seq_n->last_line_map_fragment, f);
@@ -1072,8 +1074,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           }
         }
 
-        // End-of-sequence resets the VM even when there were no source rows
-        // to flush, and discards any pending rows without a resolved file.
+        // End-of-sequence resets the VM even when there were no rows to flush.
         if(flush_line_seq || vm_regs.end_sequence)
         {
           // rjf: reset
