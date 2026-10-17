@@ -312,8 +312,10 @@ ui_scroll_pt(S64 idx, F32 off)
 internal void
 ui_scroll_pt_target_idx(UI_ScrollPt *v, S64 idx)
 {
-  v->off = mod_f32(v->off, 1.f) + (F32)(v->idx+(S64)v->off - idx);
+  v->off = ui_scroll_pt_offset(*v) + (F32)(v->idx - idx);
   v->idx = idx;
+  v->target_off = 0;
+  v->remainder = 0;
 }
 
 internal void
@@ -323,6 +325,49 @@ ui_scroll_pt_clamp_idx(UI_ScrollPt *v, Rng1S64 range)
   {
     S64 clamped = range.min;
     ui_scroll_pt_target_idx(v, clamped);
+  }
+  else if(v->idx == range.max && v->target_off > 0)
+  {
+    ui_scroll_pt_target_idx(v, range.max);
+  }
+}
+
+internal F32
+ui_scroll_pt_offset(UI_ScrollPt v)
+{
+  return v.target_off + v.off;
+}
+
+// delta is in the content's units (rows for lists, coordinates for pixel views).
+// Keep the large integer index out of floating-point arithmetic.
+internal void
+ui_scroll_pt_scroll(UI_ScrollPt *v, F32 delta, Rng1S64 range, B32 snap)
+{
+  if(delta == 0) { return; }
+  F32 amount = delta + (snap ? v->remainder + v->target_off : ui_scroll_pt_offset(*v));
+  S64 whole = snap ? (S64)amount : (S64)floor_f32(amount);
+  F32 fraction = amount - (F32)whole;
+  S64 next_idx = v->idx;
+  B32 clamped = 0;
+  if(whole < range.min - v->idx) { next_idx = range.min; clamped = 1; }
+  else if(whole > range.max - v->idx) { next_idx = range.max; clamped = 1; }
+  else { next_idx += whole; }
+  if((next_idx == range.min && fraction < 0) || (next_idx == range.max && fraction > 0))
+  {
+    clamped = 1;
+  }
+  if(clamped) { fraction = 0; }
+  if(snap)
+  {
+    if(next_idx != v->idx || v->target_off != 0) { ui_scroll_pt_target_idx(v, next_idx); }
+    v->remainder = fraction;
+  }
+  else
+  {
+    v->idx = next_idx;
+    v->target_off = fraction;
+    v->off = 0;
+    v->remainder = 0;
   }
 }
 
@@ -2957,13 +3002,20 @@ ui_signal_from_box(UI_Box *box)
       {
         Swap(F32, delta.x, delta.y);
       }
-      Vec2S16 delta16 = v2s16((S16)(delta.x/30.f), (S16)(delta.y/30.f));
-      if(delta.x > 0 && delta16.x == 0) { delta16.x = +1; }
-      if(delta.x < 0 && delta16.x == 0) { delta16.x = -1; }
-      if(delta.y > 0 && delta16.y == 0) { delta16.y = +1; }
-      if(delta.y < 0 && delta16.y == 0) { delta16.y = -1; }
-      sig.scroll.x += delta16.x;
-      sig.scroll.y += delta16.y;
+      if(evt->scroll_is_precise && box->flags & UI_BoxFlag_ScrollPrecise)
+      {
+        sig.scroll_px = add_2f32(sig.scroll_px, delta);
+      }
+      else
+      {
+        Vec2S16 delta16 = v2s16((S16)(delta.x/30.f), (S16)(delta.y/30.f));
+        if(delta.x > 0 && delta16.x == 0) { delta16.x = +1; }
+        if(delta.x < 0 && delta16.x == 0) { delta16.x = -1; }
+        if(delta.y > 0 && delta16.y == 0) { delta16.y = +1; }
+        if(delta.y < 0 && delta16.y == 0) { delta16.y = -1; }
+        sig.scroll.x += delta16.x;
+        sig.scroll.y += delta16.y;
+      }
       taken = 1;
     }
     

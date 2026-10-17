@@ -3367,6 +3367,7 @@ rd_view_ui(Rng2F32 rect)
           {
             scroll_list_params.flags         = UI_ScrollListFlag_All;
             scroll_list_params.row_height_px = row_height_px;
+            scroll_list_params.precise_scroll = 1;
             scroll_list_params.dim_px        = rect_dim;
             scroll_list_params.cursor_range  = r2s64(v2s64(0, 0), v2s64(0, 0));
             scroll_list_params.item_range    = r1s64(0, block_tree.total_row_count - !!implicit_root);
@@ -17276,6 +17277,7 @@ rd_frame(void)
               ui_event.paths        = str8_list_copy(ui_build_arena(), &wm_event->strings);
               ui_event.pos          = wm_event->pos;
               ui_event.delta_2f32   = wm_event->delta;
+              ui_event.scroll_is_precise = wm_event->scroll_is_precise;
               ui_event.timestamp_us = wm_event->timestamp_us;
               ui_event_list_push(scratch.arena, &ws->ui_events, &ui_event);
             }
