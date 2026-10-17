@@ -12241,7 +12241,22 @@ rd_frame(void)
               }
             }
             rd_cmd(RD_CmdKind_RunCommand, .cmd_name = cmd_name);
-            wm_text(&events, event->window, hit_char);
+            // Prefer text attached to this key press over a layout-independent guess.
+            B32 took_key_text = 0;
+            for(WM_Event *text = event->next, *text_next = 0;
+                text != 0 && text->kind == WM_EventKind_Text &&
+                text->key != WM_Key_Null && text->key == event->key &&
+                wm_window_match(text->window, event->window);
+                text = text_next)
+            {
+              text_next = text->next;
+              wm_eat_event(&events, text);
+              took_key_text = 1;
+            }
+            if(!took_key_text)
+            {
+              wm_text(&events, event->window, hit_char);
+            }
             next = event->next;
             take = 1;
             if(event->modifiers & WM_Modifier_Alt)
