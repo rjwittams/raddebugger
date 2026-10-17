@@ -281,6 +281,19 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
     }
   }
   
+  U64 first_code_vaddr = max_U64;
+  for EachNode(n, RDIM_BinarySectionNode, binary_sections.first)
+  {
+    if((n->v.flags & RDI_BinarySectionFlag_Execute) && n->v.voff_first < n->v.voff_opl)
+    {
+      first_code_vaddr = Min(first_code_vaddr, base_vaddr + n->v.voff_first);
+    }
+  }
+  if(first_code_vaddr == max_U64)
+  {
+    first_code_vaddr = 0;
+  }
+
   ////////////////////////////
   //- rjf: compute exe hash
   //
@@ -819,6 +832,8 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       LineSeqChunk *last_line_seq_chunk = 0;
       U64 total_line_seq_count = 0;
       B32 tombstoned_address = 0;
+      B32 sequence_has_row = 0;
+      B32 sequence_is_code = 0;
       for(U64 off = 0, next_off = 0; off <= unit_line_table_data.size; off = next_off)
       {
         // Emission belongs to this opcode, including after end_sequence resets.
@@ -1026,6 +1041,13 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           src_file = unit_src_file_maps[unit_idx].v[vm_regs.file_index];
         }
         
+        // Qualify the whole DWARF sequence, not individual rows or file fragments.
+        if(emit_line && !vm_regs.end_sequence && !sequence_has_row)
+        {
+          sequence_has_row = 1;
+          sequence_is_code = (vm_regs.address >= first_code_vaddr);
+        }
+
         //- rjf: sequence ended explicitly, or file change, or end of stream? -> push to line table
         B32 flush_line_seq = total_line_seq_count != 0 && (vm_regs.end_sequence || (emit_line && src_file != line_seq_src_file) || off >= unit_line_table_data.size);
         if(flush_line_seq)
@@ -1095,6 +1117,8 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           if(vm_regs.end_sequence)
           {
             emit_line = 0;
+            sequence_has_row = 0;
+            sequence_is_code = 0;
             MemoryZeroStruct(&vm_regs);
             vm_regs.file_index = 1;
             vm_regs.line = 1;
@@ -1103,7 +1127,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
         }
         
         //- rjf: emit lines
-        if(emit_line && vm_regs.address != 0 && !tombstoned_address)
+        if(emit_line && sequence_is_code && !tombstoned_address)
         {
           emit_line = 0;
           
