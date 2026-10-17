@@ -21,6 +21,7 @@ git_hash=$(git describe --always --dirty)
 git_hash_full=$(git rev-parse HEAD)
 
 # --- Compile/Link Line Definitions -------------------------------------------
+host_os=$(uname -s)
 host_arch=$(uname -m)
 target_arch=${RADDBG_TARGET_ARCH:-$host_arch}
 cc_host_flags=""
@@ -29,17 +30,27 @@ if [[ "$target_arch" == "x86_64" || "$target_arch" == "amd64" ]]; then
 fi
 cc_cflags_gcc=""
 cc_cflags_clang=${cc_sanitize}" -fdiagnostics-absolute-paths -Wno-for-loop-analysis  -Wno-incompatible-pointer-types-discards-qualifiers -Wno-initializer-overrides -Wno-compare-distinct-pointer-types -Wno-single-bit-bitfield-constant-conversion -Wno-deprecated-declarations -Wno-writable-strings -Wno-unknown-warning-option -Wno-deprecated-register -Wno-unused-local-typedef"
+if [[ "$host_os" == "Darwin" ]]; then
+  cc_cflags_clang="$cc_cflags_clang -x objective-c"
+fi
 cc_common="$cc_host_flags -I../src/ -I../local/ -D_GNU_SOURCE -g -DBUILD_GIT_HASH=\"$git_hash\" -DBUILD_GIT_HASH_FULL=\"$git_hash_full\" -Wall -Wno-missing-braces -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-value -D_USE_MATH_DEFINES -Dstrdup=_strdup -Dgnu_printf=printf"
 cc_debug="-g -O0 -DBUILD_DEBUG=1 ${cc_common}"
 cc_release="-g -O2 -DBUILD_DEBUG=0 ${cc_common}"
 cc_link="-lpthread -lm -lrt -ldl"
+if [[ "$host_os" == "Darwin" ]]; then
+  cc_link="-lpthread -lm"
+fi
 
 # --- Per-Build Settings ------------------------------------------------------
 cc_link_dll="-fPIC"
 
 # --- External Libraries ------------------------------------------------------
 # sudo apt install -y pkg-config libfreetype6-dev libx11-dev libxext-dev libgl-dev libegl-dev
-if [[ -x "$(command -v pkg-config)" ]]; then
+if [[ "$host_os" == "Darwin" ]]; then
+  cc_font_provider=""
+  cc_os_gfx="-framework Cocoa"
+  cc_render=""
+elif [[ -x "$(command -v pkg-config)" ]]; then
   cc_font_provider="$(pkg-config --cflags --libs freetype2)"  
   cc_os_gfx="$(pkg-config --cflags --libs x11 xext)"
   cc_render="$(pkg-config --cflags --libs gl egl)"
@@ -76,6 +87,7 @@ fi
 # --- Build Everything (@build_targets) ---------------------------------------
 cd build
 if [[ "${raddbg:-0}"               == "1" ]]; then didbuild=1 && $compile ../src/raddbg/raddbg_main.c $cc_icon $cc_link $cc_os_gfx $cc_render $cc_font_provider -o raddbg; fi
+if [[ "${bundle:-0}"               == "1" ]]; then didbuild=1; if [[ "$host_os" != "Darwin" ]]; then echo "[ERROR] bundle target is only supported on Darwin."; exit 1; fi; $compile ../src/raddbg/raddbg_main.c $cc_link $cc_os_gfx $cc_render $cc_font_provider -o raddbg; rm -rf "RAD Debugger.app"; mkdir -p "RAD Debugger.app/Contents/MacOS" "RAD Debugger.app/Contents/Resources"; cp ../src/mac/raddbg_Info.plist "RAD Debugger.app/Contents/Info.plist"; cp ../src/mac/raddbg.icns "RAD Debugger.app/Contents/Resources/raddbg.icns"; cp raddbg "RAD Debugger.app/Contents/MacOS/raddbg"; chmod +x "RAD Debugger.app/Contents/MacOS/raddbg"; fi
 if [[ "${raddbg_non_graphical:-0}" == "1" ]]; then didbuild=1 && $compile ../src/raddbg/raddbg_main.c -DWM_STUB=1 -DR_BACKEND=R_BACKEND_STUB $cc_link $cc_os_gfx $cc_render $cc_font_provider -o raddbg_non_graphical; fi
 if [[ "${radbin:-0}"               == "1" ]]; then didbuild=1 && $compile ../src/radbin/radbin_main.c   $cc_link -o radbin; fi
 if [[ "${radlink:-0}"              == "1" ]]; then didbuild=1 && $compile ../src/linker/lnk.c           $cc_link -o radlink; fi

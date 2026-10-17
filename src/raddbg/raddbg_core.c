@@ -5913,12 +5913,16 @@ rd_window_frame(void)
     if(dpi != ws->last_dpi)
     {
       fnt_reset();
+#if OS_MAC
+      ws->last_dpi = dpi;
+#else
       F32 current_font_size = rd_font_size();
       F32 new_font_size = current_font_size * (dpi / ws->last_dpi);
       new_font_size = Clamp(6.f, new_font_size, 72.f);
       CFG_Node *font_size_cfg = cfg_node_child_from_string_or_alloc(rd_state->cfg, window, str8_lit("font_size"));
       cfg_node_new_replacef(rd_state->cfg, font_size_cfg, "%I64u", (U64)new_font_size);
       ws->last_dpi = dpi;
+#endif
     }
     
     //- rjf: commit position
@@ -7398,6 +7402,9 @@ rd_window_frame(void)
     //
     ProfScope("build top bar")
     {
+      B32 draw_custom_title_bar_controls = wm_window_should_draw_custom_title_bar_controls(ws->os);
+      F32 native_title_bar_left_padding = wm_window_native_title_bar_left_padding(ws->os);
+      B32 draw_self_menu_bar = !wm_application_menu_bar_is_native();
       wm_window_clear_custom_border_data(ws->os);
       wm_window_push_custom_edges(ws->os, window_edge_px);
       wm_window_push_custom_title_bar(ws->os, dim_2f32(top_bar_rect).y);
@@ -7414,10 +7421,15 @@ rd_window_frame(void)
         //- rjf: left column
         {
           ui_set_next_flags(UI_BoxFlag_Clip|UI_BoxFlag_ViewScrollX|UI_BoxFlag_ViewClamp);
+          ui_set_next_min_width(native_title_bar_left_padding);
           UI_WidthFill UI_NamedRow(str8_lit("###menu_bar"))
           {
             //- rjf: icon
-            UI_Padding(ui_em(0.5f, 1.f))
+            if(native_title_bar_left_padding > 0)
+            {
+              ui_spacer(ui_px(native_title_bar_left_padding, 1));
+            }
+            else UI_Padding(ui_em(0.5f, 1.f))
             {
               UI_PrefWidth(ui_px(dim_2f32(top_bar_rect).y - ui_top_font_size()*0.8f, 1.f))
                 UI_Column
@@ -7429,9 +7441,9 @@ rd_window_frame(void)
                 ui_image(texture, R_Tex2DSampleKind_Linear, r2f32p(0, 0, texture_dim.x, texture_dim.y), v4f32(1, 1, 1, 1), 0, str8_lit(""));
               }
             }
-            
-            //- rjf: menu items
-            if(dim_2f32(top_bar_rect).x > ui_top_font_size()*60)
+
+            //- menu items
+            if(draw_self_menu_bar && dim_2f32(top_bar_rect).x > ui_top_font_size()*60)
             {
               ui_set_next_flags(UI_BoxFlag_DrawBackground);
               UI_PrefWidth(ui_children_sum(1)) UI_Row UI_PrefWidth(ui_text_dim(20, 1)) UI_GroupKey(menu_bar_group_key)
@@ -7962,9 +7974,10 @@ rd_window_frame(void)
               rd_cmd(RD_CmdKind_Exit);
             }
           }
-          
+
           // rjf: min/max/close buttons
-          UI_TagF("implicit")
+          if(draw_custom_title_bar_controls)
+            UI_TagF("implicit")
             UI_TagF("weak")
             UI_VisualMargin(ui_top_font_size()*0.5f)
             UI_CornerRadius(ui_top_font_size()*0.9f)
@@ -11254,8 +11267,155 @@ rd_next_view_cmd(RD_Cmd **cmd)
   return result;
 }
 
+internal void
+rd_wm_set_main_menu(void)
+{
+  typedef struct RD_AppMenuItemSpec RD_AppMenuItemSpec;
+  struct RD_AppMenuItemSpec
+  {
+    B32 separator;
+    RD_CmdKind kind;
+  };
+  typedef struct RD_AppMenuSpec RD_AppMenuSpec;
+  struct RD_AppMenuSpec
+  {
+    String8 label;
+    U64 item_count;
+    RD_AppMenuItemSpec *items;
+  };
+
+#define RD_MenuCmd(k) {0, k}
+#define RD_MenuSep()  {1, RD_CmdKind_Null}
+  RD_AppMenuItemSpec file_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_Open),
+    RD_MenuCmd(RD_CmdKind_OpenSourceFileFromDebugInfo),
+    RD_MenuCmd(RD_CmdKind_OpenCrashDump),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_NewProject),
+    RD_MenuCmd(RD_CmdKind_OpenProject),
+    RD_MenuCmd(RD_CmdKind_OpenRecentProject),
+    RD_MenuCmd(RD_CmdKind_SaveProject),
+    RD_MenuCmd(RD_CmdKind_ProjectSettings),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_NewUser),
+    RD_MenuCmd(RD_CmdKind_OpenUser),
+    RD_MenuCmd(RD_CmdKind_SaveUser),
+    RD_MenuCmd(RD_CmdKind_UserSettings),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_Exit),
+  };
+  RD_AppMenuItemSpec window_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_OpenWindow),
+    RD_MenuCmd(RD_CmdKind_CloseWindow),
+    RD_MenuCmd(RD_CmdKind_ToggleFullscreen),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_WindowSettings),
+  };
+  RD_AppMenuItemSpec panel_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_NewPanelUp),
+    RD_MenuCmd(RD_CmdKind_NewPanelDown),
+    RD_MenuCmd(RD_CmdKind_NewPanelRight),
+    RD_MenuCmd(RD_CmdKind_NewPanelLeft),
+    RD_MenuCmd(RD_CmdKind_ClosePanel),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_NextPanel),
+    RD_MenuCmd(RD_CmdKind_PrevPanel),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_TabBarTop),
+    RD_MenuCmd(RD_CmdKind_TabBarBottom),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_ResetToDefaultPanels),
+  };
+  RD_AppMenuItemSpec tab_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_OpenTab),
+    RD_MenuCmd(RD_CmdKind_CloseTab),
+    RD_MenuCmd(RD_CmdKind_DuplicateTab),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_MoveTabLeft),
+    RD_MenuCmd(RD_CmdKind_MoveTabRight),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_NextTab),
+    RD_MenuCmd(RD_CmdKind_PrevTab),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_TabSettings),
+  };
+  RD_AppMenuItemSpec targets_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_AddTarget),
+    RD_MenuCmd(RD_CmdKind_LaunchAndRun),
+    RD_MenuCmd(RD_CmdKind_LaunchAndStepInto),
+  };
+  RD_AppMenuItemSpec control_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_Run),
+    RD_MenuCmd(RD_CmdKind_KillAll),
+    RD_MenuCmd(RD_CmdKind_Restart),
+    RD_MenuCmd(RD_CmdKind_Halt),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_StepInto),
+    RD_MenuCmd(RD_CmdKind_StepOver),
+    RD_MenuCmd(RD_CmdKind_StepOut),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_Attach),
+    RD_MenuCmd(RD_CmdKind_Detach),
+  };
+  RD_AppMenuItemSpec help_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_OpenPalette),
+  };
+  RD_AppMenuSpec specs[] =
+  {
+    {str8_lit_comp("File"),    ArrayCount(file_items),    file_items},
+    {str8_lit_comp("Window"),  ArrayCount(window_items),  window_items},
+    {str8_lit_comp("Panel"),   ArrayCount(panel_items),   panel_items},
+    {str8_lit_comp("Tab"),     ArrayCount(tab_items),     tab_items},
+    {str8_lit_comp("Targets"), ArrayCount(targets_items), targets_items},
+    {str8_lit_comp("Control"), ArrayCount(control_items), control_items},
+    {str8_lit_comp("Help"),    ArrayCount(help_items),    help_items},
+  };
+#undef RD_MenuSep
+#undef RD_MenuCmd
+
+  WM_MenuArray menu_array = {0};
+  menu_array.count = ArrayCount(specs);
+  menu_array.menus = push_array(rd_state->arena, WM_Menu, menu_array.count);
+  for(U64 menu_idx = 0; menu_idx < menu_array.count; menu_idx += 1)
+  {
+    RD_AppMenuSpec *spec = &specs[menu_idx];
+    WM_Menu *menu = &menu_array.menus[menu_idx];
+    menu->label = spec->label;
+    menu->item_count = spec->item_count;
+    menu->items = push_array(rd_state->arena, WM_MenuItem, menu->item_count);
+    for(U64 item_idx = 0; item_idx < menu->item_count; item_idx += 1)
+    {
+      RD_AppMenuItemSpec *item_spec = &spec->items[item_idx];
+      WM_MenuItem *item = &menu->items[item_idx];
+      if(item_spec->separator)
+      {
+        item->kind = WM_MenuItemKind_Separator;
+      }
+      else
+      {
+        RD_CmdKindInfo *info = &rd_cmd_kind_info_table[item_spec->kind];
+        item->kind = WM_MenuItemKind_Command;
+        item->command_name = info->string;
+        item->label = rd_display_from_code_name(info->string);
+        if(item->label.size == 0)
+        {
+          item->label = info->string;
+        }
+      }
+    }
+  }
+  wm_set_main_menu(menu_array);
+}
+
 ////////////////////////////////
-//~ rjf: Main Layer Top-Level Calls
+//~ Main Layer Top-Level Calls
 
 #if !defined(STBI_INCLUDE_STB_IMAGE_H)
 # define STB_IMAGE_IMPLEMENTATION
@@ -11275,6 +11435,7 @@ rd_init(CmdLine *cmdln)
   rd_state->quit_after_success = (cmd_line_has_flag(cmdln, str8_lit("quit_after_success")) ||
                                   cmd_line_has_flag(cmdln, str8_lit("q")));
   rd_state->override_focus_on_stop = (cmd_line_has_flag(cmdln, s("no_focus_on_stop")));
+  rd_state->mac_window_decorations = 1;
   rd_state->user_path_arena = arena_alloc();
   rd_state->project_path_arena = arena_alloc();
   rd_state->theme_path_arena = arena_alloc();
@@ -11360,8 +11521,10 @@ rd_init(CmdLine *cmdln)
       }
     }
   }
-  
-  // rjf: set up top-level config entity trees & tables
+
+  rd_wm_set_main_menu();
+
+  // set up top-level config entity trees & tables
   {
     rd_state->cfg = cfg_state_alloc();
     cfg_ctx_select(cfg_state_ctx(rd_state->cfg));
@@ -12150,6 +12313,33 @@ rd_frame(void)
   }
   
   //////////////////////////////
+  //////////////////////////////
+  //- apply window manager preferences from config
+  //
+  {
+    local_persist B32 initialized = 0;
+    local_persist B32 last_mac_window_decorations = 0;
+    local_persist B32 last_mac_native_menu_bar = 0;
+    B32 mac_window_decorations = rd_state->mac_window_decorations;
+    B32 mac_native_menu_bar = rd_state->mac_native_menu_bar;
+    if(!initialized || last_mac_window_decorations != mac_window_decorations)
+    {
+      wm_set_preferred_window_decorations(mac_window_decorations);
+      last_mac_window_decorations = mac_window_decorations;
+    }
+    if(!initialized || last_mac_native_menu_bar != mac_native_menu_bar)
+    {
+      wm_set_preferred_native_menu_bar(mac_native_menu_bar);
+      if(wm_application_menu_bar_is_native())
+      {
+        rd_wm_set_main_menu();
+      }
+      last_mac_native_menu_bar = mac_native_menu_bar;
+    }
+    initialized = 1;
+  }
+
+  //////////////////////////////
   //- rjf: consume events
   //
   ProfScope("consume events")
@@ -12186,8 +12376,26 @@ rd_frame(void)
         rd_cmd(RD_CmdKind_Exit);
       }
       
+      if(!take && event->kind == WM_EventKind_MenuCommand && event->string.size != 0)
+      {
+        take = 1;
+        if(ws != &rd_nil_window_state && str8_match(event->string, str8_lit("window_close_menu"), 0))
+        {
+          UI_State *last_ui = ui_get_selected_state();
+          ui_select_state(ws->ui);
+          UI_Key close_ctx_menu_key = ui_key_from_stringf(ui_key_zero(), "###close_ctx_menu");
+          ui_ctx_menu_open(close_ctx_menu_key, ui_key_zero(), event->pos);
+          ui_select_state(last_ui);
+        }
+        else
+        {
+          rd_cmd(RD_CmdKind_RunCommand, .cmd_name = event->string);
+        }
+        rd_request_frame();
+      }
+
       //- rjf: try menu bar operations
-      if(rd_state->alt_menu_bar_enabled && wm_window_is_focused(ws->os))
+      if(rd_state->alt_menu_bar_enabled && wm_window_is_focused(ws->os) && !wm_application_menu_bar_is_native())
       {
         if(!take && event->kind == WM_EventKind_Press && event->key == WM_Key_Alt && event->modifiers == 0 && event->is_repeat == 0)
         {
@@ -13363,6 +13571,8 @@ rd_frame(void)
     // but cannot evaluate before this point, so we need to prep for next frame
     //
     rd_state->alt_menu_bar_enabled = rd_setting_b32_from_name(s("focus_menu_bar_with_alt"));
+    rd_state->mac_window_decorations = rd_setting_b32_from_name(s("mac_window_decorations"));
+    rd_state->mac_native_menu_bar = rd_setting_b32_from_name(s("mac_native_menu_bar"));
     rd_state->use_default_stl_type_views = rd_setting_b32_from_name(s("use_default_stl_type_views"));
     rd_state->use_default_ue_type_views = rd_setting_b32_from_name(s("use_default_ue_type_views"));
     rd_state->auto_download_debug_info = rd_setting_b32_from_name(s("auto_download_debug_info"));
@@ -13379,13 +13589,17 @@ rd_frame(void)
     ////////////////////////////
     //- rjf: do installation/uninstallation of app
     //
-    B32 installed = rd_setting_b32_from_name(s("install_to_system"));
-    B32 last_installed = rd_state->installed;
-    if(installed != last_installed)
+#if !OS_MAC
     {
-      sh_install_or_uninstall_self(1, installed);
-      rd_state->installed = installed;
+      B32 installed = rd_setting_b32_from_name(s("install_to_system"));
+      B32 last_installed = rd_state->installed;
+      if(installed != last_installed)
+      {
+        sh_install_or_uninstall_self(1, installed);
+        rd_state->installed = installed;
+      }
     }
+#endif
     
     ////////////////////////////
     //- rjf: send update check if needed
