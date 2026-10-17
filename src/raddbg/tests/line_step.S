@@ -39,7 +39,12 @@ Lhidden_branch:
   .loc 1 20 0
   nop
   .loc 1 30 0
+#ifdef LEAF_SAME_LINE
+  adr x10, SYMBOL(leaf)
+  blr x10
+#else
   bl SYMBOL(leaf)
+#endif
   .loc 1 SPECIAL_LINE 0
   nop
   .loc 1 50 0
@@ -81,7 +86,12 @@ Lhidden_branch:
   .loc 1 20 0
   nop
   .loc 1 30 0
+#ifdef LEAF_SAME_LINE
+  leaq SYMBOL(leaf)(%rip), %rax
+  call *%rax
+#else
   call SYMBOL(leaf)
+#endif
   .loc 1 SPECIAL_LINE 0
   nop
   .loc 1 50 0
@@ -101,7 +111,11 @@ Lhidden_branch:
 .globl SYMBOL(leaf)
 SYMBOL(leaf):
 .cfi_startproc
+#ifdef LEAF_SAME_LINE
+  .loc 1 30 0
+#else
   .loc 1 SPECIAL_LINE 0
+#endif
   nop
   .loc 1 40 0
   nop
