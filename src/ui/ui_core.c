@@ -474,6 +474,20 @@ ui_get_selected_state(void)
 ////////////////////////////////
 //~ rjf: Implicit State Accessors/Mutators
 
+//- Scrollbar style
+
+internal void
+ui_set_active_scroll_bar_style(UI_ScrollBarStyle style)
+{
+  ui_state->scroll_bar_style = style;
+}
+
+internal UI_ScrollBarStyle
+ui_active_scroll_bar_style(void)
+{
+  return ui_state->scroll_bar_style;
+}
+
 //- rjf: per-frame info
 
 internal Arena *
