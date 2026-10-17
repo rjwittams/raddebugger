@@ -298,6 +298,8 @@ RD_VocabTable:
         'background_blur': bool,
       
       //- rjf: appearance settings
+      @default(0) @display_name('Overlay Scrollbars') @description("Draws scrollbars over list, table, source, disassembly, and memory contents without reserving a gutter.")
+        'overlay_scrollbars': bool,
       @default(1) @display_name('Drop Shadows') @description("Controls whether or not drop shadows are drawn.")
         'drop_shadows': bool,
       @default(1.f) @display_name('Rounded Corner Amount') @description("Controls the degree to which UI corners are rounded.")

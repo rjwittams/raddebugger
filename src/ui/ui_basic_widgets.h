@@ -57,6 +57,8 @@ struct UI_ScrollListParams
   Rng2S64 cursor_range;
   Rng1S64 item_range;
   B32 cursor_min_is_empty_selection[Axis2_COUNT];
+  B32 precise_scroll;
+  B32 snap_scroll;
 };
 
 typedef struct UI_ScrollListSignal UI_ScrollListSignal;
@@ -155,6 +157,7 @@ internal U64 ui_scroll_list_row_from_item(UI_ScrollListRowBlockArray *blocks, U6
 internal U64 ui_scroll_list_item_from_row(UI_ScrollListRowBlockArray *blocks, U64 row);
 
 internal UI_ScrollPt ui_scroll_bar(Axis2 axis, UI_Size off_axis_size, UI_ScrollPt pt, Rng1S64 idx_range, S64 view_num_indices);
+internal UI_ScrollPt ui_scroll_bar_styled(Axis2 axis, UI_Size off_axis_size, UI_ScrollBarStyle style, F32 vis_t, UI_ScrollPt pt, Rng1S64 idx_range, S64 view_num_indices);
 internal void ui_scroll_list_begin(UI_ScrollListParams *params, UI_ScrollPt *scroll_pt_out, Vec2S64 *cursor_out, Vec2S64 *mark_out, Rng1S64 *visible_row_range_out, UI_ScrollListSignal *signal_out);
 internal void ui_scroll_list_end(void);
 
