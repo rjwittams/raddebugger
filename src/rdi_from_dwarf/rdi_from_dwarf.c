@@ -364,6 +364,17 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       Rng1U64 unit_info_range = unit_info_ranges->v[idx];
       U64 bytes_read = dw2_read_unit_header(str8_substr(data, unit_info_range), 0, &unit_headers[idx]);
       unit_info_tag_ranges[idx] = r1u64(unit_info_range.min + bytes_read, unit_info_range.max);
+      DW2_UnitHeader *hdr = &unit_headers[idx];
+      B32 supported_kind = hdr->version != DW_Version_5 ||
+                           hdr->kind == DW_CompUnitKind_Compile || hdr->kind == DW_CompUnitKind_Partial ||
+                           hdr->kind == DW_CompUnitKind_Skeleton || hdr->kind == DW_CompUnitKind_SplitCompile;
+      if(bytes_read == 0 || bytes_read > dim_1u64(unit_info_range) ||
+         hdr->version < DW_Version_2 || hdr->version > DW_Version_5 || !supported_kind)
+      {
+        // Type-unit header layouts and signature references are not supported.
+        // Resume at the next length-delimited unit, not at a guessed DIE offset.
+        unit_info_tag_ranges[idx].min = unit_info_range.max;
+      }
     }
   }
   lane_sync();
@@ -567,6 +578,9 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
     {
       DW2_UnitHeader *hdr = &unit_headers[unit_idx];
       DW2_ParseCtx *ctx = &unit_parse_ctxs[unit_idx];
+      Rng1U64 tag_range = unit_info_tag_ranges[unit_idx];
+      if(tag_range.min == tag_range.max) {continue;}
+      String8 unit_data = str8_prefix(raw->sec[DW_SectionKind_Info].data, tag_range.max);
       
       // rjf: equip initial info - just enough to do a bootstrapping parse of the root tag
       dw2_parse_ctx_equip_unit_header(ctx, hdr, unit_info_ranges->v[unit_idx].min);
@@ -587,16 +601,33 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       // (all of the above is also true for RngListsBase)
       //
       DW2_Tag root_tag_bootstrap = {0};
-      dw2_read_tag(scratch.arena, raw, ctx, raw->sec[DW_SectionKind_Info].data, unit_info_tag_ranges[unit_idx].min, &root_tag_bootstrap);
+      B32 good_unit = dw2_read_tag(scratch.arena, raw, ctx, unit_data, tag_range.min, &root_tag_bootstrap) != 0;
       
       // rjf: equip info extracted from bootstrapping parse
       dw2_parse_ctx_equip_unit_root_tag(ctx, &root_tag_bootstrap, offset_tables);
       
       // rjf: do non-bootstrapping parse
-      dw2_read_tag(scratch.arena, raw, ctx, raw->sec[DW_SectionKind_Info].data, unit_info_tag_ranges[unit_idx].min, &unit_root_tags[unit_idx]);
+      good_unit &= dw2_read_tag(scratch.arena, raw, ctx, unit_data, tag_range.min, &unit_root_tags[unit_idx]) != 0;
       
       // rjf: equip info extracted from non-bootstrapping parse
       dw2_parse_ctx_equip_unit_root_tag(ctx, &unit_root_tags[unit_idx], offset_tables);
+
+      // Validate every DIE before any conversion pass publishes this unit.
+      // Sibling links must not skip unreadable children during validation.
+      for(U64 off = tag_range.min; good_unit && off < tag_range.max;)
+      {
+        Temp scratch2 = scratch_begin(&scratch.arena, 1);
+        DW2_Tag tag = {0};
+        U64 bytes_read = dw2_read_tag(scratch2.arena, raw, ctx, unit_data, off, &tag);
+        good_unit = bytes_read != 0 && bytes_read <= tag_range.max-off;
+        off += bytes_read;
+        scratch_end(scratch2);
+      }
+      if(!good_unit)
+      {
+        unit_info_tag_ranges[unit_idx].min = tag_range.max;
+        MemoryZeroStruct(&unit_root_tags[unit_idx]);
+      }
     }
   }
   lane_sync();
@@ -3190,7 +3221,10 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       unit_from_idx_map = push_array(scratch.arena, RDIM_Unit *, unit_count);
       for EachIndex(unit_idx, unit_count)
       {
-        unit_from_idx_map[unit_idx] = rdim_unit_chunk_list_push(arena, all_units, unit_count);
+        if(unit_info_tag_ranges[unit_idx].min < unit_info_tag_ranges[unit_idx].max)
+        {
+          unit_from_idx_map[unit_idx] = rdim_unit_chunk_list_push(arena, all_units, unit_count);
+        }
       }
     }
     lane_sync_u64(&all_units, 0);
@@ -3210,6 +3244,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       DW2_ParseCtx *unit_parse_ctx = &unit_parse_ctxs[unit_idx];
       Rng1U64 unit_info_tag_range = unit_info_tag_ranges[unit_idx];
       RDIM_Unit *dst_unit = unit_from_idx_map[unit_idx];
+      if(dst_unit == 0) {continue;}
       
       //- rjf: unpack unit's root tag
       DW2_Tag *unit_root_tag = &unit_root_tags[unit_idx];
@@ -4739,6 +4774,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
         break;
       }
       RDIM_Unit *dst_unit = unit_from_idx_map[unit_idx];
+      if(dst_unit == 0) {continue;}
       D2R_InlineLines *first_inline = 0, *last_inline = 0;
       for EachIndex(work_idx, sub_unit_works_count)
       {
