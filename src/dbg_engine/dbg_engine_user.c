@@ -1095,9 +1095,9 @@ d_lines_from_dbgi_key_path_voff(Arena *arena, DI_Key dbgi_key, String8 dbgi_path
     LineTableNode *top_line_table = 0;
     RDI_Scope *scope = rdi_scope_from_voff(rdi, voff);
     {
-      for(RDI_Scope *s = scope;
+      for(RDI_Scope *s = rdi_inline_scope_from_scope(rdi, scope);
           s->inline_site_idx != 0;
-          s = rdi_element_from_name_idx(rdi, Scopes, s->parent_scope_idx))
+          s = rdi_inline_scope_from_scope(rdi, rdi_parent_from_scope(rdi, s)))
       {
         RDI_InlineSite *inline_site = rdi_element_from_name_idx(rdi, InlineSites, s->inline_site_idx);
         if(inline_site->line_table_idx != 0)
