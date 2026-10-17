@@ -1443,8 +1443,6 @@ ui_scroll_bar(Axis2 axis, UI_Size off_axis_size, UI_ScrollPt pt, Rng1S64 idx_ran
 }
 
 thread_static UI_ScrollPt *ui_scroll_list_scroll_pt_ptr = 0;
-thread_static F32 ui_scroll_list_scroll_bar_dim_px = 0;
-thread_static Vec2F32 ui_scroll_list_dim_px = {0};
 thread_static Rng1S64 ui_scroll_list_scroll_idx_rng = {0};
 thread_static F32 ui_scroll_list_row_height_px = 0;
 thread_static B32 ui_scroll_list_snap_scroll = 0;
@@ -1558,18 +1556,8 @@ ui_scroll_list_begin(UI_ScrollListParams *params, UI_ScrollPt *scroll_pt, Vec2S6
     signal_out->cursor_moved = moved;
   }
   
-  //- rjf: determine ranges & limits
-  F32 visible_offset = ui_scroll_pt_offset(*scroll_pt);
-  Rng1S64 visible_row_range = r1s64(scroll_pt->idx + (S64)floor_f32(visible_offset),
-                                 scroll_pt->idx + (S64)floor_f32(visible_offset) + num_possible_visible_rows + 2);
-  visible_row_range.min = clamp_1s64(params->item_range, visible_row_range.min);
-  visible_row_range.max = clamp_1s64(params->item_range, visible_row_range.max);
-  *visible_row_range_out = visible_row_range;
-  
   //- rjf: store thread-locals
-  ui_scroll_list_scroll_bar_dim_px = ui_bottom_font_size()*1.5f;
   ui_scroll_list_scroll_pt_ptr = scroll_pt;
-  ui_scroll_list_dim_px = params->dim_px;
   ui_scroll_list_scroll_idx_rng = scroll_row_idx_range;
   ui_scroll_list_row_height_px = params->row_height_px;
   ui_scroll_list_snap_scroll = params->snap_scroll;
@@ -1581,9 +1569,18 @@ ui_scroll_list_begin(UI_ScrollListParams *params, UI_ScrollPt *scroll_pt, Vec2S6
     container_box = ui_build_box_from_key(0, ui_key_zero());
   }
   
-  //- rjf: build scrollable container
-  UI_Box *scrollable_container_box = &ui_nil_box;
-  UI_Parent(container_box) UI_ChildLayoutAxis(Axis2_Y) UI_FixedWidth(params->dim_px.x-ui_scroll_list_scroll_bar_dim_px) UI_FixedHeight(params->dim_px.y)
+  // Build bars and content together so overlays receive hits above the rows.
+  UI_ScrollRegion region = ui_scroll_region_layout(ui_scroll_region_params(r2f32p(0, 0, params->dim_px.x, params->dim_px.y),
+                                                                          UI_ScrollAxisPolicy_Off, UI_ScrollAxisPolicy_Always));
+  UI_ScrollRegionAxis axes[Axis2_COUNT] = {0};
+  axes[Axis2_Y] = (UI_ScrollRegionAxis){*scroll_pt, scroll_row_idx_range, num_possible_visible_rows};
+  UI_Key key = ui_key_from_string(ui_active_seed_key(), str8_lit("###sp"));
+  UI_ScrollRegionSignal region_sig = ui_scroll_region_build(container_box, key, &region, axes,
+                                                          UI_BoxFlag_AllowOverflowY|UI_BoxFlag_Scroll|
+                                                          (params->precise_scroll ? UI_BoxFlag_ScrollPrecise : 0));
+  *scroll_pt = region_sig.position.y;
+  UI_Box *scrollable_container_box = region_sig.content_box;
+  scrollable_container_box->child_layout_axis = Axis2_Y;
   {
     UI_BoxFlags fade_flags = 0;
     if(scroll_pt->idx > params->item_range.min)
@@ -1594,22 +1591,18 @@ ui_scroll_list_begin(UI_ScrollListParams *params, UI_ScrollPt *scroll_pt, Vec2S6
     {
       fade_flags |= UI_BoxFlag_DrawFadeBottom;
     }
-    scrollable_container_box = ui_build_box_from_stringf(fade_flags|UI_BoxFlag_Clip|UI_BoxFlag_AllowOverflowY|UI_BoxFlag_Scroll|
-                                                       (params->precise_scroll ? UI_BoxFlag_ScrollPrecise : 0), "###sp");
-    scrollable_container_box->view_off.y = scrollable_container_box->view_off_target.y = params->row_height_px*(visible_offset - floor_f32(visible_offset));
+    scrollable_container_box->flags |= fade_flags;
   }
   
-  //- rjf: build vertical scroll bar
-  UI_Parent(container_box) UI_Focus(UI_FocusKind_Null)
-  {
-    ui_set_next_fixed_width(ui_scroll_list_scroll_bar_dim_px);
-    ui_set_next_fixed_height(ui_scroll_list_dim_px.y);
-    *ui_scroll_list_scroll_pt_ptr = ui_scroll_bar(Axis2_Y,
-                                                  ui_px(ui_scroll_list_scroll_bar_dim_px, 1.f),
-                                                  *ui_scroll_list_scroll_pt_ptr,
-                                                  scroll_row_idx_range,
-                                                  num_possible_visible_rows);
-  }
+  // Apply thumb movement to this frame's virtualized rows as well.
+  F32 visible_offset = ui_scroll_pt_offset(*scroll_pt);
+  scrollable_container_box->view_off.y = scrollable_container_box->view_off_target.y = params->row_height_px*(visible_offset - floor_f32(visible_offset));
+  //- rjf: determine ranges & limits
+  Rng1S64 visible_row_range = r1s64(scroll_pt->idx + (S64)floor_f32(visible_offset),
+                                 scroll_pt->idx + (S64)floor_f32(visible_offset) + num_possible_visible_rows + 2);
+  visible_row_range.min = clamp_1s64(params->item_range, visible_row_range.min);
+  visible_row_range.max = clamp_1s64(params->item_range, visible_row_range.max);
+  *visible_row_range_out = visible_row_range;
   
   //- rjf: begin scrollable region
   ui_push_parent(container_box);
