@@ -817,6 +817,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       LineSeqChunk *first_line_seq_chunk = 0;
       LineSeqChunk *last_line_seq_chunk = 0;
       U64 total_line_seq_count = 0;
+      B32 tombstoned_address = 0;
       for(U64 off = 0, next_off = 0; off <= unit_line_table_data.size; off = next_off)
       {
         // Emission belongs to this opcode, including after end_sequence resets.
@@ -977,6 +978,12 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                   op_read_off += str8_deserial_read(ext_op_data, op_read_off, &addr, line_table_header->addr_size, line_table_header->addr_size);
                   vm_regs.address = addr;
                   vm_regs.vliw_op_index = 0;
+                  U64 tombstone = max_U64;
+                  if(line_table_header->addr_size > 0 && line_table_header->addr_size < sizeof(U64))
+                  {
+                    tombstone >>= 8*(sizeof(U64) - line_table_header->addr_size);
+                  }
+                  tombstoned_address = (addr == tombstone);
                 }break;
                 case DW_ExtOpcode_DefineFile:
                 {
@@ -1095,7 +1102,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
         }
         
         //- rjf: emit lines
-        if(emit_line && vm_regs.address != 0)
+        if(emit_line && vm_regs.address != 0 && !tombstoned_address)
         {
           emit_line = 0;
           
