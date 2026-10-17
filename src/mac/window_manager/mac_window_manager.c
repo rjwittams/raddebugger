@@ -68,6 +68,10 @@
 {
   if(window != 0)
   {
+    if(mac_wm_state->left_mouse_window == window)
+    {
+      mac_wm_cancel_title_bar_double_click();
+    }
     window->lose_focus_requested = 1;
   }
 }
@@ -461,6 +465,40 @@ mac_wm_window_pos_is_title_bar_client_area(MAC_WM_Window *window, Vec2F32 pos)
   return result;
 }
 
+internal B32
+mac_wm_window_pos_is_title_bar_background(MAC_WM_Window *window, Vec2F32 pos)
+{
+  B32 result = (window != 0 && window->custom_border &&
+                !wm_window_is_fullscreen(mac_wm_handle_from_window(window)) &&
+                0 <= pos.x && pos.x < [[window->ns_window contentView] bounds].size.width &&
+                0 <= pos.y && pos.y < window->custom_border_title_thickness &&
+                !mac_wm_window_pos_is_native_title_bar_control_area(window, pos) &&
+                !mac_wm_window_pos_is_title_bar_client_area(window, pos));
+  return result;
+}
+
+internal void
+mac_wm_cancel_title_bar_double_click(void)
+{
+  [mac_wm_state->title_bar_double_click_event release];
+  mac_wm_state->title_bar_double_click_event = 0;
+}
+
+internal void
+mac_wm_window_title_bar_double_click(MAC_WM_Window *window)
+{
+  NSString *action = [[NSUserDefaults standardUserDefaults] stringForKey:@"AppleActionOnDoubleClick"];
+  // AppKit exposes no public Fill action. Use Zoom as a fallback for that preference.
+  if(action == 0 || [action isEqualToString:@"Maximize"] || [action isEqualToString:@"Fill"])
+  {
+    [window->ns_window performZoom:0];
+  }
+  else if([action isEqualToString:@"Minimize"])
+  {
+    [window->ns_window performMiniaturize:0];
+  }
+}
+
 internal Rng2F32
 mac_wm_rect_from_ns_rect(NSRect rect)
 {
@@ -699,6 +737,12 @@ mac_wm_window_alloc(void)
 internal void
 mac_wm_window_release(MAC_WM_Window *window)
 {
+  if(mac_wm_state->left_mouse_window == window)
+  {
+    mac_wm_cancel_title_bar_double_click();
+    mac_wm_state->left_mouse_owner = MAC_WM_MouseOwner_None;
+    mac_wm_state->left_mouse_window = 0;
+  }
   MAC_WM_Window *focus_after_close = 0;
   if(mac_wm_state->focused_window == window)
   {
@@ -1298,19 +1342,68 @@ wm_get_events(Arena *arena, B32 wait)
         Vec2F32 pos = mac_wm_client_pos_from_ns_point(window, [event locationInWindow]);
         B32 handled_by_native_title_bar_control = (window != 0 &&
                                                    mac_wm_window_pos_is_native_title_bar_control_area(window, pos));
-        B32 handled_by_chrome = 0;
-        if(window != 0 &&
-           window->custom_border &&
-           type == NSEventTypeLeftMouseDown &&
-           pos.y <= window->custom_border_title_thickness &&
-           !mac_wm_window_pos_is_native_title_bar_control_area(window, pos) &&
-           !mac_wm_window_pos_is_title_bar_client_area(window, pos))
+        B32 send_to_client = !handled_by_native_title_bar_control;
+        if(type == NSEventTypeLeftMouseDown)
         {
-          [window->ns_window performWindowDragWithEvent:event];
-          handled_by_chrome = 1;
-          send_to_nsapp = 0;
+          B32 follows_title_bar_click = (mac_wm_state->left_mouse_owner == MAC_WM_MouseOwner_TitleBar &&
+                                          mac_wm_state->left_mouse_window == window);
+          // WindowServer dragging may omit mouse-up. A new press always replaces ownership.
+          mac_wm_cancel_title_bar_double_click();
+          MAC_WM_MouseOwner owner = MAC_WM_MouseOwner_Client;
+          if(window != 0)
+          {
+            NSView *content = [window->ns_window contentView];
+            NSView *frame = [content superview];
+            NSPoint hit_pos = [event locationInWindow];
+            if([frame superview] != 0)
+            {
+              hit_pos = [[frame superview] convertPoint:hit_pos fromView:0];
+            }
+            NSView *hit = [frame hitTest:hit_pos];
+            // Leave native buttons and resize borders to AppKit, without guessing border widths.
+            if(handled_by_native_title_bar_control || ![hit isDescendantOf:content])
+            {
+              owner = MAC_WM_MouseOwner_Native;
+            }
+            else if(mac_wm_window_pos_is_title_bar_background(window, pos))
+            {
+              owner = MAC_WM_MouseOwner_TitleBar;
+            }
+          }
+          mac_wm_state->left_mouse_owner = owner;
+          mac_wm_state->left_mouse_window = window;
+          if(owner == MAC_WM_MouseOwner_TitleBar)
+          {
+            if(follows_title_bar_click && [event clickCount] == 2)
+            {
+              // Defer the second press until release or drag, using AppKit's click counting.
+              mac_wm_state->title_bar_double_click_event = [event retain];
+            }
+            else
+            {
+              [window->ns_window performWindowDragWithEvent:event];
+            }
+          }
         }
-        if(!handled_by_chrome && !handled_by_native_title_bar_control)
+        if(type == NSEventTypeLeftMouseDown || type == NSEventTypeLeftMouseUp)
+        {
+          MAC_WM_MouseOwner owner = mac_wm_state->left_mouse_owner;
+          send_to_client = (owner == MAC_WM_MouseOwner_Client);
+          send_to_nsapp = (owner != MAC_WM_MouseOwner_TitleBar);
+          if(type == NSEventTypeLeftMouseUp && mac_wm_state->title_bar_double_click_event != 0)
+          {
+            B32 perform_action = (mac_wm_state->left_mouse_window == window &&
+                                  mac_wm_window_pos_is_title_bar_background(window, pos));
+            mac_wm_cancel_title_bar_double_click();
+            if(perform_action)
+            {
+              mac_wm_window_title_bar_double_click(window);
+            }
+          }
+          // Keep the press owner through release, including when the pointer crosses regions.
+          // It also identifies the previous click when AppKit reports the next click count.
+        }
+        if(send_to_client)
         {
           WM_Event *wm_event = mac_wm_push_event(arena, &result, is_release ? WM_EventKind_Release : WM_EventKind_Press, window);
           wm_event->modifiers = mac_wm_modifiers_from_ns_flags([event modifierFlags]);
@@ -1324,6 +1417,18 @@ wm_get_events(Arena *arena, B32 wait)
       case NSEventTypeRightMouseDragged:
       case NSEventTypeOtherMouseDragged:
       {
+        if(type == NSEventTypeLeftMouseDragged && mac_wm_state->left_mouse_owner == MAC_WM_MouseOwner_TitleBar)
+        {
+          send_to_nsapp = 0;
+          NSEvent *down = mac_wm_state->title_bar_double_click_event;
+          if(down != 0)
+          {
+            mac_wm_state->title_bar_double_click_event = 0;
+            [mac_wm_state->left_mouse_window->ns_window performWindowDragWithEvent:down];
+            [down release];
+          }
+          break;
+        }
         WM_Event *wm_event = mac_wm_push_event(arena, &result, WM_EventKind_MouseMove, window);
         wm_event->modifiers = mac_wm_modifiers_from_ns_flags([event modifierFlags]);
         wm_event->pos = mac_wm_client_pos_from_ns_point(window, [event locationInWindow]);
