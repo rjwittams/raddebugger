@@ -5850,6 +5850,7 @@ rd_window_frame(void)
   if(rd_state->first_window_state == ws && rd_state->last_window_state == ws && ws->frames_alive == 0)
   {
     F32 font_size = rd_font_size();
+    F32 raster_scale = wm_backing_scale_from_window(ws->os);
     RD_FontSlot english_font_slots[] = {RD_FontSlot_Main, RD_FontSlot_Code};
     RD_FontSlot icon_font_slot = RD_FontSlot_Icons;
     for(U64 idx = 0; idx < ArrayCount(english_font_slots); idx += 1)
@@ -5857,31 +5858,36 @@ rd_window_frame(void)
       Temp scratch = scratch_begin(0, 0);
       RD_FontSlot slot = english_font_slots[idx];
       String8 sample_text = str8_lit("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890~!@#$%^&*()-_+=[{]}\\|;:'\",<.>/?");
-      fnt_run_from_string(rd_font_from_slot(slot),
-                          font_size,
-                          0, 0, 0,
-                          sample_text);
-      fnt_run_from_string(rd_font_from_slot(slot),
-                          font_size,
-                          0, 0, 0,
-                          sample_text);
+      fnt_run_from_string_scaled(rd_font_from_slot(slot),
+                                 font_size,
+                                 raster_scale,
+                                 0, 0, 0,
+                                 sample_text);
+      fnt_run_from_string_scaled(rd_font_from_slot(slot),
+                                 font_size,
+                                 raster_scale,
+                                 0, 0, 0,
+                                 sample_text);
       scratch_end(scratch);
     }
     for(RD_IconKind icon_kind = RD_IconKind_Null; icon_kind < RD_IconKind_COUNT; icon_kind = (RD_IconKind)(icon_kind+1))
     {
       Temp scratch = scratch_begin(0, 0);
-      fnt_run_from_string(rd_font_from_slot(icon_font_slot),
-                          font_size,
-                          0, 0, FNT_RasterFlag_Smooth,
-                          rd_icon_kind_text_table[icon_kind]);
-      fnt_run_from_string(rd_font_from_slot(icon_font_slot),
-                          font_size,
-                          0, 0, FNT_RasterFlag_Smooth,
-                          rd_icon_kind_text_table[icon_kind]);
-      fnt_run_from_string(rd_font_from_slot(icon_font_slot),
-                          font_size,
-                          0, 0, FNT_RasterFlag_Smooth,
-                          rd_icon_kind_text_table[icon_kind]);
+      fnt_run_from_string_scaled(rd_font_from_slot(icon_font_slot),
+                                 font_size,
+                                 raster_scale,
+                                 0, 0, FNT_RasterFlag_Smooth,
+                                 rd_icon_kind_text_table[icon_kind]);
+      fnt_run_from_string_scaled(rd_font_from_slot(icon_font_slot),
+                                 font_size,
+                                 raster_scale,
+                                 0, 0, FNT_RasterFlag_Smooth,
+                                 rd_icon_kind_text_table[icon_kind]);
+      fnt_run_from_string_scaled(rd_font_from_slot(icon_font_slot),
+                                 font_size,
+                                 raster_scale,
+                                 0, 0, FNT_RasterFlag_Smooth,
+                                 rd_icon_kind_text_table[icon_kind]);
       scratch_end(scratch);
     }
   }
@@ -9720,7 +9726,7 @@ rd_window_frame(void)
             ellipses_raster_flags = box->display_fstrs.last->v.params.raster_flags;
           }
           max_x = (box->rect.x1-text_position.x);
-          ellipses_run = fnt_run_from_string(ellipses_font, ellipses_size, 0, box->tab_size, ellipses_raster_flags, str8_lit("..."));
+          ellipses_run = dr_fnt_run_from_string(ellipses_font, ellipses_size, 0, box->tab_size, ellipses_raster_flags, str8_lit("..."));
         }
         if(box->flags & UI_BoxFlag_HasFuzzyMatchRanges) UI_TagF("match")
         {
