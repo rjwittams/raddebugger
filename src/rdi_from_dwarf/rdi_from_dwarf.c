@@ -3549,11 +3549,27 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
               switch(attrib->val.kind)
               {
                 default:{}break;
+                case DW_FormKind_Block:
+                case DW_FormKind_Block1:
+                case DW_FormKind_Block2:
+                case DW_FormKind_Block4:
                 case DW_FormKind_ExprLoc:
                 {
-                  U64 expr_info_off  = attrib->val.u128.u64[0];
-                  U64 expr_info_size = attrib->val.u128.u64[1];
-                  String8 expr = str8_substr(raw->sec[DW_SectionKind_Info].data, r1u64(expr_info_off, expr_info_off+expr_info_size));
+                  // Older DWARF encodes location expressions as blocks. Fixed
+                  // block forms store the size and the length-prefix offset.
+                  String8 expr = attrib->val.string;
+                  if(attrib->val.kind != DW_FormKind_Block)
+                  {
+                    U64 expr_info_off  = attrib->val.u128.u64[0];
+                    U64 expr_info_size = attrib->val.u128.u64[1];
+                    if(attrib->val.kind != DW_FormKind_ExprLoc)
+                    {
+                      U64 prefix_size = attrib->val.kind == DW_FormKind_Block1 ? 1 : attrib->val.kind == DW_FormKind_Block2 ? 2 : 4;
+                      expr_info_off  = attrib->val.u128.u64[1] + prefix_size;
+                      expr_info_size = attrib->val.u128.u64[0];
+                    }
+                    expr = str8_substr(raw->sec[DW_SectionKind_Info].data, r1u64(expr_info_off, expr_info_off+expr_info_size));
+                  }
                   DW2_LocNode *n = push_array(scratch2.arena, DW2_LocNode, 1);
                   n->v.expr = expr;
                   n->v.range = r1u64(0, max_U64);
