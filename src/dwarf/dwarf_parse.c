@@ -1487,6 +1487,7 @@ dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
       // OPCODE STREAM to unpack the actual list of ranges!!!
       U64 rle_sentinel = (ctx->addr_size == 4 ? max_U32 : max_U64);
       U64 base_addr = ctx->unit_base_addr;
+      B32 good_base_addr = 1;
       for(U64 off = rnglist_off; off < data.size;)
       {
         U64 start_off = off;
@@ -1500,10 +1501,12 @@ dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
         Rng1U64 range = {0};
         switch(rle_kind)
         {
-          default:{good_range = 0;}break;
+          default:{return result;}break;
+          case DW_RLE_EndOfList:{return result;}break;
           case DW_RLE_BaseAddressx:
           {
             good_range = 0;
+            good_base_addr = 0;
             U64 addr_idx = 0;
             off += str8_deserial_read_uleb128(data, off, &addr_idx);
             if(ctx->addr_table != 0)
@@ -1511,7 +1514,7 @@ dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
               U64 new_base_addr = 0;
               if(dw2_try_offset_from_table_idx(ctx->addr_table, addr_idx, &new_base_addr))
               {
-                good_range = 1;
+                good_base_addr = 1;
                 base_addr = new_base_addr;
               }
             }
@@ -1554,6 +1557,7 @@ dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
           }break;
           case DW_RLE_OffsetPair:
           {
+            good_range = good_base_addr;
             U64 range_off_start = 0;
             U64 range_off_end = 0;
             off += str8_deserial_read_uleb128(data, off, &range_off_start);
@@ -1562,9 +1566,11 @@ dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
           }break;
           case DW_RLE_BaseAddress:
           {
+            good_range = 0;
             U64 new_base_addr = 0;
             off += str8_deserial_read(data, off, &new_base_addr, ctx->addr_size, ctx->addr_size);
             base_addr = new_base_addr;
+            good_base_addr = 1;
           }break;
           case DW_RLE_StartEnd:
           {
@@ -1590,8 +1596,8 @@ dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
           rng1u64_list_push(arena, &result, range);
         }
         
-        // rjf: end if no movement or end-of-list code
-        if(off == start_off || rle_kind == DW_RLE_EndOfList)
+        // rjf: end if no movement
+        if(off == start_off)
         {
           break;
         }
