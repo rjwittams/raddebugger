@@ -1,6 +1,8 @@
 // Copyright (c) Epic Games Tools
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
+#include "raddbg_default_bindings.h"
+
 #undef LAYER_COLOR
 #define LAYER_COLOR 0xf0a215ff
 
@@ -11276,6 +11278,12 @@ rd_next_view_cmd(RD_Cmd **cmd)
 internal void
 rd_wm_set_main_menu(void)
 {
+  Temp scratch = scratch_begin(0, 0);
+  local_persist B32 initialized = 0;
+  local_persist B32 last_native = 0;
+  local_persist CFG_Binding last_bindings[RD_CmdKind_COUNT] = {0};
+  B32 native = wm_application_menu_bar_is_native();
+  B32 changed = !initialized || native != last_native;
   typedef struct RD_AppMenuItemSpec RD_AppMenuItemSpec;
   struct RD_AppMenuItemSpec
   {
@@ -11315,6 +11323,7 @@ rd_wm_set_main_menu(void)
   {
     RD_MenuCmd(RD_CmdKind_OpenWindow),
     RD_MenuCmd(RD_CmdKind_CloseWindow),
+    RD_MenuCmd(RD_CmdKind_MinimizeWindow),
     RD_MenuCmd(RD_CmdKind_ToggleFullscreen),
     RD_MenuSep(),
     RD_MenuCmd(RD_CmdKind_WindowSettings),
@@ -11388,14 +11397,14 @@ rd_wm_set_main_menu(void)
 
   WM_MenuArray menu_array = {0};
   menu_array.count = ArrayCount(specs);
-  menu_array.menus = push_array(rd_state->arena, WM_Menu, menu_array.count);
+  menu_array.menus = push_array(scratch.arena, WM_Menu, menu_array.count);
   for(U64 menu_idx = 0; menu_idx < menu_array.count; menu_idx += 1)
   {
     RD_AppMenuSpec *spec = &specs[menu_idx];
     WM_Menu *menu = &menu_array.menus[menu_idx];
     menu->label = spec->label;
     menu->item_count = spec->item_count;
-    menu->items = push_array(rd_state->arena, WM_MenuItem, menu->item_count);
+    menu->items = push_array(scratch.arena, WM_MenuItem, menu->item_count);
     for(U64 item_idx = 0; item_idx < menu->item_count; item_idx += 1)
     {
       RD_AppMenuItemSpec *item_spec = &spec->items[item_idx];
@@ -11409,6 +11418,24 @@ rd_wm_set_main_menu(void)
         RD_CmdKindInfo *info = &rd_cmd_kind_info_table[item_spec->kind];
         item->kind = WM_MenuItemKind_Command;
         item->command_name = info->string;
+        CFG_Binding binding = {0};
+        if(rd_state->key_map != 0)
+        {
+          CFG_KeyMapNodePtrList bindings = cfg_key_map_node_ptr_list_from_name(scratch.arena, rd_state->key_map, info->string);
+          if(bindings.first != 0)
+          {
+            binding = bindings.first->v->binding;
+            CFG_KeyMapNodePtrList owners = cfg_key_map_node_ptr_list_from_binding(scratch.arena, rd_state->key_map, binding);
+            if(owners.first != 0 && !str8_match(owners.first->v->name, info->string, 0))
+            {
+              MemoryZeroStruct(&binding);
+            }
+          }
+        }
+        changed |= !MemoryMatchStruct(&binding, &last_bindings[item_spec->kind]);
+        last_bindings[item_spec->kind] = binding;
+        item->shortcut_key = binding.key;
+        item->shortcut_modifiers = binding.modifiers;
         item->label = rd_display_from_code_name(info->string);
         if(item->label.size == 0)
         {
@@ -11417,7 +11444,13 @@ rd_wm_set_main_menu(void)
       }
     }
   }
-  wm_set_main_menu(menu_array);
+  if(changed)
+  {
+    wm_set_main_menu(menu_array);
+    last_native = native;
+    initialized = 1;
+  }
+  scratch_end(scratch);
 }
 
 ////////////////////////////////
@@ -12259,6 +12292,13 @@ rd_frame(void)
   //////////////////////////////
   //- rjf: bind change
   //
+  for(WM_Event *event = events.first; event != 0; event = event->next)
+  {
+    if(event->kind == WM_EventKind_MenuOpen)
+    {
+      rd_state->bind_change_active = 0;
+    }
+  }
   if(!rd_state->popup_active && rd_state->bind_change_active)
   {
     if(wm_key_press(&events, wm_window_zero(), 0, WM_Key_Esc))
@@ -12284,6 +12324,7 @@ rd_frame(void)
          event->key != WM_Key_RightMouseButton &&
          event->key != WM_Key_MiddleMouseButton &&
          event->key != WM_Key_Ctrl &&
+         event->key != WM_Key_Cmd &&
          event->key != WM_Key_Alt &&
          event->key != WM_Key_Shift)
       {
@@ -12299,6 +12340,7 @@ rd_frame(void)
         cfg_node_new(rd_state->cfg, binding, rd_state->bind_change_cmd_name);
         cfg_node_new(rd_state->cfg, binding, wm_key_cfg_name_table[event->key]);
         if(event->modifiers & WM_Modifier_Ctrl)  { cfg_node_new(rd_state->cfg, binding, str8_lit("ctrl")); }
+        if(event->modifiers & WM_Modifier_Cmd)   { cfg_node_new(rd_state->cfg, binding, str8_lit("cmd")); }
         if(event->modifiers & WM_Modifier_Shift) { cfg_node_new(rd_state->cfg, binding, str8_lit("shift")); }
         if(event->modifiers & WM_Modifier_Alt)   { cfg_node_new(rd_state->cfg, binding, str8_lit("alt")); }
         U32 codepoint = wm_codepoint_from_modifiers_and_key(event->modifiers, event->key);
@@ -12336,13 +12378,13 @@ rd_frame(void)
     if(!initialized || last_mac_native_menu_bar != mac_native_menu_bar)
     {
       wm_set_preferred_native_menu_bar(mac_native_menu_bar);
-      if(wm_application_menu_bar_is_native())
-      {
-        rd_wm_set_main_menu();
-      }
       last_mac_native_menu_bar = mac_native_menu_bar;
     }
     initialized = 1;
+  }
+  if(OS_MAC)
+  {
+    rd_wm_set_main_menu();
   }
 
   //////////////////////////////
@@ -14313,14 +14355,26 @@ rd_frame(void)
               cfg_node_release(rd_state->cfg, n->v);
             }
             CFG_Node *keybindings = cfg_node_new(rd_state->cfg, user, str8_lit("keybindings"));
-            for EachElement(idx, rd_default_binding_table)
+            for(U64 idx = 0; idx < ArrayCount(rd_default_binding_table) + OS_MAC*ArrayCount(rd_mac_extra_binding_table); idx += 1)
             {
-              String8 name = rd_default_binding_table[idx].string;
-              CFG_Binding binding = rd_default_binding_table[idx].binding;
+              String8 name;
+              CFG_Binding binding;
+              if(idx < ArrayCount(rd_default_binding_table))
+              {
+                name = rd_default_binding_table[idx].string;
+                binding = rd_binding_from_default(name, rd_default_binding_table[idx].binding, OS_MAC);
+              }
+              else
+              {
+                U64 mac_idx = idx - ArrayCount(rd_default_binding_table);
+                name = rd_mac_extra_binding_table[mac_idx].string;
+                binding = rd_mac_extra_binding_table[mac_idx].binding;
+              }
               CFG_Node *binding_root = cfg_node_new(rd_state->cfg, keybindings, str8_zero());
               cfg_node_new(rd_state->cfg, binding_root, name);
               cfg_node_new(rd_state->cfg, binding_root, wm_key_cfg_name_table[binding.key]);
               if(binding.modifiers & WM_Modifier_Ctrl)  {cfg_node_newf(rd_state->cfg, binding_root, "ctrl");}
+              if(binding.modifiers & WM_Modifier_Cmd)   {cfg_node_newf(rd_state->cfg, binding_root, "cmd");}
               if(binding.modifiers & WM_Modifier_Shift) {cfg_node_newf(rd_state->cfg, binding_root, "shift");}
               if(binding.modifiers & WM_Modifier_Alt)   {cfg_node_newf(rd_state->cfg, binding_root, "alt");}
             }
