@@ -61,6 +61,52 @@ di_rdi_path_from_original_path(Arena *arena, String8 path)
   return result;
 }
 
+internal String8
+di_rdi_path_from_identity(Arena *arena, String8 original_path, String8 cache_folder, Arch arch, Guid guid)
+{
+  String8 result = di_rdi_path_from_original_path(arena, original_path);
+  if(cache_folder.size != 0)
+  {
+    U128 path_hash = u128_hash_from_seed_str8(0, original_path);
+    result = str8f(arena, "%S/%S.%016I64x%016I64x.rdi", cache_folder,
+                   str8_skip_last_slash(original_path), path_hash.u64[0], path_hash.u64[1]);
+  }
+  if(arch != Arch_Null)
+  {
+    result = str8f(arena, "%S.%S.%S.rdi", str8_chop_last_dot(result),
+                   string_from_arch(arch), string_from_guid(arena, guid));
+  }
+  return result;
+}
+
+internal B32
+di_rdi_file_matches_identity(File file, Arch arch, Guid guid)
+{
+  RDI_Header header = {0};
+  B32 result = (file_read_struct(file, 0, &header) == sizeof(header) &&
+                header.magic == RDI_MAGIC_CONSTANT && header.encoding_version == RDI_ENCODING_VERSION);
+  if(result && arch != Arch_Null)
+  {
+    Guid zero = {0};
+    RDI_Section section = {0};
+    RDI_TopLevelInfo info = {0};
+    U64 size = properties_from_file(file).size;
+    U64 section_off = (U64)header.data_section_off + RDI_SectionKind_TopLevelInfo*sizeof(RDI_Section);
+    result = (!MemoryMatchStruct(&guid, &zero) &&
+              header.data_section_count > RDI_SectionKind_TopLevelInfo &&
+              header.data_section_off >= sizeof(header) &&
+              section_off <= size && sizeof(section) <= size-section_off &&
+              file_read_struct(file, section_off, &section) == sizeof(section) &&
+              section.encoding == RDI_SectionEncoding_Unpacked &&
+              section.encoded_size >= sizeof(info) && section.unpacked_size >= sizeof(info) &&
+              section.off <= size && section.encoded_size <= size-section.off &&
+              file_read_struct(file, section.off, &info) == sizeof(info) &&
+              info.arch == rdi_arch_from_arch(arch) &&
+              MemoryMatch(&info.guid, &guid, sizeof(guid)));
+  }
+  return result;
+}
+
 ////////////////////////////////
 //~ rjf: Main Layer Initialization
 
@@ -578,6 +624,8 @@ di_async_tick(void)
   {
     DI_Key key;
     String8 rdi_path;
+    Arch macho_arch;
+    Guid macho_guid;
   };
   ParseTask *parse_tasks = 0;
   U64 parse_tasks_count = 0;
@@ -755,6 +803,11 @@ di_async_tick(void)
           {
             t->og_is_rdi = 1;
           }
+          else
+          {
+            MachO_UUID uuid = macho_uuid_from_file(file, &t->og_macho_arch);
+            t->og_macho_guid = macho_guid_from_uuid(uuid);
+          }
           file_close(file);
         }
         U64 og_size = t->og_size;
@@ -771,7 +824,7 @@ di_async_tick(void)
           }
           else
           {
-            rdi_path = di_rdi_path_from_original_path(scratch.arena, og_path);
+            rdi_path = di_rdi_path_from_identity(scratch.arena, og_path, str8_zero(), t->og_macho_arch, t->og_macho_guid);
           }
         }
         
@@ -800,7 +853,7 @@ di_async_tick(void)
         }
         
         //- rjf: if RDI path is not writable -> adjust into writable cache directory
-        if(!t->og_folder_is_writable)
+        if(!t->og_folder_is_writable && !og_is_rdi)
         {
           String8 cache_folder = get_process_info()->user_program_cache_data_path;
           String8 raddbg_folder = str8f(scratch.arena, "%S/raddbg", cache_folder);
@@ -808,7 +861,7 @@ di_async_tick(void)
           make_directory(cache_folder);
           make_directory(raddbg_folder);
           make_directory(rdis_folder);
-          rdi_path = str8f(scratch.arena, "%S/%S.rdi", rdis_folder, str8_skip_last_slash(og_path));
+          rdi_path = di_rdi_path_from_identity(scratch.arena, og_path, rdis_folder, t->og_macho_arch, t->og_macho_guid);
         }
         
         //- rjf: determine if RDI is stale
@@ -823,12 +876,7 @@ di_async_tick(void)
           }
           else
           {
-            t->rdi_is_stale = 1;
-            RDI_Header header = {0};
-            if(file_read_struct(file, 0, &header) == sizeof(header))
-            {
-              t->rdi_is_stale = (header.encoding_version != RDI_ENCODING_VERSION);
-            }
+            t->rdi_is_stale = !di_rdi_file_matches_identity(file, t->og_macho_arch, t->og_macho_guid);
           }
           file_close(file);
         }
@@ -990,6 +1038,8 @@ di_async_tick(void)
           ParseTaskNode *n = push_array(scratch.arena, ParseTaskNode, 1);
           n->v.key = key;
           n->v.rdi_path = rdi_path;
+          n->v.macho_arch = t->og_macho_arch;
+          n->v.macho_guid = t->og_macho_guid;
           SLLQueuePush(first_parse_task, last_parse_task, n);
           parse_tasks_count += 1;
         }
@@ -1045,6 +1095,15 @@ di_async_tick(void)
       void *file_base = 0;
       {
         file = file_open(AccessFlag_Read|AccessFlag_ShareRead|AccessFlag_ShareWrite, rdi_path);
+        // Recheck after conversion too: a failed conversion must not expose
+        // an old file that failed the identity check above.
+        if(parse_tasks[parse_task_idx].macho_arch != Arch_Null &&
+           !di_rdi_file_matches_identity(file, parse_tasks[parse_task_idx].macho_arch, parse_tasks[parse_task_idx].macho_guid))
+        {
+          log_infof("Ignoring generated RDI %S: missing or mismatched Mach-O identity\n", rdi_path);
+          file_close(file);
+          file = file_zero();
+        }
         file_map = file_map_open(AccessFlag_Read, file);
         file_props = properties_from_file(file);
         file_base = file_map_view_open(file_map, AccessFlag_Read, r1u64(0, file_props.size));

@@ -403,6 +403,7 @@ rb_thread_entry_point(void *p)
             MachO_UUID exe_uuid = macho_uuid_from_bin(file_data, &bin);
             MachO_UUID dsym_uuid = macho_uuid_from_bin(dsym_data, &dsym_bin);
             if(!macho_uuid_is_zero(exe_uuid) &&
+               bin.header.cpu_type == dsym_bin.header.cpu_type &&
                macho_uuid_match(exe_uuid, dsym_uuid))
             {
               log_infof("Found companion dSYM for %S (%S) at %S with matching UUID %S\n", n->string, rb_file_format_display_name_table[file_format], dsym_path, macho_string_from_uuid(scratch.arena, exe_uuid));
@@ -410,7 +411,7 @@ rb_thread_entry_point(void *p)
             }
             else
             {
-              log_infof("Ignoring companion dSYM for %S (%S) at %S because UUIDs do not match: executable %S, dSYM %S\n", n->string, rb_file_format_display_name_table[file_format], dsym_path, macho_string_from_uuid(scratch.arena, exe_uuid), macho_string_from_uuid(scratch.arena, dsym_uuid));
+              log_infof("Ignoring companion dSYM for %S (%S) at %S because UUID or architecture does not match: executable %S, dSYM %S\n", n->string, rb_file_format_display_name_table[file_format], dsym_path, macho_string_from_uuid(scratch.arena, exe_uuid), macho_string_from_uuid(scratch.arena, dsym_uuid));
             }
           }
         }
