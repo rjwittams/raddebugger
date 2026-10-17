@@ -790,6 +790,13 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       //- rjf: set up per-unit file sequence map
       unit_file_seq_maps[unit_idx].slots_count = line_table_header->files.count + 1;
       unit_file_seq_maps[unit_idx].slots = push_array(scratch.arena, FileSeqNode *, unit_file_seq_maps[unit_idx].slots_count);
+
+      // Missing or invalid line headers cannot supply the VM's divisors.
+      if(line_table_header->line_range == 0 || line_table_header->max_ops_per_inst == 0)
+      {
+        scratch_end(scratch2);
+        continue;
+      }
       
       //- rjf: set up vm registers
       DW2_LineVMRegs vm_regs = {0};
@@ -1339,6 +1346,10 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       for EachIndex(unit_idx, unit_count)
       {
         U64 root_tags_in_this_unit = unit_info_root_tag_offs[unit_idx].count;
+        if(root_tags_in_this_unit == 0)
+        {
+          continue;
+        }
         U64 root_tags_per_work = (root_tags_in_this_unit + lane_count()-1) / lane_count();
         U64 works_per_this_unit = (root_tags_in_this_unit+root_tags_per_work-1) / root_tags_per_work;
         if(build)
