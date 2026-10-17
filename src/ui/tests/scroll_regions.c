@@ -292,6 +292,31 @@ scroll_region_diagnostics(ScrollTestWindow *ws)
                 "press without movement preserves fractional position");
     UI_Event release_event = {.kind = UI_EventKind_Release, .key = WM_Key_LeftMouseButton, .pos = press};
     scroll_test_frame(ws, &region, axes, press, release_event, &content);
+    // A small drag must retain the integer base, even beyond F64 precision.
+    S64 large_bases[] = {((S64)1 << 43), ((S64)1 << 56)};
+    for(U64 base_idx = 0; base_idx < ArrayCount(large_bases); base_idx += 1)
+    {
+      S64 base = large_bases[base_idx];
+      axes[1] = (UI_ScrollRegionAxis){ui_scroll_pt(base+123, 0), r1s64(base, base+600), 20};
+      for(U32 frame = 0; frame < 3; frame += 1)
+        scroll_test_frame(ws, &region, axes, mouse, none, &content);
+      press = center_2f32(ui_box_from_key(fraction_thumb)->rect);
+      for(U32 frame = 0; frame < 3; frame += 1)
+        scroll_test_frame(ws, &region, axes, press, none, &content);
+      press_event = (UI_Event){.kind = UI_EventKind_Press, .key = WM_Key_LeftMouseButton, .pos = press};
+      scroll_test_frame(ws, &region, axes, press, press_event, &content);
+      Vec2F32 moved = press;
+      moved.y += 1;
+      UI_ScrollRegionSignal dragged = scroll_test_frame(ws, &region, axes, moved, none, &content);
+      ScrollCheck(dragged.position.y.idx >= base+123 && dragged.position.y.idx < base+153,
+                  "small forward drag retains large integer base");
+      moved.y = press.y - 1;
+      dragged = scroll_test_frame(ws, &region, axes, moved, none, &content);
+      ScrollCheck(dragged.position.y.idx <= base+123 && dragged.position.y.idx > base+93,
+                  "small backward drag retains large integer base");
+      release_event = (UI_Event){.kind = UI_EventKind_Release, .key = WM_Key_LeftMouseButton, .pos = moved};
+      scroll_test_frame(ws, &region, axes, moved, release_event, &content);
+    }
     // No scroll range: overlays disappear; classic keeps disabled furniture.
     axes[0].range.max = axes[1].range.max = 0;
     scroll_test_frame(ws, &region, axes, mouse, none, &content);
