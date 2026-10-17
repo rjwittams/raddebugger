@@ -1,3 +1,32 @@
+Test(macho_file_identity)
+{
+  MachO_UUID expected = {{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}};
+  for(U64 cpu = 0; cpu < 2; cpu += 1) for(U64 test_case = 0; test_case < 10; test_case += 1)
+  {
+    struct {MachO_Header64 header; MachO_UUIDCommand uuid;} input = {0};
+    input.header = (MachO_Header64){.magic=MACHO_MAGIC_64, .cpu_type=MACHO_CPU_TYPE_ARM64,
+      .load_command_count=1, .load_commands_size=sizeof(input.uuid)};
+    input.header.cpu_type = cpu ? MACHO_CPU_TYPE_ARM64 : MACHO_CPU_TYPE_X86_64;
+    input.uuid = (MachO_UUIDCommand){.cmd=MACHO_LC_UUID, .cmd_size=sizeof(input.uuid)};
+    MemoryCopy(input.uuid.uuid, expected.v, sizeof(expected.v));
+    if(test_case == 1) {input.uuid.uuid[0] ^= 1;}
+    if(test_case == 2) {input.header.cpu_type = cpu ? MACHO_CPU_TYPE_X86_64 : MACHO_CPU_TYPE_ARM64;}
+    if(test_case == 3) {MemoryZeroArray(input.uuid.uuid);}
+    if(test_case == 4) {input.header.load_command_count = 0; input.header.load_commands_size = 0;}
+    if(test_case == 5) {input.header.load_commands_size = max_U32;}
+    if(test_case == 9) {input.uuid.cmd_size = sizeof(MachO_LoadCommand);}
+    String8 bytes = str8_struct(&input);
+    if(test_case == 6) {bytes.size -= 1;}
+    String8 name = str8f(arena, "%I64u-%I64u.macho", cpu, test_case);
+    TestCheck(t_write_file(name, bytes));
+    File file = file_open(AccessFlag_Read|AccessFlag_ShareRead, t_make_file_path(arena, name));
+    B32 matches = macho_file_matches_image(file, test_case == 8 ? Arch_Null : cpu ? Arch_arm64 : Arch_x64,
+                                          test_case == 7 ? (MachO_UUID){0} : expected);
+    file_close(file);
+    TestCheck(matches == (test_case == 0));
+  }
+}
+
 // Name-only lookup must not manufacture procedure extents or cross sections.
 Test(macho_symbol_fallback)
 {
