@@ -12,6 +12,8 @@
 #define FileInfo MACOS_SDK_FileInfo
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <mach/vm_attributes.h>
+#include <mach/machine/thread_status.h>
 #undef FileInfo
 #pragma pop_macro("FileInfo")
 #pragma pop_macro("global")
@@ -22,6 +24,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <mach-o/dyld_images.h>
+#include <mach-o/loader.h>
 #include <mach/mig_errors.h>
 #include <mach/ndr.h>
 #include <stdlib.h>
@@ -31,6 +34,16 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#ifndef EXC_I386_SGL
+# define EXC_I386_SGL 1
+#endif
+#ifndef EXC_I386_BPT
+# define EXC_I386_BPT 2
+#endif
+#ifndef EXC_ARM_BREAKPOINT
+# define EXC_ARM_BREAKPOINT 1
+#endif
 
 typedef enum MAC_DMN_EntityKind
 {
@@ -107,8 +120,11 @@ struct MAC_DMN_Thread
   B32 is_suspended_for_run;
   B32 is_stepping_over_dyld_notification;
   B32 is_stepping_over_dyld_bootstrap;
+  B32 is_stepping_over_debug_trap;
   U64 dyld_notification_step_vaddr;
   U64 dyld_bootstrap_step_vaddr;
+  U64 pending_trap_vaddr;
+  U64 pending_trap_size;
 };
 
 typedef struct MAC_DMN_Module MAC_DMN_Module;
@@ -259,8 +275,10 @@ internal B32 mac_dmn_dyld_all_image_infos_is_ready(U64 all_image_infos_vaddr, st
 internal B32 mac_dmn_read_dyld_all_image_infos(MAC_DMN_Process *process, struct dyld_all_image_infos *all_images_out);
 internal B32 mac_dmn_read_dyld_all_image_infos_with_addr(MAC_DMN_Process *process, struct dyld_all_image_infos *all_images_out, U64 *all_image_infos_vaddr_out);
 internal B32 mac_dmn_read_dyld_image_infos(Arena *arena, MAC_DMN_Process *process, struct dyld_image_info **images_out, U32 *count_out);
+internal U64 mac_dmn_fix_code_vaddr(Arch arch, U64 vaddr);
 internal U64 mac_dmn_dyld_notification_vaddr_from_process(MAC_DMN_Process *process);
 internal B32 mac_dmn_process_vaddr_is_executable(MAC_DMN_Process *process, U64 vaddr);
+internal B32 mac_dmn_exception_is_software_breakpoint(Arch arch, MAC_DMN_ExceptionMessage *exception);
 internal void mac_dmn_refresh_module_events(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity);
 internal B32 mac_dmn_thread_should_run(MAC_DMN_Entity *thread_entity, DMN_RunCtrls *ctrls);
 internal B32 mac_dmn_process_should_run(MAC_DMN_Entity *process_entity, DMN_RunCtrls *ctrls);
@@ -270,16 +288,25 @@ internal B32 mac_dmn_process_is_stepping_over_dyld_notification(MAC_DMN_Process 
 internal B32 mac_dmn_process_is_stepping_over_dyld_bootstrap(MAC_DMN_Process *process, U64 vaddr);
 internal MAC_DMN_Entity *mac_dmn_thread_entity_stepping_over_dyld_notification(MAC_DMN_Process *process);
 internal MAC_DMN_Entity *mac_dmn_thread_entity_stepping_over_dyld_bootstrap(MAC_DMN_Process *process);
+internal MAC_DMN_Entity *mac_dmn_thread_entity_stepping_over_debug_trap(MAC_DMN_Process *process);
 internal void mac_dmn_process_set_dyld_notification_single_step_flags(MAC_DMN_Process *process, B32 is_on);
 internal void mac_dmn_process_set_dyld_bootstrap_single_step_flags(MAC_DMN_Process *process, B32 is_on);
 internal MAC_DMN_ActiveTrap *mac_dmn_set_trap(Arena *arena, DMN_Trap *trap, MAC_DMN_ActiveTrapKind kind);
 internal MAC_DMN_ActiveTrap *mac_dmn_push_active_trap(Arena *arena, MAC_DMN_ActiveTrap *first, DMN_Trap *trap, MAC_DMN_ActiveTrapKind kind);
 internal void mac_dmn_unset_trap(MAC_DMN_ActiveTrap *active_trap);
+internal B32 mac_dmn_process_sync_instruction_cache(MAC_DMN_Process *process, Rng1U64 range);
 internal U64 mac_dmn_thread_read_ip(MAC_DMN_Thread *thread);
 internal U64 mac_dmn_thread_read_sp(MAC_DMN_Thread *thread);
 internal U64 mac_dmn_stack_base_vaddr_from_thread(MAC_DMN_Thread *thread);
 internal B32 mac_dmn_thread_write_ip(MAC_DMN_Thread *thread, U64 ip);
+internal U64 mac_dmn_thread_trap_instruction_size(MAC_DMN_Thread *thread);
+internal void mac_dmn_thread_advance_pending_trap(MAC_DMN_Thread *thread);
 internal B32 mac_dmn_set_single_step_flag(MAC_DMN_Thread *thread, B32 is_on);
+#if ARCH_ARM64
+internal B32 mac_dmn_arm64_debug_state_regs_from_trap(DMN_Trap *trap, U64 *wvr_out, U64 *wcr_out);
+internal U64 mac_dmn_arm64_debug_trap_idx_from_state(arm_debug_state64_t *state, U64 fault_vaddr, U64 slot_count);
+internal U64 mac_dmn_arm64_supported_watchpoint_count(void);
+#endif
 internal B32 mac_dmn_thread_set_debug_traps(MAC_DMN_Thread *thread, DMN_TrapChunkList *traps);
 internal B32 mac_dmn_thread_clear_debug_traps(MAC_DMN_Thread *thread);
 internal B32 mac_dmn_process_set_debug_traps(MAC_DMN_Process *process, DMN_TrapChunkList *traps);
@@ -299,12 +326,19 @@ internal void mac_dmn_push_detach_events(Arena *arena, DMN_EventList *events);
 internal void mac_dmn_push_event_breakpoint(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, U64 instruction_pointer, U64 user_data);
 internal void mac_dmn_push_event_data_breakpoint(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, DMN_Trap *trap);
 internal void mac_dmn_push_event_single_step(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity);
+internal void mac_dmn_push_event_trap(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, S32 signo);
 internal void mac_dmn_push_event_exception(Arena *arena, DMN_EventList *events, MAC_DMN_Entity *process_entity, MAC_DMN_Entity *thread_entity, S32 signo);
 internal void mac_dmn_push_event_halt(Arena *arena, DMN_EventList *events);
 internal void mac_dmn_push_event_not_attached(Arena *arena, DMN_EventList *events);
 #if ARCH_X64
 internal void mac_dmn_x64_reg_block_from_thread_state(X64_RegBlock *dst, x86_thread_state64_t *src);
 internal void mac_dmn_x64_thread_state_from_reg_block(x86_thread_state64_t *dst, X64_RegBlock *src);
+#endif
+#if ARCH_ARM64
+internal void mac_dmn_arm64_reg_block_from_thread_state(ARM64_RegBlock *dst, arm_thread_state64_t *src);
+internal void mac_dmn_arm64_thread_state_from_reg_block(arm_thread_state64_t *dst, ARM64_RegBlock *src);
+internal void mac_dmn_arm64_reg_block_from_neon_state(ARM64_RegBlock *dst, arm_neon_state64_t *src);
+internal void mac_dmn_arm64_neon_state_from_reg_block(arm_neon_state64_t *dst, ARM64_RegBlock *src);
 #endif
 
 #endif // MAC_DEMON_H
