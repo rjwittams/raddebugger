@@ -3040,14 +3040,20 @@ RD_VIEW_UI_FUNCTION_DEF(memory)
   //////////////////////////////
   //- rjf: calculate rectangles
   //
-  F32 scroll_bar_dim = floor_f32(ui_bottom_font_size()*1.5f);
   Vec2F32 panel_dim = dim_2f32(rect);
   F32 footer_dim = floor_f32(tab_font_size*3.f);
   Rng2F32 addrbar_rect = r2f32p(0, 0, panel_dim.x, tab_font_size*3.f);
   Rng2F32 peekbar_rect = r2f32p(0, addrbar_rect.y1, panel_dim.x, addrbar_rect.y1 + tab_font_size*3.f);
   Rng2F32 header_rect = r2f32p(0, peekbar_rect.y1, panel_dim.x, peekbar_rect.y1 + row_height_px);
-  Rng2F32 footer_rect = r2f32p(0, panel_dim.y-footer_dim, panel_dim.x-scroll_bar_dim, panel_dim.y);
-  Rng2F32 content_rect = r2f32p(0, header_rect.y1, panel_dim.x-scroll_bar_dim, panel_dim.y);
+  UI_ScrollRegionParams memory_region_params = {0};
+  UI_FontSize(ui_bottom_font_size())
+  {
+    memory_region_params = ui_scroll_region_params(r2f32p(0, header_rect.y1, panel_dim.x, Max(header_rect.y1, panel_dim.y-footer_dim)),
+                                                   UI_ScrollAxisPolicy_Off, UI_ScrollAxisPolicy_Always);
+  }
+  UI_ScrollRegion memory_region = ui_scroll_region_layout(memory_region_params);
+  Rng2F32 footer_rect = r2f32p(0, panel_dim.y-footer_dim, memory_region.viewport.x1, panel_dim.y);
+  Rng2F32 content_rect = r2f32p(0, header_rect.y1, memory_region.viewport.x1, panel_dim.y);
   
   //////////////////////////////
   //- rjf: determine visible range of rows (occluded & non-occluded)
@@ -3401,6 +3407,32 @@ RD_VIEW_UI_FUNCTION_DEF(memory)
   Rng1U64 selection = union_1u64(r1u64(cursor_base_vaddr, cursor_base_vaddr+cursor_size-1),
                                  r1u64(mark_base_vaddr, mark_base_vaddr+cursor_size-1));
   
+  //////////////////////////////
+  //- rjf: build main container
+  //
+  UI_Box *container_box = &ui_nil_box;
+  {
+    Vec2F32 dim = dim_2f32(rect);
+    ui_set_next_fixed_width(dim.x);
+    ui_set_next_fixed_height(dim.y);
+    ui_set_next_child_layout_axis(Axis2_Y);
+    container_box = ui_build_box_from_stringf(0, "memory_view_container");
+  }
+
+  // Keep fixed controls outside the region. Build bars before the memory
+  // rows so overlays win hits, and apply dragging before fetching bytes.
+  UI_ScrollRegionAxis scroll_axes[Axis2_COUNT] = {0};
+  scroll_axes[Axis2_Y] = (UI_ScrollRegionAxis){scroll_pos.y, scroll_idx_rng, num_possible_visible_rows};
+  UI_Key scroll_key = ui_key_from_string(container_box->key, str8_lit("scrollable_box"));
+  UI_ScrollRegionSignal scroll_sig = {0};
+  UI_FontSize(ui_bottom_font_size())
+  {
+    scroll_sig = ui_scroll_region_build(container_box, scroll_key, &memory_region, scroll_axes,
+                                        UI_BoxFlag_Scroll|UI_BoxFlag_AllowOverflowY);
+  }
+  scroll_pos.y = scroll_sig.position.y;
+  UI_Box *scrollable_box = scroll_sig.content_box;
+
   ////////////////////////////
   //- rjf: determine visible range of rows (including occluded)
   //
@@ -3892,35 +3924,6 @@ RD_VIEW_UI_FUNCTION_DEF(memory)
     access_close(access);
   }
   
-  //////////////////////////////
-  //- rjf: build main container
-  //
-  UI_Box *container_box = &ui_nil_box;
-  {
-    Vec2F32 dim = dim_2f32(rect);
-    ui_set_next_fixed_width(dim.x);
-    ui_set_next_fixed_height(dim.y);
-    ui_set_next_child_layout_axis(Axis2_Y);
-    container_box = ui_build_box_from_stringf(0, "memory_view_container");
-  }
-  
-  //////////////////////////////
-  //- rjf: build scroll bar
-  //
-  UI_Parent(container_box) UI_FontSize(ui_bottom_font_size())
-  {
-    ui_set_next_fixed_x(content_rect.x1);
-    ui_set_next_fixed_y(header_rect.y0);
-    ui_set_next_fixed_width(scroll_bar_dim);
-    ui_set_next_fixed_height(dim_2f32(rect).y - dim_2f32(addrbar_rect).y - dim_2f32(peekbar_rect).y);
-    {
-      scroll_pos.y = ui_scroll_bar(Axis2_Y,
-                                   ui_px(scroll_bar_dim, 1.f),
-                                   scroll_pos.y,
-                                   scroll_idx_rng,
-                                   num_possible_visible_rows);
-    }
-  }
   
   //////////////////////////////
   //- rjf: build address bar
@@ -4051,7 +4054,7 @@ RD_VIEW_UI_FUNCTION_DEF(memory)
       ui_set_next_pref_width(ui_children_sum(1));
       ui_row_begin();
       F32 x_off_px = 0;
-      F32 x_max_px = dim_2f32(rect).x - scroll_bar_dim;
+      F32 x_max_px = memory_region.viewport.x1;
       for EachNode(n, String8Node, peek_type_list.first)
       {
         String8 type_string = n->string;
@@ -4279,23 +4282,12 @@ RD_VIEW_UI_FUNCTION_DEF(memory)
     }
   }
   
-  //////////////////////////////
-  //- rjf: build scrollable box
-  //
-  UI_Box *scrollable_box = &ui_nil_box;
-  UI_Parent(container_box)
-  {
-    ui_set_next_fixed_x(content_rect.x0);
-    ui_set_next_fixed_y(content_rect.y0);
-    ui_set_next_fixed_width(dim_2f32(content_rect).x);
-    ui_set_next_fixed_height(dim_2f32(content_rect).y);
-    scrollable_box = ui_build_box_from_stringf(UI_BoxFlag_Clip|
-                                               UI_BoxFlag_Scroll|
-                                               UI_BoxFlag_AllowOverflowY,
-                                               "scrollable_box");
-    container_box->view_off.x = container_box->view_off_target.x = scroll_pos.x.idx + scroll_pos.x.off;
-    scrollable_box->view_off.y = scrollable_box->view_off_target.y = floor_f32(row_height_px*mod_f32(scroll_pos.y.off, 1.f) + row_height_px*(scroll_pos.y.off < 0));
-  }
+  // The overscan row keeps its original screen position while the region
+  // clips it beneath the fixed header, rather than moving the clip rectangle.
+  container_box->view_off.x = container_box->view_off_target.x = scroll_pos.x.idx + scroll_pos.x.off;
+  scrollable_box->view_off.y = scrollable_box->view_off_target.y =
+    header_rect.y1 - content_rect.y0 +
+    floor_f32(row_height_px*mod_f32(scroll_pos.y.off, 1.f) + row_height_px*(scroll_pos.y.off < 0));
   
   //////////////////////////////
   //- rjf: build row container/overlay
