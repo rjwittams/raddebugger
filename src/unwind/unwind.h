@@ -35,16 +35,25 @@ struct UWND_ModuleInfo
 {
   U64 base_vaddr;
   void *unwind_info;
+  OperatingSystem os;
 };
+
+// One validity byte per register-block byte. A null mask is allowed only for
+// callers that supply a complete live context and do not consume availability.
+internal B32 uwnd_reg_range_is_valid(U8 *valid, Rng1U16 range);
+internal void uwnd_reg_set_valid(U8 *valid, Rng1U16 range, B32 value);
+internal void uwnd_reg_valid_from_abi(Arch arch, OperatingSystem os, U8 *src, U8 *dst);
+internal B32 uwnd_reg_is_valid(Arch arch, U8 *valid, U8 code);
+internal void uwnd_reg_mark_valid(Arch arch, U8 *valid, U8 code, U64 size);
 
 ////////////////////////////////
 //~ rjf: Moduleless Unwinder
 
-internal UWND_StepResult uwnd_step_moduleless(Arch arch, MemoryMap *memory_map, void *regs);
+internal UWND_StepResult uwnd_step_moduleless(Arch arch, MemoryMap *memory_map, void *regs, U8 *reg_valid);
 
 ////////////////////////////////
 //~ rjf: Abstracted Unwind Step Functions
 
-internal UWND_StepResult uwnd_step(UWND_Unwinder unwinder, Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64 tls_vaddr, void *regs, U64 *cfa_out);
+internal UWND_StepResult uwnd_step(UWND_Unwinder unwinder, Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64 tls_vaddr, void *regs, U8 *reg_valid, U64 *cfa_out);
 
 #endif // UNWIND_H
