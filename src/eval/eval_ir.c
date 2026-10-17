@@ -2095,6 +2095,10 @@ e_push_irtree_and_type_from_expr(Arena *arena, E_IRTreeAndType *root_parent, E_I
                   case RDI_SectionKind_Procedures:
                   {
                     RDI_Symbol *procedure = (RDI_Symbol *)rdi_section_raw_element_from_kind_idx(rdi, match.section_kind, match.idx);
+                    RDI_Scope *scope = rdi_root_scope_from_procedure(rdi, procedure);
+                    // Abstract inline procedures have no out-of-line address.
+                    // Check the range, not its first offset: offset zero can be valid.
+                    if(scope->voff_range_first >= scope->voff_range_opl) {break;}
                     RDI_TypeNode *type_node = rdi_element_from_name_idx(rdi, TypeNodes, procedure->type_idx);
                     U64 procedure_base_voff = rdi_first_voff_from_procedure(rdi, procedure);
                     mapped_type_key = e_type_key_ext(e_type_kind_from_rdi(type_node->kind), procedure->type_idx, dbg_info_num);
