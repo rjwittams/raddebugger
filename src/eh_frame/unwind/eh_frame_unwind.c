@@ -558,6 +558,23 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
       }
     }
     
+    // DWARF 6.4.4: an undefined return-address rule ends the unwind. No
+    // caller exists, so do not require its CFA or manufacture caller values.
+    if(!done)
+    {
+      U64 return_column = cie.ret_addr_reg;
+      U64 pc_column = arch_dw_from_reg_code_table_from_arch(arch)[arch_info->instruction_pointer_reg_code];
+      if(signal_frame && pc_column < reg_count && cfi_row.reg_rules[pc_column].code != DW_UnwindRuleCode_Undefined)
+      {
+        return_column = pc_column;
+      }
+      if(cfi_row.reg_rules[return_column].code == DW_UnwindRuleCode_Undefined)
+      {
+        done = 1;
+        result.status = UWND_StepStatus_EndOfStack;
+      }
+    }
+
     //- rjf: evaluate frame base vaddr (CFA) via CFI row rule
     U64 cfa = 0;
     if(!done) switch(cfi_row.cfa_rule.code)

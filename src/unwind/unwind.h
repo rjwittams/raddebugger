@@ -17,6 +17,7 @@ typedef enum UWND_StepStatus
   UWND_StepStatus_Error,
   UWND_StepStatus_FailedMemoryRead,
   UWND_StepStatus_Good,
+  UWND_StepStatus_EndOfStack,
 }
 UWND_StepStatus;
 
