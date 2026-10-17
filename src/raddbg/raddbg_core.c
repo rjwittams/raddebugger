@@ -259,6 +259,24 @@ rd_path_from_cfg(CFG_Node *cfg)
   return result;
 }
 
+internal DI_Key
+rd_dbgi_key_from_cfg(CFG_Node *cfg)
+{
+  String8 path = rd_path_from_cfg(cfg);
+  U64 timestamp = 0;
+  try_u64_from_str8_c_rules(cfg_node_child_from_string(cfg, str8_lit("timestamp"))->first->string, &timestamp);
+  D_EntityArray dbg_paths = d_entity_array_from_kind(D_EntityKind_DebugInfoPath);
+  for EachIndex(idx, dbg_paths.count)
+  {
+    D_Entity *dbg_path = dbg_paths.v[idx];
+    if(dbg_path->timestamp == timestamp && str8_match(dbg_path->string, path, 0))
+    {
+      return d_dbgi_key_from_debug_info_path(dbg_path);
+    }
+  }
+  return di_key_from_path_timestamp(path, timestamp);
+}
+
 internal D_Target
 rd_target_from_cfg(Arena *arena, CFG_Node *cfg)
 {
@@ -791,7 +809,7 @@ rd_eval_space_read(E_Space space, void *out, E_SpaceRangeInfo *out_range_info, R
           String8 data = slice.data;
           if(data.size == dim_1u64(range))
           {
-            result = 1;
+            result = !slice.any_byte_bad;
             MemoryCopy(out, data.str, data.size);
             if(out_range_info != 0 && out_range_info->byte_bad_flags)
             {
@@ -813,6 +831,7 @@ rd_eval_space_read(E_Space space, void *out, E_SpaceRangeInfo *out_range_info, R
         {
           Access *access = access_open();
           void *regs_block = 0;
+          U8 *reg_valid = 0;
           if(e_interpret_ctx->reg_unwind_count == 0)
           {
             regs_block = d_cached_reg_block_from_thread(scratch.arena, entity->handle);
@@ -825,6 +844,7 @@ rd_eval_space_read(E_Space space, void *out, E_SpaceRangeInfo *out_range_info, R
             {
               D_CallStackFrame *f = call_stack.concrete_frames[concrete_frame_idx];
               regs_block = f->regs;
+              reg_valid = f->reg_valid;
             }
           }
           if(regs_block != 0)
@@ -836,6 +856,18 @@ rd_eval_space_read(E_Space space, void *out, E_SpaceRangeInfo *out_range_info, R
             U64 read_size = dim_1u64(read_range);
             MemoryCopy(out, (U8 *)regs_block + read_range.min, read_size);
             result = (read_size == dim_1u64(range));
+            for(U64 i = 0; reg_valid != 0 && i < read_size; i += 1)
+            {
+              if(!reg_valid[read_range.min+i])
+              {
+                result = 0;
+                if(out_range_info != 0)
+                {
+                  out_range_info->flags |= E_SpaceRangeFlag_AnyByteBad;
+                  if(out_range_info->byte_bad_flags) {out_range_info->byte_bad_flags[i/64] |= 1ull << (i%64);}
+                }
+              }
+            }
           }
           access_close(access);
         }break;
@@ -907,10 +939,7 @@ rd_eval_space_read(E_Space space, void *out, E_SpaceRangeInfo *out_range_info, R
           if(str8_match(child_schema->string, str8_lit("guid"), 0))
           {
             Access *access = access_open();
-            String8 path = rd_path_from_cfg(root_cfg);
-            U64 timestamp = 0;
-            try_u64_from_str8_c_rules(cfg_node_child_from_string(root_cfg, str8_lit("timestamp"))->first->string, &timestamp);
-            DI_Key key = di_key_from_path_timestamp(path, timestamp);
+            DI_Key key = rd_dbgi_key_from_cfg(root_cfg);
             RDI_Parsed *rdi = di_rdi_from_key(access, key, 0, 0);
             RDI_TopLevelInfo *tli = rdi_element_from_name_idx(rdi, TopLevelInfo, 0);
             Guid guid = {0};
@@ -10430,7 +10459,7 @@ rd_code_color_slot_from_txt_token_kind_lookup_string(TXT_TokenKind kind, String8
     // rjf: try to map using asynchronous matching system
     if(!mapped && kind == TXT_TokenKind_Identifier)
     {
-      DI_Match match = di_match_from_string(string, 0, 0, 1, di_key_zero(), 0);
+      DI_Match match = di_match_from_string(string, 0, 0, 1, di_key_zero(), 0, 0);
       RDI_SectionKind section_kind = match.section_kind;
       mapped = 1;
       switch(section_kind)
@@ -12014,11 +12043,7 @@ rd_frame(void)
       
       // rjf: unpack debug info config
       CFG_Node *di = n->v;
-      String8 path = rd_path_from_cfg(di);
-      CFG_Node *di_timestamp = cfg_node_child_from_string(di, str8_lit("timestamp"));
-      U64 timestamp = 0;
-      try_u64_from_str8_c_rules(di_timestamp->first->string, &timestamp);
-      DI_Key key = di_key_from_path_timestamp(path, timestamp);
+      DI_Key key = rd_dbgi_key_from_cfg(di);
       
       // rjf: touch in cache
       U64 hash = u64_hash_from_str8(str8_struct(&key));
@@ -12579,7 +12604,7 @@ rd_frame(void)
   //////////////////////////////
   //- rjf: loop - consume events in core, tick engine, and repeat
   //
-  D_Handle find_thread_retry = {0};
+  RD_Regs *find_thread_retry = 0;
   RD_Cmd *cmd = 0;
   ProfScope("loop - consume events in core, tick engine, and repeat") for(U64 cmd_process_loop_idx = 0; cmd_process_loop_idx < 3; cmd_process_loop_idx += 1)
   {
@@ -12602,15 +12627,28 @@ rd_frame(void)
     U64 dbg_infos_count = 0;
     {
       CFG_NodePtrList dbg_infos = cfg_node_top_level_list_from_string(scratch.arena, str8_lit("debug_info"));
-      for EachNode(n, CFG_NodePtrNode, dbg_infos.first)
+      D_EntityArray modules = d_entity_array_from_kind(D_EntityKind_Module);
+      CFG_NodePtrNode *cfg_node = dbg_infos.first;
+      for(U64 idx = 0; idx < dbg_infos.count + modules.count; idx += 1)
       {
-        CFG_Node *di = n->v;
-        if(rd_cfg_is_project_filtered(di)) { continue; }
-        String8 path = rd_path_from_cfg(di);
-        CFG_Node *timestamp_node = cfg_node_child_from_string(di, str8_lit("timestamp"));
-        U64 timestamp = 0;
-        try_u64_from_str8_c_rules(timestamp_node->first->string, &timestamp);
-        DI_Key key = di_key_from_path_timestamp(path, timestamp);
+        String8 path = {0};
+        DI_Key key = {0};
+        if(idx < dbg_infos.count)
+        {
+          CFG_Node *di = cfg_node->v;
+          cfg_node = cfg_node->next;
+          if(rd_cfg_is_project_filtered(di)) { continue; }
+          path = rd_path_from_cfg(di);
+          key = rd_dbgi_key_from_cfg(di);
+        }
+        else
+        {
+          D_Entity *module = modules.v[idx - dbg_infos.count];
+          D_Entity *dbg_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
+          path = dbg_path->string;
+          key = d_dbgi_key_from_debug_info_path(dbg_path);
+        }
+        if(path.size == 0) { continue; }
         U64 hash = u64_hash_from_str8(str8_struct(&key));
         U64 slot_idx = hash%dbg_info_slots_count;
         DbgInfoNode *node = 0;
@@ -15771,6 +15809,8 @@ rd_frame(void)
           //- rjf: thread finding
           case RD_CmdKind_FindThread:
           {
+            // A newer navigation request replaces any retry from this pass.
+            find_thread_retry = 0;
             Access *access = access_open();
             
             //- rjf: unpack thread info
@@ -15818,18 +15858,16 @@ rd_frame(void)
               }
               else
               {
-                ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
                 for(U64 frame_idx = 0; frame_idx < unwind.frames.count; frame_idx += 1)
                 {
-                  void *regs = unwind.frames.v[frame_idx].regs;
-                  U64 ip_vaddr = arch_ip_from_reg_block(arch_info, regs);
+                  U64 ip_vaddr = unwind.frames.v[frame_idx].lookup_vaddr;
                   D_Entity *module = d_module_from_process_vaddr(process, ip_vaddr);
                   U64 ip_voff = d_voff_from_vaddr(module, ip_vaddr);
                   D_Entity *debug_info_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
                   DI_Key dbgi_key = d_dbgi_key_from_debug_info_path(debug_info_path);
                   String8 dbgi_path = debug_info_path->string;
                   D_LineList lines = d_lines_from_dbgi_key_path_voff(scratch.arena, dbgi_key, dbgi_path, ip_voff);
-                  if(lines.count != 0)
+                  if(d_line_list_has_source(&lines))
                   {
                     rip_vaddr = ip_vaddr;
                     unwind_index = frame_idx;
@@ -15864,7 +15902,7 @@ rd_frame(void)
             B32 missing_rip   = (rip_vaddr == 0);
             B32 dbgi_missing  = (di_key_match(di_key_zero(), dbgi_key));
             B32 dbgi_pending  = !dbgi_missing && rdi == &rdi_parsed_nil;
-            B32 has_line_info = (line.voff_range.max != 0);
+            B32 has_line_info = d_line_has_source(&line);
             B32 has_module    = (module != &d_entity_nil);
             B32 has_dbg_info  = has_module && !dbgi_missing;
             
@@ -15881,8 +15919,8 @@ rd_frame(void)
               if(!dbgi_pending && (has_line_info || has_module))
               {
                 rd_cmd(RD_CmdKind_FindCodeLocation,
-                       .file_path    = line.file_path,
-                       .line_num     = (U64)line.pt.line,
+                       .file_path    = has_line_info ? line.file_path : str8_zero(),
+                       .line_num     = has_line_info ? (U64)line.pt.line : 0,
                        .column_num   = (U64)line.pt.column,
                        .process      = process->handle,
                        .voff         = rip_voff,
@@ -15906,9 +15944,10 @@ rd_frame(void)
             }
             
             // rjf: retry on stopped, pending debug info
-            if(!d_ctrl_targets_running() && (dbgi_pending || missing_rip || waiting_on_unwind))
+            if(thread->kind == D_EntityKind_Thread && !d_ctrl_targets_running() &&
+               (dbgi_pending || missing_rip || waiting_on_unwind))
             {
-              find_thread_retry = thread->handle;
+              find_thread_retry = rd_regs_copy(scratch.arena, rd_regs());
             }
             access_close(access);
           }break;
@@ -15944,11 +15983,11 @@ rd_frame(void)
                 DI_Match match = {0};
                 if(match.idx == 0)
                 {
-                  match = di_match_from_string(name, 0, 0, 1, e_base_ctx->primary_dbg_info->dbgi_key, rd_state->frame_eval_memread_endt_us);
+                  match = di_match_from_string(name, 0, 0, 1, e_base_ctx->primary_dbg_info->dbgi_key, rd_state->frame_eval_memread_endt_us, 0);
                 }
                 if(match.idx == 0)
                 {
-                  match = di_match_from_string(name, 0, 0, 1, di_key_zero(), rd_state->frame_eval_memread_endt_us);
+                  match = di_match_from_string(name, 0, 0, 1, di_key_zero(), rd_state->frame_eval_memread_endt_us, 0);
                 }
                 if(match.section_kind == RDI_SectionKind_Procedures)
                 {
@@ -16060,6 +16099,7 @@ rd_frame(void)
           //- rjf: snap-to-code-location
           case RD_CmdKind_FindCodeLocation:
           {
+            find_thread_retry = 0;
             // NOTE(rjf): This command is where a lot of high-level flow things
             // in the debugger come together. It's that codepath that runs any
             // time a source code location is clicked in the UI, when a thread
@@ -18683,14 +18723,6 @@ rd_frame(void)
   }
   
   //////////////////////////////
-  //- rjf: retry find-thread
-  //
-  if(!d_handle_match(d_handle_zero(), find_thread_retry))
-  {
-    rd_cmd(RD_CmdKind_FindThread, .thread = find_thread_retry);
-  }
-  
-  //////////////////////////////
   //- rjf: update window titles
   //
   if(rd_state->frame_depth == 1)
@@ -18756,6 +18788,18 @@ rd_frame(void)
     }
   }
   
+  //////////////////////////////
+  //- rjf: retry find-thread
+  //
+  // Retry only after rotation: commands queued before it have already missed
+  // core processing and are read only by views. Keep the original frame and
+  // auto-unwind policy instead of inheriting whichever view was last active.
+  if(rd_state->frame_depth == 1 && find_thread_retry != 0 && !d_ctrl_targets_running())
+  {
+    rd_push_cmd(rd_cmd_kind_info_table[RD_CmdKind_FindThread].string, find_thread_retry);
+    rd_request_frame();
+  }
+
   //////////////////////////////
   //- rjf: compute all ambiguous paths from view titles
   //

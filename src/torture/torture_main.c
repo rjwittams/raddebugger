@@ -21,6 +21,7 @@
 
 #include "base/base_inc.h"
 #include "x64/x64.h"
+#include "arm64/arm64.h"
 #include "linker/hash_table.h"
 #include "linker/lf_hash_table.h"
 #include "linker/base_ext/base_bit_array.h"
@@ -48,6 +49,7 @@
 #include "pe/pe_section_flags.h"
 #include "pe/pe_make_import_table.h"
 #include "elf/elf.h"
+#include "macho/macho.h"
 #include "gnu/gnu.h"
 #include "gnu/gnu_parse.h"
 #include "elf/elf_parse.h"
@@ -60,6 +62,7 @@
 #include "pdb/pdb_parse.h"
 #include "pdb/pdb_stringize.h"
 #include "dwarf/dwarf_inc.h"
+#include "dwarf/dwarf_macho.h"
 #include "eh_frame/eh_frame.h"
 #include "eh_frame/eh_frame_dump.h"
 #include "unwind/unwind_inc.h"
@@ -67,6 +70,7 @@
 #include "rdi_from_coff/rdi_from_coff.h"
 #include "rdi_from_elf/rdi_from_elf.h"
 #include "rdi_from_codeview/rdi_from_codeview.h"
+#include "rdi_from_macho/rdi_from_macho.h"
 #include "rdi_from_pdb/rdi_from_pdb.h"
 #include "rdi_from_dwarf/rdi_from_dwarf.h"
 #include "obj/obj.h"
@@ -105,6 +109,7 @@
 
 #include "base/base_inc.c"
 #include "x64/x64.c"
+#include "arm64/arm64.c"
 #include "linker/hash_table.c"
 #include "linker/lf_hash_table.c"
 #include "linker/base_ext/base_bit_array.c"
@@ -131,6 +136,7 @@
 #include "pe/pe.c"
 #include "pe/pe_make_import_table.c"
 #include "elf/elf.c"
+#include "macho/macho.c"
 #include "gnu/gnu.c"
 #include "gnu/gnu_parse.c"
 #include "elf/elf_parse.c"
@@ -143,6 +149,7 @@
 #include "pdb/pdb_parse.c"
 #include "pdb/pdb_stringize.c"
 #include "dwarf/dwarf_inc.c"
+#include "dwarf/dwarf_macho.c"
 #include "eh_frame/eh_frame.c"
 #include "eh_frame/eh_frame_dump.c"
 #include "unwind/unwind_inc.c"
@@ -150,6 +157,7 @@
 #include "rdi_from_coff/rdi_from_coff.c"
 #include "rdi_from_elf/rdi_from_elf.c"
 #include "rdi_from_codeview/rdi_from_codeview.c"
+#include "rdi_from_macho/rdi_from_macho.c"
 #include "rdi_from_pdb/rdi_from_pdb.c"
 #include "rdi_from_dwarf/rdi_from_dwarf.c"
 #include "obj/obj.c"
@@ -183,12 +191,18 @@
 #include "linker/lnk_debug_helper.c"
 #include "torture.c"
 
+#include "torture_arch.c"
+#include "torture_eh_frame.c"
 #include "base/tests/base_tests.c"
 #include "mdesk/tests/mdesk_tests.c"
 #include "linker/tests/linker_tests.c"
 #include "dwarf/tests/dwarf_tests.c"
+#include "dbg_info/tests/dbg_info_tests.c"
+#include "macho/tests/macho_tests.c"
 #include "render/metal/render_metal_tests.c"
+#include "rdi_make/tests/rdi_make_tests.c"
 #include "rdi_from_dwarf/tests/rdi_from_dwarf_tests.c"
+#include "rdi_from_dwarf/tests/binary_metadata_tests.c"
 #include "rdi_from_pdb/tests/rdi_from_pdb_tests.c"
 #include "raddbg/tests/raddbg_tests.c"
 #include "eval2/tests/eval2_tests.c"
@@ -204,4 +218,3 @@ entry_point(CmdLine *cmdline)
 {
   t_entry_point(cmdline);
 }
-
