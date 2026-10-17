@@ -306,7 +306,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
     top_level_info.voff_max = acceptable_vaddr_range.max - base_vaddr;
     if(!params->deterministic)
     {
-      // TODO(rjf): top_level_info.guid = ...;
+      MemoryCopy(&top_level_info.guid, &params->guid, sizeof(top_level_info.guid));
       top_level_info.producer_name = str8_lit(BUILD_TITLE_STRING_LITERAL);
     }
   }
