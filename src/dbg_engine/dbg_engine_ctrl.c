@@ -2685,7 +2685,7 @@ d_ctrl_thread__entry_point(void *p)
             if(module != &d_entity_nil)
             {
               D_Entity *debug_info_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
-              DI_Key old_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, debug_info_path->timestamp);
+              DI_Key old_dbgi_key = d_dbgi_key_from_debug_info_path(debug_info_path);
               di_close(old_dbgi_key, 0);
               MutexScopeW(d_ctrl_state->ctrl_thread_entity_ctx_rw_mutex)
               {
@@ -2694,6 +2694,7 @@ d_ctrl_thread__entry_point(void *p)
               U64 new_dbgi_timestamp = properties_from_file_path(path).modified;
               debug_info_path->timestamp = new_dbgi_timestamp;
               DI_Key new_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, new_dbgi_timestamp);
+              debug_info_path->dbg_info_key = new_dbgi_key;
               di_open(new_dbgi_key);
               D_EventList evts = {0};
               D_Event *evt = d_event_list_push(scratch.arena, &evts);
@@ -2701,6 +2702,7 @@ d_ctrl_thread__entry_point(void *p)
               evt->entity     = msg->entity;
               evt->string     = path;
               evt->timestamp  = new_dbgi_timestamp;
+              evt->dbg_info_key = new_dbgi_key;
               d_c2u_push_events(&evts);
             }
           }break;
@@ -4663,7 +4665,7 @@ d_ctrl_thread__kill(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
               done = 1;
             }break;
             case DMN_EventKind_Error:{done = 1; cause = D_EventCause_Error;}break;
-            case DMN_EventKind_Halt: {done = 1; cause = D_EventCause_InterruptedByHalt;}break;
+            case DMN_EventKind_Halt: {}break;
           }
         }
       }
@@ -4795,7 +4797,8 @@ d_ctrl_thread__detach(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   //- rjf: detach
   B32 detach_worked = dmn_ctrl_detach(ctrl_ctx, process);
   
-  //- rjf: wait for process to be dead
+  //- consume synthetic process-removal events
+#if OS_MAC || OS_WINDOWS
   if(detach_worked)
   {
     DMN_RunCtrls run_ctrls = {0};
@@ -4810,16 +4813,27 @@ d_ctrl_thread__detach(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       {
         done = 1;
       }
-      if(event->kind == DMN_EventKind_Halt)
+      if(event->kind == DMN_EventKind_Halt || event->kind == DMN_EventKind_Error)
       {
         done = 1;
       }
     }
   }
-  
+#endif
+
   //- rjf: record stop
   {
     D_EventList evts = {0};
+#if OS_LINUX
+    if(detach_worked)
+    {
+      D_Event *end_event = d_event_list_push(scratch.arena, &evts);
+      end_event->kind   = D_EventKind_EndProc;
+      end_event->msg_id = msg->msg_id;
+      end_event->entity = msg->entity;
+      end_event->entity_id = d_entity_from_handle(msg->entity)->id;
+    }
+#endif
     D_Event *event = d_event_list_push(scratch.arena, &evts);
     event->kind       = D_EventKind_Stopped;
     event->cause      = D_EventCause_Finished;
@@ -4910,7 +4924,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   // which may include features put on a trap net trap at the same address as
   // the user breakpoint.
   //
-  B32 target_thread_is_on_user_bp_and_trap_net_trap = 0;
+  U64 initial_target_overlap_vaddr = 0;
   if(stop_event == 0)
   {
     // rjf: gather stuck threads
@@ -4961,7 +4975,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
               
               if(is_on_user_bp && is_on_net_trap && dmn_handle_match(d_dmn_from_handle(thread->handle), target_thread_dmn))
               {
-                target_thread_is_on_user_bp_and_trap_net_trap = 1;
+                initial_target_overlap_vaddr = rip;
               }
             }
           }
@@ -5126,7 +5140,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       log_infof("get_next_event:\n{\n");
       DMN_Event *event = d_ctrl_thread__next_dmn_event(scratch.arena, ctrl_ctx, msg, &run_ctrls, run_spoof);
       log_infof("}\n\n");
-      
+
       //////////////////////////
       //- rjf: determine event handling
       //
@@ -5537,7 +5551,17 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
         
         // rjf: user breakpoints
         {
-          if(event->user_data != 0)
+          // Let the trap net handle the initial overlap once, including events
+          // carrying a user breakpoint ID. Later hits must remain user stops.
+          B32 step_past_initial_user_bp = (initial_target_overlap_vaddr != 0 &&
+                                          event->instruction_pointer == initial_target_overlap_vaddr &&
+                                          dmn_handle_match(event->thread, target_thread_dmn) &&
+                                          event->address == 0);
+          if(step_past_initial_user_bp)
+          {
+            initial_target_overlap_vaddr = 0;
+          }
+          if(event->user_data != 0 && !step_past_initial_user_bp)
           {
             hit_user_bp = 1;
           }
@@ -5549,7 +5573,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
             {
               if(dmn_handle_match(trap->process, event->process) &&
                  trap->vaddr == event->instruction_pointer &&
-                 (!dmn_handle_match(event->thread, d_dmn_from_handle(target_thread)) || !target_thread_is_on_user_bp_and_trap_net_trap))
+                 !step_past_initial_user_bp)
               {
                 D_Breakpoint *user_bp = (D_Breakpoint *)trap->id;
                 hit_user_bp = 1;
@@ -5729,6 +5753,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       
       //- rjf: trap net logic: single step after hit
       B32 single_step_stop = 0;
+      D_TrapFlags post_step_trap_flags = 0;
       D_EventCause single_step_stop_cause = D_EventCause_Null;
       if(!hard_stop && use_trap_net_logic)
       {
@@ -5769,6 +5794,17 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
               }break;
             }
           }
+
+          if(!single_step_stop)
+          {
+            for(D_TrapNode *node = msg->traps.first; node != 0; node = node->next)
+            {
+              if(node->v.vaddr == thread_post_rip)
+              {
+                post_step_trap_flags |= node->v.flags;
+              }
+            }
+          }
         }
       }
       
@@ -5803,7 +5839,13 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       B32 trap_net_stop = 0;
       if(!hard_stop && use_trap_net_logic)
       {
-        if(hit_trap_flags & D_TrapFlag_EndStepping) LogInfoNamedBlockF("trap_net__end_step")
+        // A newly reached trap may stop here, but its instruction actions have not run.
+        // Leave traps requiring those actions to the next iteration of the run loop.
+        B32 post_step_stop = ((post_step_trap_flags & D_TrapFlag_EndStepping) &&
+                             !(post_step_trap_flags & ~(D_TrapFlag_EndStepping|D_TrapFlag_IgnoreStackPointerCheck)) &&
+                             ((post_step_trap_flags & D_TrapFlag_IgnoreStackPointerCheck) ||
+                              d_sp_from_thread(target_thread) == sp_check_value));
+        if((hit_trap_flags & D_TrapFlag_EndStepping) || post_step_stop) LogInfoNamedBlockF("trap_net__end_step")
         {
           trap_net_stop = 1;
           use_trap_net_logic = 0;
