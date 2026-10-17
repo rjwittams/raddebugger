@@ -15524,11 +15524,9 @@ rd_frame(void)
               }
               else
               {
-                ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
                 for(U64 frame_idx = 0; frame_idx < unwind.frames.count; frame_idx += 1)
                 {
-                  void *regs = unwind.frames.v[frame_idx].regs;
-                  U64 ip_vaddr = arch_ip_from_reg_block(arch_info, regs);
+                  U64 ip_vaddr = unwind.frames.v[frame_idx].lookup_vaddr;
                   D_Entity *module = d_module_from_process_vaddr(process, ip_vaddr);
                   U64 ip_voff = d_voff_from_vaddr(module, ip_vaddr);
                   D_Entity *debug_info_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
