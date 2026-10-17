@@ -316,6 +316,7 @@ struct D_Event
   U64 tls_index;
   U64 tls_offset;
   U64 timestamp;
+  DI_Key dbg_info_key;
   U32 exception_code;
   U32 rgba;
   D_BreakpointFlags bp_flags;
