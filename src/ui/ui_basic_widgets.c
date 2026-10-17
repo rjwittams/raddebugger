@@ -1312,7 +1312,7 @@ ui_scroll_bar(Axis2 axis, UI_Size off_axis_size, UI_ScrollPt pt, Rng1S64 idx_ran
       // rjf: space before
       if(idx_range.max != idx_range.min)
       {
-        ui_set_next_pref_size(axis, ui_pct((F32)((F64)(pt.idx-idx_range.min)/(F64)idx_range_dim), 0));
+        ui_set_next_pref_size(axis, ui_pct((F32)(((F64)(pt.idx-idx_range.min) + pt.target_off)/(F64)idx_range_dim), 0));
         UI_Box *space_before_box = ui_build_box_from_stringf(UI_BoxFlag_Clickable, "##scroll_area_before");
         space_before_sig = ui_signal_from_box(space_before_box);
       }
@@ -1327,7 +1327,7 @@ ui_scroll_bar(Axis2 axis, UI_Size off_axis_size, UI_ScrollPt pt, Rng1S64 idx_ran
       // rjf: space after
       if(idx_range.max != idx_range.min)
       {
-        ui_set_next_pref_size(axis, ui_pct(1.f - (F32)((F64)(pt.idx-idx_range.min)/(F64)idx_range_dim), 0));
+        ui_set_next_pref_size(axis, ui_pct(1.f - (F32)(((F64)(pt.idx-idx_range.min) + pt.target_off)/(F64)idx_range_dim), 0));
         UI_Box *space_after_box = ui_build_box_from_stringf(UI_BoxFlag_Clickable, "##scroll_area_after");
         space_after_sig = ui_signal_from_box(space_after_box);
       }
@@ -1396,6 +1396,8 @@ thread_static UI_ScrollPt *ui_scroll_list_scroll_pt_ptr = 0;
 thread_static F32 ui_scroll_list_scroll_bar_dim_px = 0;
 thread_static Vec2F32 ui_scroll_list_dim_px = {0};
 thread_static Rng1S64 ui_scroll_list_scroll_idx_rng = {0};
+thread_static F32 ui_scroll_list_row_height_px = 0;
+thread_static B32 ui_scroll_list_snap_scroll = 0;
 
 internal void
 ui_scroll_list_begin(UI_ScrollListParams *params, UI_ScrollPt *scroll_pt, Vec2S64 *cursor_out, Vec2S64 *mark_out, Rng1S64 *visible_row_range_out, UI_ScrollListSignal *signal_out)
@@ -1507,8 +1509,9 @@ ui_scroll_list_begin(UI_ScrollListParams *params, UI_ScrollPt *scroll_pt, Vec2S6
   }
   
   //- rjf: determine ranges & limits
-  Rng1S64 visible_row_range = r1s64(scroll_pt->idx + (S64)(scroll_pt->off) + 0 - !!(scroll_pt->off < 0),
-                                    scroll_pt->idx + (S64)(scroll_pt->off) + 0 + num_possible_visible_rows + 1);
+  F32 visible_offset = ui_scroll_pt_offset(*scroll_pt);
+  Rng1S64 visible_row_range = r1s64(scroll_pt->idx + (S64)floor_f32(visible_offset),
+                                 scroll_pt->idx + (S64)floor_f32(visible_offset) + num_possible_visible_rows + 2);
   visible_row_range.min = clamp_1s64(params->item_range, visible_row_range.min);
   visible_row_range.max = clamp_1s64(params->item_range, visible_row_range.max);
   *visible_row_range_out = visible_row_range;
@@ -1518,6 +1521,8 @@ ui_scroll_list_begin(UI_ScrollListParams *params, UI_ScrollPt *scroll_pt, Vec2S6
   ui_scroll_list_scroll_pt_ptr = scroll_pt;
   ui_scroll_list_dim_px = params->dim_px;
   ui_scroll_list_scroll_idx_rng = scroll_row_idx_range;
+  ui_scroll_list_row_height_px = params->row_height_px;
+  ui_scroll_list_snap_scroll = params->snap_scroll;
   
   //- rjf: build top-level container
   UI_Box *container_box = &ui_nil_box;
@@ -1539,8 +1544,9 @@ ui_scroll_list_begin(UI_ScrollListParams *params, UI_ScrollPt *scroll_pt, Vec2S6
     {
       fade_flags |= UI_BoxFlag_DrawFadeBottom;
     }
-    scrollable_container_box = ui_build_box_from_stringf(fade_flags|UI_BoxFlag_Clip|UI_BoxFlag_AllowOverflowY|UI_BoxFlag_Scroll, "###sp");
-    scrollable_container_box->view_off.y = scrollable_container_box->view_off_target.y = params->row_height_px*mod_f32(scroll_pt->off, 1.f) + params->row_height_px*(scroll_pt->off < 0) - params->row_height_px*(scroll_pt->off == -1.f && scroll_pt->idx == 1);
+    scrollable_container_box = ui_build_box_from_stringf(fade_flags|UI_BoxFlag_Clip|UI_BoxFlag_AllowOverflowY|UI_BoxFlag_Scroll|
+                                                       (params->precise_scroll ? UI_BoxFlag_ScrollPrecise : 0), "###sp");
+    scrollable_container_box->view_off.y = scrollable_container_box->view_off_target.y = params->row_height_px*(visible_offset - floor_f32(visible_offset));
   }
   
   //- rjf: build vertical scroll bar
@@ -1571,6 +1577,11 @@ ui_scroll_list_end(void)
   //- rjf: scroll
   {
     UI_Signal sig = ui_signal_from_box(scrollable_container_box);
+    if(ui_scroll_list_row_height_px > 0)
+    {
+      ui_scroll_pt_scroll(ui_scroll_list_scroll_pt_ptr, sig.scroll_px.y/ui_scroll_list_row_height_px,
+                          ui_scroll_list_scroll_idx_rng, ui_scroll_list_snap_scroll);
+    }
     if(sig.scroll.y != 0)
     {
       S64 new_idx = ui_scroll_list_scroll_pt_ptr->idx + sig.scroll.y;

@@ -349,8 +349,9 @@ rd_code_view_build(Arena *arena, RD_CodeViewState *cv, RD_CodeViewBuildFlags fla
   //////////////////////////////
   //- rjf: determine visible line range / count
   //
-  Rng1S64 visible_line_num_range = r1s64(scroll_pos.y.idx + (S64)(scroll_pos.y.off) + 1 - !!(scroll_pos.y.off < 0),
-                                         scroll_pos.y.idx + (S64)(scroll_pos.y.off) + 1 + num_possible_visible_lines);
+  F32 visible_scroll_y = ui_scroll_pt_offset(scroll_pos.y);
+  Rng1S64 visible_line_num_range = r1s64(scroll_pos.y.idx + (S64)floor_f32(visible_scroll_y) + 1,
+                                        scroll_pos.y.idx + (S64)floor_f32(visible_scroll_y) + 2 + num_possible_visible_lines);
   Rng1S64 target_visible_line_num_range = r1s64(scroll_pos.y.idx + 1,
                                                 scroll_pos.y.idx + 1 + num_possible_visible_lines);
   U64 visible_line_count = 0;
@@ -475,7 +476,7 @@ rd_code_view_build(Arena *arena, RD_CodeViewState *cv, RD_CodeViewBuildFlags fla
     code_slice_params.catchall_margin_width_px  = catchall_margin_width_px;
     code_slice_params.line_num_width_px         = line_num_width_px;
     code_slice_params.line_text_max_width_px    = (F32)line_size_x;
-    code_slice_params.margin_float_off_px       = scroll_pos.x.idx + floor_f32(scroll_pos.x.off);
+    code_slice_params.margin_float_off_px       = scroll_pos.x.idx + floor_f32(ui_scroll_pt_offset(scroll_pos.x));
     
     // rjf: fill line text / ranges
     {
@@ -776,6 +777,7 @@ rd_code_view_build(Arena *arena, RD_CodeViewState *cv, RD_CodeViewBuildFlags fla
     ui_set_next_child_layout_axis(Axis2_Y);
     container_box = ui_build_box_from_stringf(UI_BoxFlag_Clip|
                                               UI_BoxFlag_Scroll|
+                                              UI_BoxFlag_ScrollPrecise|
                                               UI_BoxFlag_AllowOverflowX|
                                               UI_BoxFlag_AllowOverflowY,
                                               "###code_area");
@@ -914,8 +916,8 @@ rd_code_view_build(Arena *arena, RD_CodeViewState *cv, RD_CodeViewBuildFlags fla
   UI_Parent(container_box)
   {
     //- rjf: build fractional space
-    container_box->view_off.x = container_box->view_off_target.x = scroll_pos.x.idx + scroll_pos.x.off;
-    container_box->view_off.y = container_box->view_off_target.y = code_line_height*mod_f32(scroll_pos.y.off, 1.f) + code_line_height*(scroll_pos.y.off < 0) - code_line_height*(scroll_pos.y.off == -1.f && scroll_pos.y.idx == 1);
+    container_box->view_off.x = container_box->view_off_target.x = scroll_pos.x.idx + ui_scroll_pt_offset(scroll_pos.x);
+    container_box->view_off.y = container_box->view_off_target.y = code_line_height*(visible_scroll_y - floor_f32(visible_scroll_y));
     
     //- rjf: build code slice
     RD_CodeSliceSignal sig = {0};
@@ -1089,6 +1091,8 @@ rd_code_view_build(Arena *arena, RD_CodeViewState *cv, RD_CodeViewBuildFlags fla
   if(text_is_ready)
   {
     UI_Signal sig = ui_signal_from_box(container_box);
+    ui_scroll_pt_scroll(&scroll_pos.x, sig.scroll_px.x, scroll_idx_rng[Axis2_X], 0);
+    ui_scroll_pt_scroll(&scroll_pos.y, sig.scroll_px.y/code_line_height, scroll_idx_rng[Axis2_Y], 0);
     if(sig.scroll.x != 0)
     {
       S64 new_idx = scroll_pos.x.idx+sig.scroll.x*big_glyph_advance;

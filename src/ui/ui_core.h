@@ -151,6 +151,7 @@ struct UI_Event
   String8List paths;
   Vec2F32 pos;
   Vec2F32 delta_2f32;
+  B32 scroll_is_precise;
   Vec2S32 delta_2s32;
   U64 timestamp_us;
 };
@@ -253,6 +254,8 @@ struct UI_ScrollPt
 {
   S64 idx;
   F32 off;
+  F32 target_off; // persistent fraction; off remains the animation displacement
+  F32 remainder;  // unapplied input when snapping precise movement to rows
 };
 
 typedef union UI_ScrollPt2 UI_ScrollPt2;
@@ -346,6 +349,7 @@ typedef U64 UI_BoxFlags;
 # define UI_BoxFlag_HasFuzzyMatchRanges       (UI_BoxFlags)(1ull<<54)
 # define UI_BoxFlag_RoundChildrenByParent     (UI_BoxFlags)(1ull<<55)
 # define UI_BoxFlag_SquishAnchored            (UI_BoxFlags)(1ull<<56)
+# define UI_BoxFlag_ScrollPrecise             (UI_BoxFlags)(1ull<<57)
 
 //- rjf: debug
 # define UI_BoxFlag_Debug                     (UI_BoxFlags)(1ull<<63)
@@ -526,6 +530,7 @@ struct UI_Signal
   UI_Box *box;
   WM_Modifiers event_flags;
   Vec2S16 scroll;
+  Vec2F32 scroll_px; // precise movement, only for ScrollPrecise consumers
   UI_SignalFlags f;
 };
 
@@ -791,6 +796,8 @@ internal UI_Size ui_size(UI_SizeKind kind, F32 value, F32 strictness);
 internal UI_ScrollPt ui_scroll_pt(S64 idx, F32 off);
 internal void ui_scroll_pt_target_idx(UI_ScrollPt *v, S64 idx);
 internal void ui_scroll_pt_clamp_idx(UI_ScrollPt *v, Rng1S64 range);
+internal F32 ui_scroll_pt_offset(UI_ScrollPt v);
+internal void ui_scroll_pt_scroll(UI_ScrollPt *v, F32 delta, Rng1S64 range, B32 snap);
 
 ////////////////////////////////
 //~ rjf: Box Type Functions

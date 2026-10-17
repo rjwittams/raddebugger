@@ -122,6 +122,7 @@ struct WM_Event
   U32 repeat_count;
   Vec2F32 pos;
   Vec2F32 delta;
+  B32 scroll_is_precise;
   String8List strings;
 };
 
