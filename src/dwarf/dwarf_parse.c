@@ -1290,6 +1290,7 @@ dw2_read_offset_table(String8 data, U64 off, DW_SectionKind section_kind, DW2_Of
       out->entry_size            = entry_size;
       out->entries_count         = is_list ? offset_count : (unit_data_off_opl - off) / out->entry_size;
       out->entries               = data.str + off;
+      out->list_range            = is_list ? r1u64(off + offset_count*entry_size, unit_data_off_opl) : r1u64(0, 0);
       
       // rjf: skip table
       off = unit_data_off_opl;
@@ -1493,7 +1494,15 @@ dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
           {
             return result;
           }
-          rnglist_off += (U8 *)ctx->rnglists_table->entries - data.str;
+          U64 base_off = (U8 *)ctx->rnglists_table->entries - data.str;
+          Rng1U64 list_range = ctx->rnglists_table->list_range;
+          if(list_range.max > data.size || base_off > list_range.min ||
+             rnglist_off < list_range.min-base_off || rnglist_off >= list_range.max-base_off)
+          {
+            return result;
+          }
+          rnglist_off += base_off;
+          data = str8_prefix(data, list_range.max);
         }break;
       }
       
@@ -1730,7 +1739,15 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
           {
             return result;
           }
-          loclist_off += (U8 *)ctx->loclists_table->entries - data.str;
+          U64 base_off = (U8 *)ctx->loclists_table->entries - data.str;
+          Rng1U64 list_range = ctx->loclists_table->list_range;
+          if(list_range.max > data.size || base_off > list_range.min ||
+             loclist_off < list_range.min-base_off || loclist_off >= list_range.max-base_off)
+          {
+            return result;
+          }
+          loclist_off += base_off;
+          data = str8_prefix(data, list_range.max);
         }break;
       }
       

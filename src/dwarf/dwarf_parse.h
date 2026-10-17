@@ -105,6 +105,7 @@ struct DW2_OffsetTable
   U64 entry_size;
   U64 entries_count;
   void *entries;
+  Rng1U64 list_range; // Section offsets after the list offset array, bounded by unit_length.
 };
 
 typedef struct DW2_OffsetTableNode DW2_OffsetTableNode;
