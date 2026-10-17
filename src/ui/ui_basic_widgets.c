@@ -1281,13 +1281,14 @@ ui_scroll_bar_styled(Axis2 axis, UI_Size off_axis_size, UI_ScrollBarStyle style,
     disabled_flags |= UI_BoxFlag_Disabled;
   }
 
-  //- build main container (classic: bordered gutter; overlay: transparent
-  // floating strip whose geometry + Floating flag are set by the caller)
+  //- rjf: build main container
+  // Classic uses a bordered gutter; overlay uses a transparent floating strip
+  // whose geometry and Floating flag are set by the caller.
   ui_set_next_pref_size(axis2_flip(axis), off_axis_size);
   ui_set_next_child_layout_axis(axis);
   UI_Box *container_box = ui_build_box_from_key(overlay ? 0 : UI_BoxFlag_DrawBorder, ui_key_zero());
 
-  //- rjf: build scroll-min button (classic only)
+  //- rjf: build scroll-min button
   UI_Signal min_scroll_sig = {0};
   if(!overlay) UI_Parent(container_box)
     UI_PrefSize(axis, off_axis_size)
@@ -1362,7 +1363,7 @@ ui_scroll_bar_styled(Axis2 axis, UI_Size off_axis_size, UI_ScrollBarStyle style,
     }
   }
 
-  //- rjf: build scroll-max button (classic only)
+  //- rjf: build scroll-max button
   UI_Signal max_scroll_sig = {0};
   if(!overlay) UI_Parent(container_box)
     UI_PrefSize(axis, off_axis_size)
@@ -1376,7 +1377,7 @@ ui_scroll_bar_styled(Axis2 axis, UI_Size off_axis_size, UI_ScrollBarStyle style,
     max_scroll_sig = ui_buttonf("%S##_max_scroll_%i", arrow_string, axis);
   }
 
-  //- rjf: pt * signals -> new pt (min/max sigs are zero for overlay)
+  //- rjf: pt * signals -> new pt
   UI_ScrollPt new_pt = pt;
   {
     typedef struct UI_ScrollBarDragData UI_ScrollBarDragData;
