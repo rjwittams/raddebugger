@@ -496,7 +496,7 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
             {
               S64 reg_off = 0;
               off += str8_deserial_read_sleb128(inst_data, off, &reg_off);
-              cfi_row.cfa_rule.s64 = (S64)reg_off;
+              cfi_row.cfa_rule.s64 = reg_off * data_align_factor;
             }break;
             case DW_CFAOpCode_DefCfaExpr:
             {
