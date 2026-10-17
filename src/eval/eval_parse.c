@@ -622,6 +622,7 @@ e_leaf_type_key_from_name(String8 name)
   if(!e_type_key_match(e_type_key_zero(), key))
   {
     DI_Match match = di_match_from_string(name, 0, 0, 1, e_base_ctx->primary_dbg_info->dbgi_key, e_base_ctx->debug_info_match_endt_us);
+    if(e_base_ctx->debug_info_match_stale_out) {*e_base_ctx->debug_info_match_stale_out |= match.stale;}
     if(match.section_kind == RDI_SectionKind_TypeNodes)
     {
       Access *access = access_open();
