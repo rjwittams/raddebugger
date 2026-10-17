@@ -1441,6 +1441,7 @@ wm_get_events(Arena *arena, B32 wait)
         wm_event->modifiers = mac_wm_modifiers_from_ns_flags([event modifierFlags]);
         wm_event->pos = mac_wm_client_pos_from_ns_point(window, [event locationInWindow]);
         wm_event->delta = v2f32(-(F32)[event scrollingDeltaX], -(F32)[event scrollingDeltaY]);
+        wm_event->scroll_is_precise = [event hasPreciseScrollingDeltas];
       }break;
     }
     if(send_to_nsapp)
