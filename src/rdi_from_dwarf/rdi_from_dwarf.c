@@ -698,6 +698,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
             }
             full_file_path = path_absolute_dst_from_relative_dst_src(scratch2.arena, f->file_name, dir_path);
           }
+          full_file_path = path_normalized_from_string(scratch2.arena, full_file_path);
           U64 hash = u64_hash_from_str8(full_file_path);
           U64 slot_idx = hash%slots_count;
           SrcFileNode *node = 0;
