@@ -1856,6 +1856,31 @@ di_match_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_out,
             RDI_NameMapNode *map_node = rdi_name_map_lookup(rdi, &parsed_name_map, leaf_part_of_name.str, leaf_part_of_name.size);
             U32 matches_count = 0;
             U32 *matches = rdi_matches_from_map_node(rdi, map_node, &matches_count);
+
+            // Some producers put the qualification in the symbol's own name
+            // rather than in namespace DIEs. Search that key as well, then use
+            // the same qualification and unit filters for both representations.
+            if(container_part_of_name.size != 0)
+            {
+              RDI_NameMapNode *full_node = rdi_name_map_lookup(rdi, &parsed_name_map, fully_qualified_name.str, fully_qualified_name.size);
+              U32 full_count = 0;
+              U32 *full_matches = rdi_matches_from_map_node(rdi, full_node, &full_count);
+              if(full_count != 0)
+              {
+                U32 *combined = push_array(scratch.arena, U32, matches_count+full_count);
+                MemoryCopy(combined, matches, sizeof(U32)*matches_count);
+                for EachIndex(full_idx, full_count)
+                {
+                  B32 duplicate = 0;
+                  for EachIndex(match_idx, matches_count)
+                  {
+                    if(combined[match_idx] == full_matches[full_idx]) { duplicate = 1; break; }
+                  }
+                  if(!duplicate) { combined[matches_count++] = full_matches[full_idx]; }
+                }
+                matches = combined;
+              }
+            }
             
             // rjf: do we have a container? -> filter matches according to container string also
             U32 *filtered_matches = matches;
