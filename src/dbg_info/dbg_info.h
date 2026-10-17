@@ -60,6 +60,14 @@ struct DI_KeySlot
 ////////////////////////////////
 //~ rjf: Debug Info Cache Types
 
+typedef enum DI_LoadStatus
+{
+  DI_LoadStatus_None,
+  DI_LoadStatus_Pending,
+  DI_LoadStatus_Ready,
+  DI_LoadStatus_Unavailable,
+} DI_LoadStatus;
+
 typedef struct DI_Node DI_Node;
 struct DI_Node
 {
@@ -352,13 +360,6 @@ internal void di_close(DI_Key key, B32 force_closed);
 
 internal U64 di_load_gen(void);
 internal U64 di_load_count(void);
-typedef enum DI_LoadStatus
-{
-  DI_LoadStatus_None,
-  DI_LoadStatus_Pending,
-  DI_LoadStatus_Ready,
-  DI_LoadStatus_Unavailable,
-} DI_LoadStatus;
 internal DI_LoadStatus di_load_status_from_key(DI_Key key);
 internal DI_KeyArray di_push_all_loaded_keys(Arena *arena);
 internal RDI_Parsed *di_rdi_from_key(Access *access, DI_Key key, B32 high_priority, U64 endt_us);
