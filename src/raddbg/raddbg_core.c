@@ -7450,7 +7450,7 @@ rd_window_frame(void)
               }
             }
 
-            //- menu items
+            //- rjf: menu items
             if(draw_self_menu_bar && dim_2f32(top_bar_rect).x > ui_top_font_size()*60)
             {
               ui_set_next_flags(UI_BoxFlag_DrawBackground);
@@ -11454,7 +11454,7 @@ rd_wm_set_main_menu(void)
 }
 
 ////////////////////////////////
-//~ Main Layer Top-Level Calls
+//~ rjf: Main Layer Top-Level Calls
 
 #if !defined(STBI_INCLUDE_STB_IMAGE_H)
 # define STB_IMAGE_IMPLEMENTATION
@@ -11576,7 +11576,7 @@ rd_init(CmdLine *cmdln)
 
   rd_wm_set_main_menu();
 
-  // set up top-level config entity trees & tables
+  // rjf: set up top-level config entity trees & tables
   {
     rd_state->cfg = cfg_state_alloc();
     cfg_ctx_select(cfg_state_ctx(rd_state->cfg));
