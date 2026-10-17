@@ -4294,7 +4294,8 @@ RD_VIEW_UI_FUNCTION_DEF(memory)
   //
   UI_Box *row_container_box = &ui_nil_box;
   UI_Box *row_overlay_box = &ui_nil_box;
-  UI_Parent(scrollable_box) UI_WidthFill UI_HeightFill
+  UI_Parent(scrollable_box) UI_WidthFill
+    UI_PrefHeight(ui_px(dim_2f32(memory_region.viewport).y + scrollable_box->view_off.y, 1.f))
   {
     ui_set_next_child_layout_axis(Axis2_Y);
     row_container_box = ui_build_box_from_stringf(UI_BoxFlag_Clickable, "row_container");
