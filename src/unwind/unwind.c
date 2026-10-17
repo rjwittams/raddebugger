@@ -25,8 +25,9 @@ uwnd_lookup_vaddr_from_pc(Arch arch, U64 pc, B32 is_return_address)
 internal B32
 uwnd_reg_range_is_valid(U8 *valid, Rng1U16 range)
 {
+  Assert(valid != 0);
   if(range.min >= range.max) {return 0;}
-  if(valid != 0) for(U64 i = range.min; i < range.max; i += 1)
+  for(U64 i = range.min; i < range.max; i += 1)
   {
     if(!valid[i]) {return 0;}
   }
@@ -36,7 +37,8 @@ uwnd_reg_range_is_valid(U8 *valid, Rng1U16 range)
 internal void
 uwnd_reg_set_valid(U8 *valid, Rng1U16 range, B32 value)
 {
-  if(valid != 0) {MemorySet(valid + range.min, !!value, dim_1u16(range));}
+  Assert(valid != 0);
+  MemorySet(valid + range.min, !!value, dim_1u16(range));
 }
 
 internal B32
@@ -59,6 +61,7 @@ uwnd_reg_mark_valid(Arch arch, U8 *valid, U8 code, U64 size)
 internal void
 uwnd_reg_valid_from_abi(Arch arch, OperatingSystem os, U8 *src, U8 *dst)
 {
+  Assert(dst != 0);
   ARCH_Info *info = arch_info_from_arch(arch);
   MemoryZero(dst, info->reg_block_size);
   ARCH_RegCode codes[32] = {0};
@@ -139,13 +142,14 @@ uwnd_step_moduleless(Arch arch, MemoryMap *memory_map, void *regs, U8 *reg_valid
 internal UWND_StepResult
 uwnd_step(UWND_Unwinder unwinder, Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64 tls_vaddr, U64 lookup_pc, void *regs, U8 *reg_valid, U64 *cfa_out)
 {
+  Assert(reg_valid != 0);
   UWND_StepResult result = {UWND_StepStatus_Error};
   switch(unwinder)
   {
     default:
     {
       result = uwnd_step_moduleless(arch, memory_map, regs, reg_valid);
-      if(result.status == UWND_StepStatus_Good && reg_valid)
+      if(result.status == UWND_StepStatus_Good)
       {
         ARCH_Info *info = arch_info_from_arch(arch);
         MemoryZero(reg_valid, info->reg_block_size);

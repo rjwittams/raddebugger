@@ -40,10 +40,12 @@ struct UWND_ModuleInfo
   OperatingSystem os;
 };
 
-// One validity byte per register-block byte. A null mask is allowed only for
-// callers that supply a complete live context and do not consume availability.
+// Unwind steps require one validity byte per register-block byte, including
+// complete live contexts. Availability must survive every step.
 internal B32 uwnd_reg_range_is_valid(U8 *valid, Rng1U16 range);
 internal void uwnd_reg_set_valid(U8 *valid, Rng1U16 range, B32 value);
+// A null src requests the ABI-preserved byte mask itself, used to initialize
+// EH rules. Otherwise intersect those bytes with src. dst is always required.
 internal void uwnd_reg_valid_from_abi(Arch arch, OperatingSystem os, U8 *src, U8 *dst);
 internal B32 uwnd_reg_is_valid(Arch arch, U8 *valid, U8 code);
 internal void uwnd_reg_mark_valid(Arch arch, U8 *valid, U8 code, U64 size);
