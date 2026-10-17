@@ -1017,7 +1017,8 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
         }
         
         //- rjf: sequence ended explicitly, or file change, or end of stream? -> push to line table
-        if(line_seq_src_file != 0 && (vm_regs.end_sequence || (emit_line && src_file != line_seq_src_file && first_line_seq_chunk != 0) || off >= unit_line_table_data.size))
+        B32 flush_line_seq = line_seq_src_file != 0 && (vm_regs.end_sequence || (emit_line && src_file != line_seq_src_file && first_line_seq_chunk != 0) || off >= unit_line_table_data.size);
+        if(flush_line_seq)
         {
           // rjf: combine voffs/lines/cols
           U64 seq_line_count = total_line_seq_count;
@@ -1070,13 +1071,19 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
             SLLQueuePush(file_seq_n->first_line_map_fragment, file_seq_n->last_line_map_fragment, f);
             f->seq = seq;
           }
-          
+        }
+
+        // End-of-sequence resets the VM even when there were no source rows
+        // to flush, and discards any pending rows without a resolved file.
+        if(flush_line_seq || vm_regs.end_sequence)
+        {
           // rjf: reset
           first_line_seq_chunk = last_line_seq_chunk = 0;
           total_line_seq_count = 0;
           line_seq_src_file = 0;
           if(vm_regs.end_sequence)
           {
+            emit_line = 0;
             MemoryZeroStruct(&vm_regs);
             vm_regs.file_index = 1;
             vm_regs.line = 1;
