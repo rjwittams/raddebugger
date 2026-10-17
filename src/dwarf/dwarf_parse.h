@@ -180,6 +180,7 @@ struct DW2_FormVal
   U128 u128;
   String8 string;
   U64 addr;
+  B32 good;
 };
 
 typedef struct DW2_Attrib DW2_Attrib;
