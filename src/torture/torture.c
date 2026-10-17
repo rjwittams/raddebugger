@@ -973,6 +973,44 @@ t_invoke(String8 exe_path, String8 cmdline, U64 timeout)
 }
 
 #if OS_LINUX || OS_MAC
+Test(posix_process_executable_lookup)
+{
+  // Put different executables under the same name in PATH and the child cwd.
+  // Bare names must use PATH; explicit paths must select the named file.
+  String8 path_bin = t_make_file_path(arena, str8_lit("path bin"));
+  make_directory(path_bin);
+  T_Ok(folder_path_exists(path_bin));
+  String8 path_exe = push_str8f(arena, "%S/rad-launch-probe", path_bin);
+  String8 local_exe = t_make_file_path(arena, str8_lit("rad-launch-probe"));
+  T_Ok(t_write_file(str8_lit("launch-marker"), str8_lit("marker")));
+  T_Ok(write_data_to_file_path(path_exe, str8_lit("#!/bin/sh\n[ -f launch-marker ] || exit 99\nprintf path\nexit 37\n")));
+  T_Ok(write_data_to_file_path(local_exe, str8_lit("#!/bin/sh\n[ -f launch-marker ] || exit 99\nprintf local\nexit 38\n")));
+  T_Ok(chmod((char *)push_cstr(arena, path_exe).str, 0700) == 0);
+  T_Ok(chmod((char *)push_cstr(arena, local_exe).str, 0700) == 0);
+
+  char *old_path = getenv("PATH");
+  char *saved_path = old_path ? (char *)push_cstr(arena, str8_cstring(old_path)).str : 0;
+  struct {String8 exe; U64 exit_code; String8 output;} cases[] =
+  {
+    {str8_lit("rad-launch-probe"),          37, str8_lit("path")},
+    {str8_lit("./rad-launch-probe"),        38, str8_lit("local")},
+    {str8_lit("path bin/rad-launch-probe"), 37, str8_lit("path")},
+    {path_exe,                             37, str8_lit("path")},
+  };
+  for EachElement(idx, cases)
+  {
+    T_Ok(setenv("PATH", (char *)push_cstr(arena, path_bin).str, 1) == 0);
+    B32 launched = t_invoke(cases[idx].exe, str8_zero(), TIMEOUT_SEC(5));
+    // Restore the test process's environment before any assertion can fail.
+    int restore_code = saved_path ? setenv("PATH", saved_path, 1) : unsetenv("PATH");
+    T_Ok(restore_code == 0);
+    T_Ok(launched);
+    T_Ok(g_last_exit_code == cases[idx].exit_code);
+    T_Ok(str8_match(g_output, cases[idx].output, 0));
+    T_Ok(g_errors.size == 0);
+  }
+}
+
 Test(posix_process_capture)
 {
   B32 launched = t_invoke(str8_lit("/bin/sh"),
