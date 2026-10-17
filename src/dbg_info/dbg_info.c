@@ -180,6 +180,12 @@ di_set_auto_downloads(B32 auto_downloads)
 internal DI_Key
 di_key_from_path_timestamp(String8 path, U64 min_timestamp)
 {
+  return di_key_from_path_timestamp_identity(path, min_timestamp, Arch_Null, (Guid){0});
+}
+
+internal DI_Key
+di_key_from_path_timestamp_identity(String8 path, U64 min_timestamp, Arch macho_arch, Guid macho_guid)
+{
   //- rjf: unpack key
   U64 hash = u64_hash_from_str8(path);
   U64 slot_idx = hash%di_shared->path2key_slots_count;
@@ -197,7 +203,8 @@ di_key_from_path_timestamp(String8 path, U64 min_timestamp)
       DI_KeyPathNode *node = 0;
       for(DI_KeyPathNode *n = slot->first; n != 0; n = n->next)
       {
-        if(str8_match(n->path, path, 0) && min_timestamp <= n->min_timestamp)
+        if(str8_match(n->path, path, 0) && min_timestamp <= n->min_timestamp &&
+           n->macho_arch == macho_arch && MemoryMatch(&n->macho_guid, &macho_guid, sizeof(macho_guid)))
         {
           found = 1;
           node = n;
@@ -218,6 +225,8 @@ di_key_from_path_timestamp(String8 path, U64 min_timestamp)
         }
         node->path = str8_copy(stripe->arena, path);
         node->min_timestamp = min_timestamp;
+        node->macho_arch = macho_arch;
+        node->macho_guid = macho_guid;
         node->key = key;
         DLLPushBack(slot->first, slot->last, node);
       }
@@ -236,7 +245,7 @@ di_key_from_path_timestamp(String8 path, U64 min_timestamp)
       B32 made_key = 0;
       
       //- rjf: try to make key from file's contents
-      if(!made_key)
+      if(!made_key && macho_arch == Arch_Null)
       {
         File file = file_open(AccessFlag_Read|AccessFlag_ShareRead, path);
         FileProperties props = properties_from_file(file);
@@ -282,6 +291,12 @@ di_key_from_path_timestamp(String8 path, U64 min_timestamp)
         if(path.size != 0)
         {
           U128 hash = u128_hash_from_seed_str8(min_timestamp, path);
+          if(macho_arch != Arch_Null)
+          {
+            U128 identity_hash = u128_hash_from_seed_str8((U64)macho_arch, str8_struct(&macho_guid));
+            hash.u64[0] ^= identity_hash.u64[0];
+            hash.u64[1] ^= identity_hash.u64[1];
+          }
           MemoryCopy(&key, &hash, Min(sizeof(hash), sizeof(key)));
         }
       }
@@ -318,6 +333,8 @@ di_key_from_path_timestamp(String8 path, U64 min_timestamp)
             DLLPushBack(key_slot->first, key_slot->last, node);
             node->path = str8_copy(key_stripe->arena, path);
             node->min_timestamp = min_timestamp;
+            node->macho_arch = macho_arch;
+            node->macho_guid = macho_guid;
             node->key = key;
           }
         }
@@ -747,6 +764,8 @@ di_async_tick(void)
         //- rjf: get key's O.G. path
         String8 og_path = {0};
         U64 og_min_timestamp = 0;
+        Arch expected_macho_arch = Arch_Null;
+        Guid expected_macho_guid = {0};
         RWMutexScope(key_stripe->rw_mutex, 0)
         {
           for(DI_KeyPathNode *n = key_slot->first; n != 0; n = n->next)
@@ -755,6 +774,8 @@ di_async_tick(void)
             {
               og_path = str8_copy(scratch.arena, n->path);
               og_min_timestamp = n->min_timestamp;
+              expected_macho_arch = n->macho_arch;
+              expected_macho_guid = n->macho_guid;
               break;
             }
           }
@@ -797,6 +818,7 @@ di_async_tick(void)
           File file = file_open(AccessFlag_ShareRead|AccessFlag_Read, og_path);
           FileProperties props = properties_from_file(file);
           t->og_size = props.size;
+          t->og_matches_identity = 1;
           U64 rdi_magic_maybe = 0;
           if(file_read_struct(file, 0, &rdi_magic_maybe) == 8 &&
              rdi_magic_maybe == RDI_MAGIC_CONSTANT)
@@ -808,11 +830,18 @@ di_async_tick(void)
             MachO_UUID uuid = macho_uuid_from_file(file, &t->og_macho_arch);
             t->og_macho_guid = macho_guid_from_uuid(uuid);
           }
+          if(expected_macho_arch != Arch_Null)
+          {
+            t->og_matches_identity = (t->og_macho_arch == expected_macho_arch &&
+                                     MemoryMatch(&t->og_macho_guid, &expected_macho_guid, sizeof(expected_macho_guid)));
+            t->og_macho_arch = expected_macho_arch;
+            t->og_macho_guid = expected_macho_guid;
+          }
           file_close(file);
         }
         U64 og_size = t->og_size;
         B32 og_is_rdi = t->og_is_rdi;
-        B32 og_is_good = (og_size > 0);
+        B32 og_is_good = (og_size > 0 && t->og_matches_identity);
         
         //- rjf: compute key's RDI path
         String8 rdi_path = {0};
@@ -927,7 +956,9 @@ di_async_tick(void)
             // most recent key.
             for(DI_KeyPathNode *n = path2key_slot->last; n != 0; n = n->prev)
             {
-              if(str8_match(n->path, og_path, 0) && !di_key_match(key, n->key))
+              if(str8_match(n->path, og_path, 0) && !di_key_match(key, n->key) &&
+                 n->macho_arch == expected_macho_arch &&
+                 MemoryMatch(&n->macho_guid, &expected_macho_guid, sizeof(expected_macho_guid)))
               {
                 di_close(n->key, 1);
               }
