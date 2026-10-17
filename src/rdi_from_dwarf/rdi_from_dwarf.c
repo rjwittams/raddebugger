@@ -1471,7 +1471,8 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                                tag.kind == DW_TagKind_ImmutableType ||
                                tag.kind == DW_TagKind_Member ||
                                tag.kind == DW_TagKind_FormalParameter ||
-                               tag.kind == DW_TagKind_Namespace);
+                               tag.kind == DW_TagKind_Namespace ||
+                               tag.kind == DW_TagKind_Module);
           
           // rjf: get top hash seed
           U64 hash_seed = top_parent ? top_parent->hash_seed : 0;
@@ -1551,7 +1552,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
             
             // rjf: determine hash seed - only add new hash seeds for namespaces
             U64 n_hash_seed = hash_seed;
-            if(tag.kind == DW_TagKind_Namespace ||
+            if(tag.kind == DW_TagKind_Namespace || tag.kind == DW_TagKind_Module ||
                tag.kind == DW_TagKind_StructureType ||
                tag.kind == DW_TagKind_ClassType ||
                tag.kind == DW_TagKind_UnionType)
@@ -1718,7 +1719,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
             //      thus, we need to visit namespace children as if they're top-level.
             //
             B32 children_should_be_deduped = 0;
-            if(tag.kind == DW_TagKind_Namespace ||
+            if(tag.kind == DW_TagKind_Namespace || tag.kind == DW_TagKind_Module ||
                tag.kind == DW_TagKind_ClassType ||
                tag.kind == DW_TagKind_StructureType ||
                tag.kind == DW_TagKind_UnionType ||
@@ -1756,7 +1757,8 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                 tag.kind == DW_TagKind_DynamicType ||
                 tag.kind == DW_TagKind_AtomicType ||
                 tag.kind == DW_TagKind_ImmutableType ||
-                tag.kind == DW_TagKind_Namespace))
+                tag.kind == DW_TagKind_Namespace ||
+                tag.kind == DW_TagKind_Module))
             {
               D2R_TagNode *n = push_array(work_scratch.arena, D2R_TagNode, 1);
               n->info_off = start_off;
@@ -1941,7 +1943,8 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                 }
                 
                 // rjf: determine if we want to descend to children
-                B32 descend = (top_task->root_tag_kind != DW_TagKind_Namespace);
+                B32 descend = (top_task->root_tag_kind != DW_TagKind_Namespace &&
+                               top_task->root_tag_kind != DW_TagKind_Module);
                 
                 // rjf: tree navigations
                 if(descend)
@@ -2056,7 +2059,9 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
               }
             }
             hash = start_task.hash;
-            unique_tag_kind = (start_task.root_tag_kind == DW_TagKind_Namespace ? D2R_UniqueTagKind_Namespace : D2R_UniqueTagKind_Type);
+            // Module declarations use the existing named-scope representation.
+            unique_tag_kind = ((start_task.root_tag_kind == DW_TagKind_Namespace ||
+                                start_task.root_tag_kind == DW_TagKind_Module) ? D2R_UniqueTagKind_Namespace : D2R_UniqueTagKind_Type);
             container_ancestor_info_off = start_task.container_ancestor_info_off;
             dependency_count = start_task.dependency_count;
           }
@@ -4317,6 +4322,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
             
             //- rjf: determine if parent tag is a container to deduplicated tags
             case DW_TagKind_Namespace:
+            case DW_TagKind_Module:
             case DW_TagKind_StructureType:
             case DW_TagKind_UnionType:
             case DW_TagKind_ClassType:
