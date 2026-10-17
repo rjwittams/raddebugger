@@ -24,7 +24,9 @@ typedef struct D_UnwindFrame D_UnwindFrame;
 struct D_UnwindFrame
 {
   void *regs;
+  U8 *reg_valid;
   U64 cfa;
+  U64 lookup_vaddr; // Source/unwind lookup address; the register PC stays raw.
 };
 
 typedef struct D_UnwindFrameNode D_UnwindFrameNode;
@@ -68,6 +70,8 @@ struct D_CallStack
   U64 frames_count;
   D_CallStackFrame **concrete_frames;
   U64 concrete_frames_count;
+  D_UnwindFlags unwind_flags;
+  U64 unwind_frame_count;
 };
 
 ////////////////////////////////
@@ -563,6 +567,8 @@ internal String8 d_initial_debug_info_path_from_module(Arena *arena, D_Handle mo
 ////////////////////////////////
 //~ rjf: Unwinding Functions
 
+internal String8 d_eh_frame_hdr_from_eh_frame(Arena *arena, String8 eh_frame_data, U64 eh_frame_vaddr, Arch arch, EH_PtrCtx *eh_ptr_ctx, B32 require_terminator);
+internal String8 d_eh_frame_hdr_from_elf_process(Arena *arena, D_Handle process, U64 base_vaddr, U64 eh_frame_vaddr, Arch arch, EH_PtrCtx *ptr_ctx);
 internal D_Unwind d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us);
 
 ////////////////////////////////
