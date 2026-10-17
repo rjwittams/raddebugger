@@ -27,6 +27,157 @@ Test(macho_file_identity)
   }
 }
 
+Test(macho_linkedit_mapped_bounds)
+{
+  struct
+  {
+    String8 name;
+    U64 vmaddr;
+    U64 vmsize;
+    U64 slide;
+    U32 dataoff;
+    U32 datasize;
+    B32 mapped;
+    Rng1U64 range;
+  } cases[] =
+  {
+    {str8_lit("upward"), 0x100008000, 0x4000, 0x50000000, 0x6120, 0x30, 1, {0x150008120,0x150008150}},
+    {str8_lit("downward"), 0x100008000, 0x4000, 0-0x50000000ull, 0x6120, 0x30, 1, {0xb0008120,0xb0008150}},
+    {str8_lit("zero-base"), 0x100008000, 0x4000, 0-0x100008000ull, 0x6000, 0x30, 1, {0,0x30}},
+    {str8_lit("vm-before"), 0x100008000, 8, 0, 0x6120, 0x30},
+    {str8_lit("vm-overrun"), 0x100008000, 0x140, 0, 0x6120, 0x30},
+    {str8_lit("file-before"), 0x100008000, 0x4000, 0, 0x5ff0, 0x30},
+    {str8_lit("file-after"), 0x100008000, 0x4000, 0, 0xa010, 0x30},
+    {str8_lit("file-overrun"), 0x100008000, 0x5000, 0, 0x9ff0, 0x30},
+    {str8_lit("exact-end"), 0x100008000, 0x4000, 0, 0x9fd0, 0x30, 1, {0x10000bfd0,0x10000c000}},
+    {str8_lit("empty-end"), 0x100008000, 0x4000, 0, 0xa000, 0, 1, {0x10000c000,0x10000c000}},
+    {str8_lit("slide-overflow"), max_U64-0x4000, 0x4000, 0x5000, 0x6120, 0x30},
+    {str8_lit("slide-underflow"), 0x4000, 0x4000, 0-0x5000ull, 0x6120, 0x30},
+    {str8_lit("offset-overflow"), max_U64-0x4000, 0x4000, 0x3ff0, 0x6120, 0x30},
+    {str8_lit("end-overflow"), max_U64-0x4000, 0x4000, 0x3ed0, 0x6120, 0x30},
+  };
+  for(U64 cpu = 0; cpu < 2; cpu += 1) for EachElement(test_case, cases)
+  {
+    struct
+    {
+      MachO_Header64 header;
+      MachO_SegmentCommand64 segment;
+      MachO_LinkeditDataCommand table;
+    } input = {0};
+    input.header = (MachO_Header64){.magic=MACHO_MAGIC_64, .cpu_type=cpu ? MACHO_CPU_TYPE_ARM64 : MACHO_CPU_TYPE_X86_64,
+      .load_command_count=2, .load_commands_size=sizeof(input.segment)+sizeof(input.table)};
+    input.segment = (MachO_SegmentCommand64){.cmd=MACHO_LC_SEGMENT_64, .cmd_size=sizeof(input.segment),
+      .vmaddr=cases[test_case].vmaddr, .vmsize=cases[test_case].vmsize, .fileoff=0x6000, .filesize=0x4000};
+    MemoryCopy(input.segment.segment_name, "__LINKEDIT", 10);
+    input.table = (MachO_LinkeditDataCommand){.cmd=MACHO_LC_FUNCTION_STARTS, .cmd_size=sizeof(input.table),
+      .dataoff=cases[test_case].dataoff, .datasize=cases[test_case].datasize};
+    String8 bytes = str8_struct(&input);
+    MachO_Bin bin = macho_bin_from_data(arena, bytes);
+    Rng1U64 range = r1u64(1, 2);
+    B32 mapped = macho_linkedit_data_vrange_from_bin(bytes, &bin, MACHO_LC_FUNCTION_STARTS, cases[test_case].slide, &range);
+    test_outf("cpu %I64u %S: mapped %i, range [%I64x,%I64x)\n", cpu, cases[test_case].name, mapped, range.min, range.max);
+    TestCheck(mapped == cases[test_case].mapped);
+    TestCheck(range.min == cases[test_case].range.min);
+    TestCheck(range.max == cases[test_case].range.max);
+    TestCheck(macho_linkedit_data_vrange_from_bin(bytes, &bin, MACHO_LC_FUNCTION_STARTS, cases[test_case].slide, 0) == mapped);
+  }
+}
+
+Test(macho_linkedit_command_bounds)
+{
+  for(U64 cpu = 0; cpu < 2; cpu += 1) for(U64 test_case = 0; test_case < 7; test_case += 1)
+  {
+    struct
+    {
+      MachO_Header64 header;
+      MachO_LinkeditDataCommand table;
+      MachO_SegmentCommand64 segment;
+    } input = {0};
+    input.header = (MachO_Header64){.magic=MACHO_MAGIC_64, .cpu_type=cpu ? MACHO_CPU_TYPE_ARM64 : MACHO_CPU_TYPE_X86_64,
+      .load_command_count=test_case == 1 || test_case == 2 ? 3 : 2,
+      .load_commands_size=sizeof(input.table)+sizeof(input.segment)};
+    input.table = (MachO_LinkeditDataCommand){.cmd=MACHO_LC_FUNCTION_STARTS, .cmd_size=sizeof(input.table),
+      .dataoff=0x6120, .datasize=0x30};
+    input.segment = (MachO_SegmentCommand64){.cmd=MACHO_LC_SEGMENT_64, .cmd_size=sizeof(input.segment),
+      .vmaddr=0x100008000, .vmsize=0x4000, .fileoff=0x6000, .filesize=0x4000};
+    if(test_case == 1)
+    {
+      // These bytes belong to the next command, not the short table command.
+      input.table.cmd_size = sizeof(MachO_LoadCommand);
+      input.table.dataoff = MACHO_LC_UUID;
+      input.table.datasize = sizeof(MachO_LoadCommand);
+      input.segment.fileoff = 0;
+    }
+    if(test_case == 2)
+    {
+      // Keep the segment-shaped bytes available, but outside its declared size.
+      input.segment.cmd_size = sizeof(MachO_LoadCommand);
+      MachO_LoadCommand next = {.cmd=MACHO_LC_UUID, .cmd_size=sizeof(input.segment)-sizeof(MachO_LoadCommand)};
+      MemoryCopy(input.segment.segment_name, &next, sizeof(next));
+    }
+    String8 bytes = str8_struct(&input);
+    if(test_case == 3) {bytes.size = sizeof(input.header)+sizeof(MachO_LoadCommand);}
+    if(test_case == 4) {bytes.size -= 1;}
+    if(test_case == 5) {input.table.cmd = MACHO_LC_UUID;}
+    if(test_case == 6) {input.segment.cmd = MACHO_LC_UUID;}
+    MachO_Bin bin = macho_bin_from_data(arena, bytes);
+    Rng1U64 range = r1u64(1, 2);
+    B32 mapped = macho_linkedit_data_vrange_from_bin(bytes, &bin, MACHO_LC_FUNCTION_STARTS, 0, &range);
+    test_outf("cpu %I64u command case %I64u: mapped %i\n", cpu, test_case, mapped);
+    TestCheck(mapped == (test_case == 0));
+    TestCheck(range.min == (test_case == 0 ? 0x100008120 : 0));
+    TestCheck(range.max == (test_case == 0 ? 0x100008150 : 0));
+    TestCheck(macho_linkedit_data_vrange_from_bin(bytes, &bin, MACHO_LC_FUNCTION_STARTS, 0, 0) == mapped);
+  }
+}
+
+Test(macho_symbol_table_slide_bounds)
+{
+  struct
+  {
+    String8 name;
+    U64 vmaddr;
+    U64 slide;
+    B32 mapped;
+    Rng1U64 symbols;
+    Rng1U64 strings;
+  } cases[] =
+  {
+    {str8_lit("upward"), 0x100008000, 0x50000000, 1, {0x150008120,0x150008150}, {0x150008160,0x150008180}},
+    {str8_lit("downward"), 0x100008000, 0-0x50000000ull, 1, {0xb0008120,0xb0008150}, {0xb0008160,0xb0008180}},
+    {str8_lit("zero-base"), 0x100008000, 0-0x100008000ull, 1, {0x120,0x150}, {0x160,0x180}},
+    {str8_lit("slide-overflow"), max_U64-0x4000, 0x5000},
+    {str8_lit("slide-underflow"), 0x4000, 0-0x5000ull},
+    {str8_lit("offset-overflow"), max_U64-0x4000, 0x3ff0},
+    {str8_lit("end-overflow"), max_U64-0x4000, 0x3ed0},
+  };
+  for(U64 cpu = 0; cpu < 2; cpu += 1) for EachElement(test_case, cases)
+  {
+    struct
+    {
+      MachO_Header64 header;
+      MachO_SegmentCommand64 segment;
+      MachO_SymtabCommand table;
+    } input = {0};
+    input.header = (MachO_Header64){.magic=MACHO_MAGIC_64, .cpu_type=cpu ? MACHO_CPU_TYPE_ARM64 : MACHO_CPU_TYPE_X86_64,
+      .load_command_count=2, .load_commands_size=sizeof(input.segment)+sizeof(input.table)};
+    input.segment = (MachO_SegmentCommand64){.cmd=MACHO_LC_SEGMENT_64, .cmd_size=sizeof(input.segment),
+      .vmaddr=cases[test_case].vmaddr, .vmsize=0x4000, .fileoff=0x6000, .filesize=0x4000};
+    input.table = (MachO_SymtabCommand){.cmd=MACHO_LC_SYMTAB, .cmd_size=sizeof(input.table),
+      .symoff=0x6120, .nsyms=3, .stroff=0x6160, .strsize=0x20};
+    String8 bytes = str8_struct(&input);
+    MachO_Bin bin = macho_bin_from_data(arena, bytes);
+    Rng1U64 symbols = r1u64(1, 2), strings = r1u64(3, 4);
+    B32 mapped = macho_symbol_table_vranges(bytes, &bin, cases[test_case].slide, &symbols, &strings);
+    test_outf("cpu %I64u %S: mapped %i\n", cpu, cases[test_case].name, mapped);
+    TestCheck(mapped == cases[test_case].mapped);
+    TestCheck(symbols.min == cases[test_case].symbols.min);
+    TestCheck(symbols.max == cases[test_case].symbols.max);
+    TestCheck(strings.min == cases[test_case].strings.min);
+    TestCheck(strings.max == cases[test_case].strings.max);
+  }
+}
+
 // Name-only lookup must not manufacture procedure extents or cross sections.
 Test(macho_symbol_fallback)
 {
