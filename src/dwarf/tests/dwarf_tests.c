@@ -133,6 +133,51 @@ Test(dw2_offset_table_kinds)
   TestCheck(dw2_try_offset_from_table_idx(&table, 0, &offset) && offset == 0x23);
 }
 
+Test(dw2_address_table_sizes)
+{
+  struct {U8 address, segment; B32 valid;} cases[] =
+  {
+    {1,0,1}, {2,0,1}, {4,0,1}, {8,0,1}, {8,8,1},
+    {9,0,0}, {255,0,0}, {8,9,0}, {8,255,0}, {255,255,0}, {0,8,0},
+  };
+  for(U64 wide = 0; wide < 2; wide += 1) for EachElement(case_idx, cases)
+  {
+    U8 data[544] = {0};
+    U64 length_size = wide ? 12 : 4;
+    U64 header_size = length_size+4;
+    U64 size = header_size+cases[case_idx].address+cases[case_idx].segment;
+    U64 unit_length = size-length_size;
+    if(wide)
+    {
+      U32 marker = max_U32;
+      MemoryCopy(data, &marker, 4);
+    }
+    MemoryCopy(data+(wide ? 4 : 0), &unit_length, wide ? 8 : 4);
+    data[length_size] = 5; // version
+    data[length_size+2] = cases[case_idx].address;
+    data[length_size+3] = cases[case_idx].segment;
+    if(cases[case_idx].address != 0) {data[header_size+cases[case_idx].segment] = 0x42;}
+    // A rejected contribution must not hide the following valid one.
+    U8 next[] = {12,0,0,0, 5,0,8,0, 0x40,0x11,0,0,0,0,0,0};
+    MemoryCopy(data+size, next, sizeof(next));
+    DW_Raw raw = {0};
+    raw.sec[DW_SectionKind_Addr].data = str8(data, size+sizeof(next));
+    DW2_OffsetTableSet tables = dw2_offset_table_set_from_raw(arena, &raw);
+    test_outf("DWARF%u address %u, segment %u: %I64u tables\n",
+              wide ? 64 : 32, cases[case_idx].address, cases[case_idx].segment, tables.addr_tables_count);
+    TestCheck(tables.addr_tables_count == (cases[case_idx].valid ? 2 : 1));
+    U64 value = 0;
+    if(cases[case_idx].valid)
+    {
+      TestCheck(dw2_try_offset_from_table_idx(&tables.addr_tables[0], 0, &value) && value == 0x42);
+      TestCheck(!dw2_try_offset_from_table_idx(&tables.addr_tables[0], 1, &value));
+    }
+    DW2_OffsetTable *last = &tables.addr_tables[tables.addr_tables_count-1];
+    value = 0;
+    TestCheck(dw2_try_offset_from_table_idx(last, 0, &value) && value == 0x1140);
+  }
+}
+
 #if 0 // TODO(rjf): this uses concepts from the old parser
 
 internal U64
