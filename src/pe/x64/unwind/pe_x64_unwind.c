@@ -930,7 +930,7 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
       result.is_interrupted = xdata_unwind_did_machframe;
       uwnd_reg_mark_valid(arch, caller_valid, X64_RegCode_rip, 0);
       uwnd_reg_mark_valid(arch, caller_valid, X64_RegCode_rsp, 0);
-      if(reg_valid) {MemoryCopy(reg_valid, caller_valid, sizeof(*regs));}
+      MemoryCopy(reg_valid, caller_valid, sizeof(*regs));
     }
     
     scratch_end(scratch);
