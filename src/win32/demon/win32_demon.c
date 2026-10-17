@@ -3154,6 +3154,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
           DMN_Event *e = dmn_event_list_push(arena, &events);
           e->kind    = DMN_EventKind_ExitProcess;
           e->process = w32_dmn_handle_from_entity(process);
+          e->process_detached = 1;
         }
         
         // rjf: free process
