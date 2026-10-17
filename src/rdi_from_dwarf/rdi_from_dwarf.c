@@ -3824,6 +3824,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                     B32 regread_is_addr = 0;
                     U64 target_pick_val_idx = 0;
                     RDI_EvalOp rdi_eval_op = 0;
+                    RDI_EvalTypeGroup rdi_eval_type_group = RDI_EvalTypeGroup_U;
                     U64 memread_size = 0;
                     switch(opcode)
                     {
@@ -4073,6 +4074,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                               picked_val = n->v;
                               break;
                             }
+                            idx += 1;
                           }
                         }
                         
@@ -4084,8 +4086,8 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       }break;
                       case DW_ExprOp_Swap:
                       {
-                        push_vals[0] = popped_vals[1];
-                        push_vals[1] = popped_vals[0];
+                        push_vals[0] = popped_vals[0];
+                        push_vals[1] = popped_vals[1];
                         rdim_bytecode_push_op(arena, &dst_bytecode, RDI_EvalOp_Swap, 0);
                       }break;
                       case DW_ExprOp_Drop:
@@ -4177,7 +4179,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       case DW_ExprOp_Gt:     {rdi_eval_op = RDI_EvalOp_Grtr;}goto arithmetic_op;
                       case DW_ExprOp_Le:     {rdi_eval_op = RDI_EvalOp_LsEq;}goto arithmetic_op;
                       case DW_ExprOp_Lt:     {rdi_eval_op = RDI_EvalOp_Less;}goto arithmetic_op;
-                      case DW_ExprOp_Ne:     {rdi_eval_op = RDI_EvalOp_Neg;}goto arithmetic_op;
+                      case DW_ExprOp_Ne:     {rdi_eval_op = RDI_EvalOp_NtEq;}goto arithmetic_op;
                       case DW_ExprOp_Div:    {rdi_eval_op = RDI_EvalOp_Div;}goto arithmetic_op;
                       case DW_ExprOp_Minus:  {rdi_eval_op = RDI_EvalOp_Sub;}goto arithmetic_op;
                       case DW_ExprOp_Mul:    {rdi_eval_op = RDI_EvalOp_Mul;}goto arithmetic_op;
@@ -4187,15 +4189,20 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       case DW_ExprOp_Or:     {rdi_eval_op = RDI_EvalOp_BitOr;}goto arithmetic_op;
                       case DW_ExprOp_Shl:    {rdi_eval_op = RDI_EvalOp_LShift;}goto arithmetic_op;
                       case DW_ExprOp_Shr:    {rdi_eval_op = RDI_EvalOp_RShift;}goto arithmetic_op;
-                      case DW_ExprOp_Shra:   {rdi_eval_op = RDI_EvalOp_RShift;}goto arithmetic_op;
+                      case DW_ExprOp_Shra:   {rdi_eval_op = RDI_EvalOp_RShift; rdi_eval_type_group = RDI_EvalTypeGroup_S;}goto arithmetic_op;
                       case DW_ExprOp_Mod:    {rdi_eval_op = RDI_EvalOp_Mod;}goto arithmetic_op;
                       case DW_ExprOp_Abs:    {rdi_eval_op = RDI_EvalOp_Abs;}goto arithmetic_op;
                       case DW_ExprOp_Neg:    {rdi_eval_op = RDI_EvalOp_Neg;}goto arithmetic_op;
-                      case DW_ExprOp_Not:    {rdi_eval_op = RDI_EvalOp_LogNot;}goto arithmetic_op;
+                      case DW_ExprOp_Not:    {rdi_eval_op = RDI_EvalOp_BitNot;}goto arithmetic_op;
                       arithmetic_op:;
                       {
                         // TODO(rjf): eval arithmetic conversions etc.
-                        rdim_bytecode_push_op(arena, &dst_bytecode, rdi_eval_op, RDI_EvalTypeGroup_U);
+                        U64 param = rdi_eval_type_group;
+                        if(rdi_eval_op == RDI_EvalOp_LShift || rdi_eval_op == RDI_EvalOp_RShift)
+                        {
+                          param |= (U64)unit_parse_ctx->addr_size << 8;
+                        }
+                        rdim_bytecode_push_op(arena, &dst_bytecode, rdi_eval_op, param);
                       }break;
                       
                       //- rjf: currently unsupported
