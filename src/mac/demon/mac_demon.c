@@ -1437,13 +1437,34 @@ mac_dmn_read_dyld_image_infos(Arena *arena, MAC_DMN_Process *process, struct dyl
     {
       mach_vm_size_t bytes_read = 0;
       U64 images_size = (U64)all_images.infoArrayCount*sizeof(struct dyld_image_info);
-      struct dyld_image_info *images = push_array_no_zero(arena, struct dyld_image_info, all_images.infoArrayCount);
+      struct dyld_image_info *images = push_array(arena, struct dyld_image_info, all_images.infoArrayCount+1);
       kern_return_t read_code = mach_vm_read_overwrite(process->task, (mach_vm_address_t)all_images.infoArray, images_size, (mach_vm_address_t)images, &bytes_read);
       if(read_code == KERN_SUCCESS &&
          bytes_read == images_size)
       {
         *images_out = images;
         *count_out = all_images.infoArrayCount;
+        // dyld reports its own image separately from the ordinary image array.
+        // Include it in this refresh so normal base-address identity and module
+        // lifetime handling apply to the loader too.
+        if(all_images.version >= 15 && all_images.dyldImageLoadAddress != 0 && all_images.dyldPath != 0)
+        {
+          B32 already_present = 0;
+          for(U32 idx = 0; idx < *count_out; idx += 1)
+          {
+            already_present |= images[idx].imageLoadAddress == all_images.dyldImageLoadAddress;
+          }
+          struct mach_header_64 header = {0};
+          if(!already_present &&
+             mach_vm_read_overwrite(process->task, (mach_vm_address_t)all_images.dyldImageLoadAddress,
+                                    sizeof(header), (mach_vm_address_t)&header, &bytes_read) == KERN_SUCCESS &&
+             bytes_read == sizeof(header) && header.magic == MH_MAGIC_64 && header.filetype == MH_DYLINKER)
+          {
+            images[*count_out].imageLoadAddress = all_images.dyldImageLoadAddress;
+            images[*count_out].imageFilePath = all_images.dyldPath;
+            *count_out += 1;
+          }
+        }
         result = 1;
       }
     }
@@ -3167,7 +3188,8 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
           MAC_DMN_Process *process = &process_entity->process;
           process->is_running = 0;
           mac_dmn_process_resume_suspended_threads(process);
-          DMN_EventList result_before_auto_refresh = result;
+          // Internal loader stops still publish module/thread changes: refresh
+          // updates backend identity, so discarded events will not be reissued.
           mac_dmn_refresh_module_events(arena, &result, process_entity);
           mac_dmn_refresh_thread_events(arena, &result, process_entity);
           if(got_mach_exception || WIFSTOPPED(status))
@@ -3231,7 +3253,6 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
                   }
                   else if(hit_trap->kind == MAC_DMN_ActiveTrapKind_DyldBootstrap)
                   {
-                    result = result_before_auto_refresh;
                     process->dyld_bootstrap_pending = 0;
                     process->dyld_bootstrap_stepping = 1;
                     thread_entity->thread.is_stepping_over_dyld_bootstrap = 1;
@@ -3255,7 +3276,6 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
                 }
                 else if(thread_entity->thread.is_stepping_over_dyld_bootstrap)
                 {
-                  result = result_before_auto_refresh;
                   process->dyld_bootstrap_stepping = 0;
                   thread_entity->thread.is_stepping_over_dyld_bootstrap = 0;
                   thread_entity->thread.dyld_bootstrap_step_vaddr = 0;
@@ -3265,7 +3285,6 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
                 {
                   if(process->dyld_bootstrap_stepping)
                   {
-                    result = result_before_auto_refresh;
                     process->dyld_bootstrap_stepping = 0;
                     thread_entity->thread.is_stepping_over_dyld_bootstrap = 0;
                     thread_entity->thread.dyld_bootstrap_step_vaddr = 0;
