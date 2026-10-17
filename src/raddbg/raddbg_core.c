@@ -813,6 +813,7 @@ rd_eval_space_read(E_Space space, void *out, E_SpaceRangeInfo *out_range_info, R
         {
           Access *access = access_open();
           void *regs_block = 0;
+          U8 *reg_valid = 0;
           if(e_interpret_ctx->reg_unwind_count == 0)
           {
             regs_block = d_cached_reg_block_from_thread(scratch.arena, entity->handle);
@@ -825,6 +826,7 @@ rd_eval_space_read(E_Space space, void *out, E_SpaceRangeInfo *out_range_info, R
             {
               D_CallStackFrame *f = call_stack.concrete_frames[concrete_frame_idx];
               regs_block = f->regs;
+              reg_valid = f->reg_valid;
             }
           }
           if(regs_block != 0)
@@ -836,6 +838,18 @@ rd_eval_space_read(E_Space space, void *out, E_SpaceRangeInfo *out_range_info, R
             U64 read_size = dim_1u64(read_range);
             MemoryCopy(out, (U8 *)regs_block + read_range.min, read_size);
             result = (read_size == dim_1u64(range));
+            for(U64 i = 0; reg_valid != 0 && i < read_size; i += 1)
+            {
+              if(!reg_valid[read_range.min+i])
+              {
+                result = 0;
+                if(out_range_info != 0)
+                {
+                  out_range_info->flags |= E_SpaceRangeFlag_AnyByteBad;
+                  if(out_range_info->byte_bad_flags) {out_range_info->byte_bad_flags[i/64] |= 1ull << (i%64);}
+                }
+              }
+            }
           }
           access_close(access);
         }break;
