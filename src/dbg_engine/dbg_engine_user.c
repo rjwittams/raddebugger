@@ -264,8 +264,11 @@ d_cmd_list_push_new(Arena *arena, D_CmdList *cmds, D_CmdKind kind, D_CmdParams *
 // thread's current source line. Every instruction in this range is decoded.
 // Traps are then built in the following way:
 //
-// - 'call' instruction -> place "single-step-after | begin-spoof-mode" trap at
-//     call instruction.
+// - 'call' instruction -> on architectures where calls push return addresses
+//     to the stack, place "single-step-after | begin-spoof-mode" trap at the
+//     call instruction. otherwise, place a trap at the instruction immediately
+//     after the call. if that instruction is outside the current source line,
+//     the trap ends stepping; otherwise, it single-steps after hit.
 // - 'jmp' (both unconditional & conditional) -> if can decode jump destination
 //     address, AND if jump leaves the line, place "end-stepping" trap at
 //     destination. if can't, "end-stepping | single-step-after" trap at jmp.
@@ -276,6 +279,69 @@ d_cmd_list_push_new(Arena *arena, D_CmdList *cmds, D_CmdKind kind, D_CmdParams *
 //     stream.
 // - for any instructions which may change the stack pointer, traps are placed
 //     at them with the "save-stack-pointer | single-step-after" behaviors.
+
+internal B32
+d_vaddr_is_in_any_rng1u64(Rng1U64List *ranges, U64 vaddr)
+{
+  B32 result = 0;
+  for EachNode(n, Rng1U64Node, ranges->first)
+  {
+    if(contains_1u64(n->v, vaddr))
+    {
+      result = 1;
+      break;
+    }
+  }
+  return result;
+}
+
+internal D_Trap
+d_trap_from_step_over_line_call(Arch arch, DASM_CtrlFlowPoint *point, Rng1U64List *all_vaddr_ranges_on_same_line)
+{
+  D_Trap trap = {0};
+  trap.vaddr = point->vaddr;
+  switch(arch_call_return_address_storage_kind(arch))
+  {
+    case ArchCallReturnAddressStorageKind_Stack:
+    {
+      trap.flags = D_TrapFlag_BeginSpoofMode|D_TrapFlag_SingleStepAfterHit;
+    }break;
+    case ArchCallReturnAddressStorageKind_LinkRegister:
+    {
+      trap.vaddr = point->vaddr_opl;
+      trap.flags = d_vaddr_is_in_any_rng1u64(all_vaddr_ranges_on_same_line, point->vaddr_opl) ? D_TrapFlag_SingleStepAfterHit : D_TrapFlag_EndStepping;
+    }break;
+    default:
+    {
+      trap.flags = D_TrapFlag_SingleStepAfterHit;
+    }break;
+  }
+  return trap;
+}
+
+internal B32
+d_step_out_static_trap_vaddr_from_exit_point(DASM_CtrlFlowPoint *point, U64 *vaddr_out)
+{
+  B32 result = 0;
+  if(!(point->inst_flags & DASM_InstFlag_Return) && point->jump_dest_vaddr != 0)
+  {
+    *vaddr_out = point->jump_dest_vaddr;
+    result = 1;
+  }
+  return result;
+}
+
+internal U64
+d_step_out_trap_vaddr_from_return_frame(Arch arch, void *regs)
+{
+  ARCH_Info *arch_info = arch_info_from_arch(arch);
+  U64 result = arch_ip_from_reg_block(arch_info, regs);
+  if(arch_call_return_address_storage_kind(arch) == ArchCallReturnAddressStorageKind_LinkRegister && result != 0)
+  {
+    result += min_instruction_size_from_arch(arch);
+  }
+  return result;
+}
 
 internal D_TrapNet
 d_trap_net_from_thread__step_over_inst(Arena *arena, D_Entity *thread)
@@ -446,7 +512,7 @@ d_trap_net_from_thread__step_over_line(Arena *arena, D_Entity *thread)
     {
       LogInfoNamedBlockF("exit_points") for(DASM_CtrlFlowPointNode *n = ctrl_flow_info.exit_points.first; n != 0; n = n->next)
       {
-        log_infof("{vaddr:0x%I64x, jump_dest_vaddr:0x%I64x, inst_flags:%x}\n", n->v.vaddr, n->v.jump_dest_vaddr, n->v.inst_flags);
+        log_infof("{vaddr:0x%I64x, vaddr_opl:0x%I64x, jump_dest_vaddr:0x%I64x, inst_flags:%x}\n", n->v.vaddr, n->v.vaddr_opl, n->v.jump_dest_vaddr, n->v.inst_flags);
       }
     }
   }
@@ -491,19 +557,13 @@ d_trap_net_from_thread__step_over_line(Arena *arena, D_Entity *thread)
       
     }
     
-    // rjf: call => save stack pointer before, single-step to go into call; trap on return
+    // call => place spoof at return spot in stack when the architecture exposes one; otherwise trap at the call fallthrough.
     else if(point->inst_flags & DASM_InstFlag_Call)
     {
-      flags |= (D_TrapFlag_SaveStackPointerBefore|D_TrapFlag_SingleStepAfterHit);
+      D_Trap trap = d_trap_from_step_over_line_call(arch, point, &all_vaddr_ranges_on_same_line);
+      flags = trap.flags;
+      trap_addr = trap.vaddr;
     }
-    
-#if 0 // TODO(rjf): @spoof_stepping
-    // rjf: call => place spoof at return spot in stack, single-step after hitting
-    else if(point->inst_flags & DASM_InstFlag_Call)
-    {
-      flags |= (D_TrapFlag_BeginSpoofMode|D_TrapFlag_SingleStepAfterHit);
-    }
-#endif
     
     // rjf: instruction changes stack pointer => single-step over, save off the stack pointer, keep stepping
     else if(point->inst_flags & DASM_InstFlag_ChangesStackPointer)
@@ -817,20 +877,23 @@ d_trap_net_from_thread__step_out_scope(Arena *arena, D_Entity *thread)
         // rjf: add traps at all jump destinations which do *not* fall into any of the scope's ranges
         for EachNode(exit_pt_n, DASM_CtrlFlowPointNode, ctrl_flow_info.exit_points.first)
         {
-          U64 jump_dest_vaddr = exit_pt_n->v.jump_dest_vaddr;
-          B32 jump_dest_vaddr_is_out_of_scope = 1;
-          for EachNode(scope_n, Rng1U64Node, scope_voff_rngs.first)
+          U64 jump_dest_vaddr = 0;
+          if(d_step_out_static_trap_vaddr_from_exit_point(&exit_pt_n->v, &jump_dest_vaddr))
           {
-            if(contains_1u64(scope_n->v, d_voff_from_vaddr(module, jump_dest_vaddr)))
+            B32 jump_dest_vaddr_is_out_of_scope = 1;
+            for EachNode(scope_n, Rng1U64Node, scope_voff_rngs.first)
             {
-              jump_dest_vaddr_is_out_of_scope = 0;
-              break;
+              if(contains_1u64(scope_n->v, d_voff_from_vaddr(module, jump_dest_vaddr)))
+              {
+                jump_dest_vaddr_is_out_of_scope = 0;
+                break;
+              }
             }
-          }
-          if(jump_dest_vaddr_is_out_of_scope)
-          {
-            D_Trap trap = {D_TrapFlag_EndStepping|D_TrapFlag_IgnoreStackPointerCheck, jump_dest_vaddr};
-            d_trap_list_push(arena, &result.traps, &trap);
+            if(jump_dest_vaddr_is_out_of_scope)
+            {
+              D_Trap trap = {D_TrapFlag_EndStepping|D_TrapFlag_IgnoreStackPointerCheck, jump_dest_vaddr};
+              d_trap_list_push(arena, &result.traps, &trap);
+            }
           }
         }
         
@@ -863,8 +926,7 @@ d_trap_net_from_thread__step_out_scope(Arena *arena, D_Entity *thread)
     // rjf: use first unwind frame to generate trap
     if(result.good_read && callstack.concrete_frames_count > 1)
     {
-      ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
-      U64 vaddr = arch_ip_from_reg_block(arch_info, callstack.concrete_frames[1]->regs);
+      U64 vaddr = d_step_out_trap_vaddr_from_return_frame(thread->arch, callstack.concrete_frames[1]->regs);
       D_Trap trap = {D_TrapFlag_EndStepping|D_TrapFlag_IgnoreStackPointerCheck, vaddr};
       d_trap_list_push(arena, &result.traps, &trap);
     }
@@ -1674,6 +1736,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
       d_user_state->member_cache_reggen_idx = new_reg_gen;
     }
   }
+  B32 ctrl_was_running = d_ctrl_targets_running();
   
   //////////////////////////////
   //- rjf: hash ctrl parameterization state
@@ -1732,6 +1795,27 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
     {
       // rjf: unpack command
       D_CmdParams *params = &cmd->params;
+      D_CmdParams params_copy = {0};
+      D_CmdKind cmd_kind = cmd->kind;
+      switch(cmd_kind)
+      {
+        default:{}break;
+        case D_CmdKind_FreezeThread:
+        case D_CmdKind_ThawThread:
+        case D_CmdKind_FreezeProcess:
+        case D_CmdKind_ThawProcess:
+        case D_CmdKind_FreezeMachine:
+        case D_CmdKind_ThawMachine:
+        {
+          params_copy = *params;
+          cmd_kind = ((cmd_kind == D_CmdKind_FreezeThread ||
+                       cmd_kind == D_CmdKind_FreezeProcess ||
+                       cmd_kind == D_CmdKind_FreezeMachine)
+                      ? D_CmdKind_FreezeEntity
+                      : D_CmdKind_ThawEntity);
+          params = &params_copy;
+        }break;
+      }
       
       // rjf: prep ctrl running arguments
       B32 need_run = 0;
@@ -1741,7 +1825,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
       D_TrapList run_traps = {0};
       
       // rjf: process command
-      switch(cmd->kind)
+      switch(cmd_kind)
       {
         default:{}break;
         
@@ -1829,7 +1913,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
             need_run = 1;
             run_kind = D_RunKind_Run;
             run_thread = &d_entity_nil;
-            run_flags = (cmd->kind == D_CmdKind_LaunchAndStepInto) ? D_RunFlag_StopOnEntryPoint : 0;
+            run_flags = (cmd_kind == D_CmdKind_LaunchAndStepInto) ? D_RunFlag_StopOnEntryPoint : 0;
           }
           
           // rjf: no targets -> error
@@ -1908,6 +1992,22 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
               need_run = 1;
               run_kind = D_RunKind_Run;
               run_thread = d_entity_from_handle(params->thread);
+              if(run_thread == &d_entity_nil)
+              {
+                run_thread = d_entity_from_handle(d_user_state->ctrl_last_stop_event.entity);
+              }
+              if(run_thread == &d_entity_nil)
+              {
+                for EachIndex(idx, threads.count)
+                {
+                  D_Entity *thread = threads.v[idx];
+                  if(!thread->is_frozen)
+                  {
+                    run_thread = thread;
+                    break;
+                  }
+                }
+              }
             }
             else
             {
@@ -1923,6 +2023,23 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         case D_CmdKind_StepToExit:
         {
           D_Entity *thread = d_entity_from_handle(params->thread);
+          if(thread == &d_entity_nil)
+          {
+            thread = d_entity_from_handle(d_user_state->ctrl_last_stop_event.entity);
+          }
+          if(thread == &d_entity_nil)
+          {
+            D_EntityArray threads = d_entity_array_from_kind(D_EntityKind_Thread);
+            for EachIndex(idx, threads.count)
+            {
+              D_Entity *candidate = threads.v[idx];
+              if(!candidate->is_frozen)
+              {
+                thread = candidate;
+                break;
+              }
+            }
+          }
           if(thread == &d_entity_nil)
           {
             log_user_error(s("Must have a selected thread to step."));
@@ -1945,7 +2062,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
           else
           {
             D_TrapNet trap_net = {0};
-            switch(cmd->kind)
+            switch(cmd_kind)
             {
               default: break;
               case D_CmdKind_StepIntoInst: {trap_net.good_read = 1;}break;
@@ -1976,7 +2093,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
             {
               D_CmdParams params_copy = *params;
               params_copy.retry_idx += 1;
-              d_cmd_list_push_new(scratch.arena, &deferred_cmds, cmd->kind, &params_copy);
+              d_cmd_list_push_new(scratch.arena, &deferred_cmds, cmd_kind, &params_copy);
             }
             else if(!good_trap_net)
             {
@@ -2066,13 +2183,13 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
           D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
           if(processes.count != 0)
           {
-            D_CmdKind step_cmd_kind = (cmd->kind == D_CmdKind_StepInto
+            D_CmdKind step_cmd_kind = (cmd_kind == D_CmdKind_StepInto
                                        ? D_CmdKind_StepIntoLine
                                        : D_CmdKind_StepOverLine);
             B32 prefer_disasm = params->prefer_disasm;
             if(prefer_disasm)
             {
-              step_cmd_kind = (cmd->kind == D_CmdKind_StepInto
+              step_cmd_kind = (cmd_kind == D_CmdKind_StepInto
                                ? D_CmdKind_StepIntoInst
                                : D_CmdKind_StepOverInst);
             }
@@ -2085,20 +2202,6 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         }break;
         
         //- rjf: debug control context management operations
-        case D_CmdKind_FreezeThread:
-        case D_CmdKind_ThawThread:
-        case D_CmdKind_FreezeProcess:
-        case D_CmdKind_ThawProcess:
-        case D_CmdKind_FreezeMachine:
-        case D_CmdKind_ThawMachine:
-        {
-          D_CmdKind disptch_kind = ((cmd->kind == D_CmdKind_FreezeThread ||
-                                     cmd->kind == D_CmdKind_FreezeProcess ||
-                                     cmd->kind == D_CmdKind_FreezeMachine)
-                                    ? D_CmdKind_FreezeEntity
-                                    : D_CmdKind_ThawEntity);
-          d_push_cmd(disptch_kind, params);
-        }break;
         case D_CmdKind_FreezeLocalMachine:
         {
           D_MachineID machine_id = D_MachineID_Local;
@@ -2112,7 +2215,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         case D_CmdKind_FreezeEntity:
         case D_CmdKind_ThawEntity:
         {
-          B32 should_freeze = (cmd->kind == D_CmdKind_FreezeEntity);
+          B32 should_freeze = (cmd_kind == D_CmdKind_FreezeEntity);
           D_Entity *root = d_entity_from_handle(params->entity);
           for(D_Entity *e = root; e != &d_entity_nil; e = d_entity_rec_depth_first_pre(e, root).next)
           {
@@ -2287,12 +2390,15 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
     d_msg_list_concat_in_place(&d_user_state->ctrl_msgs, &msgs_copy);
     if(d_user_state->ctrl_msgs.count != 0)
     {
-      if(!d_user_state->ctrl_soft_halt_issued && d_user_state->ctrl_thread_run_state)
+      if(d_user_state->ctrl_thread_run_state || ctrl_was_running)
       {
-        d_user_state->ctrl_soft_halt_issued = 1;
-        d_halt();
+        if(!d_user_state->ctrl_soft_halt_issued)
+        {
+          d_user_state->ctrl_soft_halt_issued = 1;
+          d_halt();
+        }
       }
-      if(d_u2c_push_msgs(&d_user_state->ctrl_msgs, now_time_us()+100))
+      else if(d_u2c_push_msgs(&d_user_state->ctrl_msgs, now_time_us()+100))
       {
         MemoryZeroStruct(&d_user_state->ctrl_msgs);
         arena_clear(d_user_state->ctrl_msg_arena);
