@@ -44,11 +44,73 @@ scroll_test_frame(ScrollTestWindow *ws, UI_ScrollRegion *region, UI_ScrollRegion
   return result;
 }
 
+// Mirror the memory view's translated row container using the real UI layout
+// and hit testing. The viewport excludes the fixed header and footer.
+internal B32
+memory_row_hit(UI_ScrollBarStyle style, F32 offset, F32 scale, F32 click_y)
+{
+  UI_State *saved = ui_state;
+  UI_State *state = ui_state_alloc();
+  ui_select_state(state);
+  UI_Theme theme = {0};
+  B32 pressed = 0;
+  for(U32 frame = 0; frame < 4; frame += 1)
+  {
+    UI_IconInfo icons = {0};
+    UI_AnimationInfo animation = {0};
+    UI_EventNode node = {.v = {.kind = UI_EventKind_Press, .key = WM_Key_LeftMouseButton,
+                              .pos = {80*scale, click_y*scale}}};
+    UI_EventList events = {0};
+    if(frame == 3) { events.first = events.last = &node; events.count = 1; }
+    ui_begin_build((WM_Window){0}, &events, &icons, &theme, &animation, 1.f/60, 1.f/60);
+    ui_state->mouse = node.v.pos;
+    UI_Font(fnt_tag_from_path(str8_lit("data/segoeui.ttf"))) UI_FontSize(16*scale)
+    {
+      UI_ScrollRegionParams params = ui_scroll_region_params(r2f32p(0, 100*scale, 300*scale, 260*scale),
+                                                            UI_ScrollAxisPolicy_Off, UI_ScrollAxisPolicy_Always);
+      params.style = style;
+      UI_ScrollRegion region = ui_scroll_region_layout(params);
+      UI_ScrollRegionAxis axes[Axis2_COUNT] = {0};
+      axes[Axis2_Y] = (UI_ScrollRegionAxis){ui_scroll_pt(10, 0), r1s64(0, 100), 8};
+      UI_ScrollRegionSignal sig = ui_scroll_region_build(ui_top_parent(), ui_key_make(2001), &region, axes,
+                                                        UI_BoxFlag_Scroll|UI_BoxFlag_AllowOverflowY);
+      sig.content_box->view_off.y = sig.content_box->view_off_target.y = offset*scale;
+      UI_Parent(sig.content_box) UI_WidthFill
+        UI_PrefHeight(ui_px(dim_2f32(region.viewport).y + sig.content_box->view_off.y, 1.f))
+      {
+        ui_set_next_child_layout_axis(Axis2_Y);
+        UI_Box *rows = ui_build_box_from_stringf(UI_BoxFlag_Clickable, "row_container");
+        UI_Signal row_sig = ui_signal_from_box(rows);
+        if(frame == 3) { pressed = ui_pressed(row_sig); }
+        UI_Parent(rows) UI_WidthFill UI_PrefHeight(ui_px(20*scale, 1))
+        {
+          for(U32 row = 0; row < 15; row += 1) { ui_build_box_from_stringf(0, "row_%u", row); }
+        }
+      }
+    }
+    ui_end_build();
+  }
+  ui_select_state(saved);
+  ui_state_release(state);
+  return pressed;
+}
+
 internal B32
 scroll_region_diagnostics(ScrollTestWindow *ws)
 {
   U32 failures = 0;
 #define ScrollCheck(condition, name) do { if(!(condition)) { fprintf(stderr, "FAIL: %s\n", name); failures += 1; } } while(0)
+  for(U32 style = 0; style < 2; style += 1)
+  for(U32 scale = 1; scale <= 2; scale += 1)
+  {
+    F32 offsets[] = {0, 5, 20, 25, 39};
+    for EachElement(idx, offsets)
+    {
+      ScrollCheck(memory_row_hit(style, offsets[idx], scale, 259), "memory bottom row accepts clicks after translation");
+      ScrollCheck(!memory_row_hit(style, offsets[idx], scale, 99), "memory rows do not take header clicks");
+      ScrollCheck(!memory_row_hit(style, offsets[idx], scale, 261), "memory rows do not take footer clicks");
+    }
+  }
   UI_ScrollRegionParams params = {0};
   params.rect = r2f32p(20, 30, 220, 230);
   params.gutter_px = 20;
