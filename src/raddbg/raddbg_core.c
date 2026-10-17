@@ -11525,7 +11525,7 @@ rd_init(CmdLine *cmdln)
     {
       MD_Node *schema = md_tree_from_string(rd_state->arena, rd_name_schema_info_table[idx].schema)->first;
       // Resolve platform defaults in the schema so settings UI and commands agree.
-      if(OS_MAC)
+#if OS_MAC
       {
         for(MD_Node *setting = schema->first; !md_node_is_nil(setting); setting = setting->next)
         {
@@ -11537,6 +11537,7 @@ rd_init(CmdLine *cmdln)
           }
         }
       }
+#endif
       cfg_schema_table_insert(rd_state->arena, rd_state->cfg_schema_table, rd_name_schema_info_table[idx].name, schema);
     }
   }
@@ -12401,10 +12402,9 @@ rd_frame(void)
     }
     initialized = 1;
   }
-  if(OS_MAC)
-  {
-    rd_wm_set_main_menu();
-  }
+#if OS_MAC
+  rd_wm_set_main_menu();
+#endif
 
   //////////////////////////////
   //- rjf: consume events
