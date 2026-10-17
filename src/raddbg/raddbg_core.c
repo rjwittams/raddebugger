@@ -5613,7 +5613,8 @@ rd_window_state_from_cfg(CFG_Node *cfg)
     ws->query_arena = arena_alloc();
     ws->hover_eval_arena = arena_alloc();
     ws->autocomp_arena = arena_alloc();
-    ws->last_dpi = wm_dpi_from_window(ws->os);
+    ws->last_layout_scale = wm_layout_scale_from_window(ws->os);
+    ws->last_backing_scale = wm_backing_scale_from_window(ws->os);
     WM_Monitor zero_monitor = {0};
     if(!wm_monitor_match(zero_monitor, preferred_monitor))
     {
@@ -5908,21 +5909,26 @@ rd_window_frame(void)
       cfg_node_release(rd_state->cfg, cfg_node_child_from_string(window, str8_lit("maximized")));
     }
     
-    //- rjf: DPI changes -> xform font size / window size
-    F32 dpi = wm_dpi_from_window(ws->os);
-    if(dpi != ws->last_dpi)
+    //- Scale changes -> xform layout font size and refresh raster caches
+    F32 layout_scale = wm_layout_scale_from_window(ws->os);
+    F32 backing_scale = wm_backing_scale_from_window(ws->os);
+    if(layout_scale != ws->last_layout_scale)
     {
       fnt_reset();
-#if OS_MAC
-      ws->last_dpi = dpi;
-#else
-      F32 current_font_size = rd_font_size();
-      F32 new_font_size = current_font_size * (dpi / ws->last_dpi);
-      new_font_size = Clamp(6.f, new_font_size, 72.f);
-      CFG_Node *font_size_cfg = cfg_node_child_from_string_or_alloc(rd_state->cfg, window, str8_lit("font_size"));
-      cfg_node_new_replacef(rd_state->cfg, font_size_cfg, "%I64u", (U64)new_font_size);
-      ws->last_dpi = dpi;
-#endif
+      if(ws->last_layout_scale != 0)
+      {
+        F32 current_font_size = rd_font_size();
+        F32 new_font_size = current_font_size * (layout_scale / ws->last_layout_scale);
+        new_font_size = Clamp(6.f, new_font_size, 72.f);
+        CFG_Node *font_size_cfg = cfg_node_child_from_string_or_alloc(rd_state->cfg, window, str8_lit("font_size"));
+        cfg_node_new_replacef(rd_state->cfg, font_size_cfg, "%I64u", (U64)new_font_size);
+      }
+      ws->last_layout_scale = layout_scale;
+    }
+    if(backing_scale != ws->last_backing_scale)
+    {
+      fnt_reset();
+      ws->last_backing_scale = backing_scale;
     }
     
     //- rjf: commit position
