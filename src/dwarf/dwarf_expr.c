@@ -133,7 +133,7 @@ dw_eval(Arena *arena, DW_Format fmt, Arch arch, MemoryMap *memory_map, void *reg
         U64 vaddr = popped_vals[0].u512.u64[0];
         U64 read_size = Min(deref_read_size, sizeof(push_vals[0].u512));
         Rng1U64 read_vaddr_range = r1u64(vaddr, vaddr+read_size);
-        if(!memory_map_read(memory_map, read_vaddr_range, &push_vals[0].u512))
+        if(memory_map_read(memory_map, read_vaddr_range, &push_vals[0].u512) != read_size)
         {
           need_a_break = 1;
           result.status = DW_EvalStatus_FailedMemoryRead;
@@ -373,7 +373,7 @@ dw_eval(Arena *arena, DW_Format fmt, Arch arch, MemoryMap *memory_map, void *reg
     }
     
     //- rjf: at the end of the expression? -> set success, fill result
-    if(off == expr.size)
+    if(!done && !need_a_break && off == expr.size)
     {
       result.status = DW_EvalStatus_Good;
       if(state->top_val != 0)

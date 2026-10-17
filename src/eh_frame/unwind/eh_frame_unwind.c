@@ -385,6 +385,8 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
                 cfi_row.reg_rules[reg].code = DW_UnwindRuleCode_Expr;
                 cfi_row.reg_rules[reg].expr = str8_substr(inst_data, r1u64(off, off+expr_size));
               }
+              if(expr_size > inst_data.size-off) {done = 1; break;}
+              off += expr_size;
             }break;
             case DW_CFAOpCode_ValOffset:
             {
@@ -423,6 +425,8 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
                 cfi_row.reg_rules[reg].code = DW_UnwindRuleCode_ValExpr;
                 cfi_row.reg_rules[reg].expr = str8_substr(inst_data, r1u64(off, off+expr_size));
               }
+              if(expr_size > inst_data.size-off) {done = 1; break;}
+              off += expr_size;
             }break;
             case DW_CFAOpCode_Offset:
             {
@@ -483,6 +487,8 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
               off += str8_deserial_read_uleb128(inst_data, off, &expr_size);
               cfi_row.cfa_rule.code = DW_UnwindRuleCode_Expr;
               cfi_row.cfa_rule.expr = str8_substr(inst_data, r1u64(off, off+expr_size));
+              if(expr_size > inst_data.size-off) {done = 1; break;}
+              off += expr_size;
             }break;
             
             //- rjf: register state resets
