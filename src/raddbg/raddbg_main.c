@@ -706,7 +706,12 @@ entry_point(CmdLine *cmd_line)
             String8 msg = {0};
             if(sock_recv(scratch.arena, icp_sock_session, &ipc_protocol, &ipc_peer, &msg, 0))
             {
-              String8List cmd_parts_of_msg = str8_split(scratch.arena, msg, (U8 *)";", 1, 0);
+              String8 command_text = str8_skip_chop_whitespace(msg);
+              U64 command_name_size = 0;
+              for(; command_name_size < command_text.size && !char_is_space(command_text.str[command_name_size]); command_name_size += 1) {}
+              B32 is_debug_eval = str8_match(str8_prefix(command_text, command_name_size), str8_lit("debug_eval"), 0);
+              String8List cmd_parts_of_msg = {0};
+              if(!is_debug_eval) {cmd_parts_of_msg = str8_split(scratch.arena, msg, (U8 *)";", 1, 0);}
               RD_WindowState *dst_ws = rd_state->first_window_state;
               for(RD_WindowState *ws = dst_ws; ws != &rd_nil_window_state; ws = ws->order_next)
               {
@@ -731,7 +736,12 @@ entry_point(CmdLine *cmd_line)
                     rd_regs()->view   = panel_tree.focused->selected_tab->id;
                     scratch_end(scratch);
                   }
-                  for EachNode(n, String8Node, cmd_parts_of_msg.first)
+                  // The structured evaluation request is one payload, not CLI options or a command batch.
+                  if(is_debug_eval)
+                  {
+                    rd_cmd(RD_CmdKind_DebugEval, .expr = str8_skip(command_text, command_name_size), .disable_addresses = 1);
+                  }
+                  else for EachNode(n, String8Node, cmd_parts_of_msg.first)
                   {
                     String8 cmd_string = str8_skip_chop_whitespace(n->string);
                     if(cmd_string.size != 0)
