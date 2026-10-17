@@ -3716,6 +3716,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                   RDIM_EvalBytecode dst_bytecode = {0};
                   B32 dst_bytecode_is_good = 1;
                   B32 bytecode_is_framebase_dependent = 0;
+                  B32 bytecode_is_stack_value = 0;
                   B32 is_tls_dependent = 0;
                   for(U64 expr_off = 0; dst_bytecode_is_good && expr_off < expr.size;)
                   {
@@ -3828,6 +3829,20 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                     {
                       default:{dst_bytecode_is_good = 0;}break;
                       case DW_ExprOp_Nop:{}break;
+                      case DW_ExprOp_StackValue:
+                      {
+                        // This terminates a value expression, not a memory location.
+                        // Composite locations still require separate evaluator support.
+                        if(val_stack_top != 0 && expr_off == expr.size)
+                        {
+                          bytecode_is_stack_value = 1;
+                          val_stack_top->v.is_addr = 0;
+                        }
+                        else
+                        {
+                          dst_bytecode_is_good = 0;
+                        }
+                      }break;
                       
                       //- rjf: small opcode-embedded unsigned literals
                       case DW_ExprOp_Lit0:  case DW_ExprOp_Lit1:  case DW_ExprOp_Lit2:
@@ -4350,13 +4365,13 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                     }
                     
                     // rjf: match simple module offsets
-                    if(beginning_ops[0] == RDI_EvalOp_ModuleOff && beginning_ops[1] == RDI_EvalOp_Stop)
+                    if(!bytecode_is_stack_value && beginning_ops[0] == RDI_EvalOp_ModuleOff && beginning_ops[1] == RDI_EvalOp_Stop)
                     {
                       U64 voff = beginning_nodes[0]->p;
                       loc.kind = RDI_LocationKind_ModuleOff;
                       loc.offset = voff;
                     }
-                    else if(((beginning_ops[0] == RDI_EvalOp_ModuleOff &&
+                    else if(!bytecode_is_stack_value && ((beginning_ops[0] == RDI_EvalOp_ModuleOff &&
                               (beginning_ops[1] == RDI_EvalOp_ConstU8 ||
                                beginning_ops[1] == RDI_EvalOp_ConstU16 ||
                                beginning_ops[1] == RDI_EvalOp_ConstU32 ||
@@ -4375,13 +4390,13 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                     }
                     
                     // rjf: match simple TLS offsets
-                    if(beginning_ops[0] == RDI_EvalOp_TLSOff && beginning_ops[1] == RDI_EvalOp_Stop)
+                    if(!bytecode_is_stack_value && beginning_ops[0] == RDI_EvalOp_TLSOff && beginning_ops[1] == RDI_EvalOp_Stop)
                     {
                       U64 toff = beginning_nodes[0]->p;
                       loc.kind = RDI_LocationKind_TLSOff;
                       loc.offset = toff;
                     }
-                    else if(((beginning_ops[0] == RDI_EvalOp_TLSOff &&
+                    else if(!bytecode_is_stack_value && ((beginning_ops[0] == RDI_EvalOp_TLSOff &&
                               (beginning_ops[1] == RDI_EvalOp_ConstU8 ||
                                beginning_ops[1] == RDI_EvalOp_ConstU16 ||
                                beginning_ops[1] == RDI_EvalOp_ConstU32 ||
