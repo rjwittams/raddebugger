@@ -1549,13 +1549,14 @@ d_query_cached_locals_map_from_dbgi_key_voff(DI_Key dbgi_key, U64 voff)
     {
       Access *access = access_open();
       RDI_Parsed *rdi = di_rdi_from_key(access, dbgi_key, 1, 0);
-      E_String2NumMap *map = e_push_locals_map_from_rdi_voff(cache->arena, rdi, voff);
-      if(map->slots_count != 0)
+      // An allocated map can be empty because debug info is still loading.
+      // Only cache maps built from loaded RDI, including genuinely empty scopes.
+      if(rdi->raw_data_size != 0)
       {
         node = push_array(cache->arena, D_RunLocalsCacheNode, 1);
         node->dbgi_key = dbgi_key;
         node->voff = voff;
-        node->locals_map = map;
+        node->locals_map = e_push_locals_map_from_rdi_voff(cache->arena, rdi, voff);
         SLLQueuePush_N(slot->first, slot->last, node, hash_next);
       }
       access_close(access);
@@ -1603,13 +1604,13 @@ d_query_cached_member_map_from_dbgi_key_voff(DI_Key dbgi_key, U64 voff)
     {
       Access *access = access_open();
       RDI_Parsed *rdi = di_rdi_from_key(access, dbgi_key, 1, 0);
-      E_String2NumMap *map = e_push_member_map_from_rdi_voff(cache->arena, rdi, voff);
-      if(map->slots_count != 0)
+      // Do not retain a missing member map while debug info is still loading.
+      if(rdi->raw_data_size != 0)
       {
         node = push_array(cache->arena, D_RunLocalsCacheNode, 1);
         node->dbgi_key = dbgi_key;
         node->voff = voff;
-        node->locals_map = map;
+        node->locals_map = e_push_member_map_from_rdi_voff(cache->arena, rdi, voff);
         SLLQueuePush_N(slot->first, slot->last, node, hash_next);
       }
       access_close(access);
