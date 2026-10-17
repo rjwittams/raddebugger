@@ -1010,7 +1010,7 @@ d_entity_string_alloc(D_EntityCtxRWStore *store, String8 string)
       }
     }
   }
-  
+
   //- rjf: fill node
   String8 result = {0};
   if(node != 0)
@@ -1116,7 +1116,7 @@ d_entity_release(D_EntityCtxRWStore *store, D_Entity *entity)
   {
     DLLRemove_NPZ(&d_entity_nil, entity->parent->first, entity->parent->last, entity, next, prev);
   }
-  
+
   // rjf: walk every entity in this tree, free each
   if(entity != &d_entity_nil)
   {
