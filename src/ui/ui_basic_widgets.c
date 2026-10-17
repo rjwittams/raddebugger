@@ -1400,8 +1400,21 @@ ui_scroll_bar_styled(Axis2 axis, UI_Size off_axis_size, UI_ScrollBarStyle style,
       new_pt = original_pt;
       if(drag_delta != 0)
       {
-        S64 new_idx = original_pt.idx + original_pt.target_off + drag_pct*idx_range_dim;
-        new_idx = Clamp(idx_range.min, new_idx, idx_range.max);
+        // Keep the absolute index integral; only the drag displacement is fractional.
+        F64 idx_delta = original_pt.target_off + (F64)drag_pct*idx_range_dim;
+        S64 new_idx;
+        if(idx_delta <= (F64)(idx_range.min-original_pt.idx))
+        {
+          new_idx = idx_range.min;
+        }
+        else if(idx_delta >= (F64)(idx_range.max-original_pt.idx))
+        {
+          new_idx = idx_range.max;
+        }
+        else
+        {
+          new_idx = original_pt.idx + (S64)floor_f64(idx_delta);
+        }
         ui_scroll_pt_target_idx(&new_pt, new_idx);
         new_pt.off = 0;
       }
