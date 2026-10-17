@@ -405,7 +405,8 @@ r_mtl_blur_uniforms_from_params(R_PassParams_Blur *params, Vec2F32 viewport_dim)
   MemoryCopyArray(result.corner_radii.v, params->corner_radii);
 
   F32 weights[ArrayCount(result.kernel)*2] = {0};
-  F32 blur_size = Min(params->blur_size, ArrayCount(weights));
+  // Reserve one kernel slot for the centre weight; the rest hold pairs.
+  F32 blur_size = Min(params->blur_size, ArrayCount(weights)-1);
   U64 blur_count = (U64)round_f32(blur_size);
   F32 stdev = (blur_size-1.f)/2.f;
   F32 one_over_root_2pi_stdev2 = 1/sqrt_f32(2*pi32*stdev*stdev);
