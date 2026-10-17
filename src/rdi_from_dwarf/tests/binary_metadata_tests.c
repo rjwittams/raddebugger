@@ -127,3 +127,62 @@ Test(elf_rdi_sections)
     arena_release(bake_arena);
   }
 }
+
+Test(macho_rdi_sections)
+{
+  for(U64 base = 0; base <= 0x100000000; base += 0x100000000)
+  for(U32 text_prot = 0; text_prot <= 5; text_prot += 5)
+  {
+    U8 bytes[sizeof(MachO_Header64)+2*sizeof(MachO_SegmentCommand64)+4*sizeof(MachO_Section64)] = {0};
+    MachO_Header64 header = {.magic=MACHO_MAGIC_64, .cpu_type=MACHO_CPU_TYPE_ARM64, .load_command_count=2,
+                            .load_commands_size=sizeof(bytes)-sizeof(MachO_Header64)};
+    MemoryCopy(bytes, &header, sizeof(header));
+    MachO_SegmentCommand64 text = {.cmd=MACHO_LC_SEGMENT_64, .cmd_size=sizeof(text)+3*sizeof(MachO_Section64),
+                                 .vmaddr=base, .vmsize=0x1000, .initprot=text_prot, .section_count=3};
+    MemoryCopy(text.segment_name, "__TEXT", 6);
+    MachO_Section64 text_sections[] =
+    {
+      {.section_name="__text",    .addr=base+0x100, .size=0x20, .offset=0x100, .flags=MACHO_S_ATTR_PURE_INSTRUCTIONS},
+      {.section_name="__stubs",   .addr=base+0x200, .size=0x30, .offset=0x200, .flags=MACHO_S_ATTR_SOME_INSTRUCTIONS},
+      {.section_name="__cstring", .addr=base+0x80,  .size=0x10, .offset=0x80},
+    };
+    U64 cursor = sizeof(header);
+    MemoryCopy(bytes+cursor, &text, sizeof(text));
+    MemoryCopy(bytes+cursor+sizeof(text), text_sections, sizeof(text_sections));
+    cursor += text.cmd_size;
+    MachO_SegmentCommand64 data_segment = {.cmd=MACHO_LC_SEGMENT_64, .cmd_size=sizeof(data_segment)+sizeof(MachO_Section64),
+                                         .vmaddr=base+0x1000, .vmsize=0x1000, .initprot=3, .section_count=1};
+    MemoryCopy(data_segment.segment_name, "__DATA", 6);
+    MachO_Section64 data_section = {.section_name="__data", .addr=base+0x1000, .size=0x40, .offset=0x1000};
+    MemoryCopy(bytes+cursor, &data_segment, sizeof(data_segment));
+    MemoryCopy(bytes+cursor+sizeof(data_segment), &data_section, sizeof(data_section));
+    String8 image = str8_array_fixed(bytes);
+    MachO_Bin bin = macho_bin_from_data(arena, image);
+    Arena *bake_arena = arena_alloc();
+    RDIM_BakeParams params = {0};
+    params.subset_flags = RDIM_SubsetFlag_All;
+    params.binary_sections = m2r_rdi_binary_sections_from_macho_bin(bake_arena, image, &bin);
+    U64 broadcast = 0;
+    LaneCtx restore = lane_ctx(((LaneCtx){.lane_count=1, .broadcast_memory=&broadcast}));
+    RDIM_BakeResults baked = rdim_bake(bake_arena, &params);
+    lane_ctx(restore);
+    String8List blobs = rdim_file_blobs_from_section_bundle(bake_arena, &baked.section_bundle);
+    String8 data = str8_list_join(bake_arena, &blobs, 0);
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    U64 count = 0;
+    RDI_BinarySection *sections = rdi_table_from_name(&rdi, BinarySections, &count);
+    TestCheck(count == 5);
+    test_outf("image base 0x%I64x, text protection %u: code flags 0x%x, text voff 0x%I64x\n",
+              base, text_prot, sections[1].flags, sections[1].voff_first);
+    TestCheck(sections[1].flags == (RDI_BinarySectionFlag_Read|RDI_BinarySectionFlag_Execute) &&
+              sections[2].flags == (RDI_BinarySectionFlag_Read|RDI_BinarySectionFlag_Execute));
+    TestCheck(sections[1].voff_first == 0x100 && sections[1].voff_opl == 0x120 &&
+              sections[2].voff_first == 0x200 && sections[2].voff_opl == 0x230);
+    TestCheck(sections[3].flags == RDI_BinarySectionFlag_Read && sections[3].voff_first == 0x80 && sections[3].voff_opl == 0x90);
+    TestCheck(sections[4].flags == (RDI_BinarySectionFlag_Read|RDI_BinarySectionFlag_Write) &&
+              sections[4].voff_first == 0x1000 && sections[4].voff_opl == 0x1040 &&
+              sections[4].foff_first == 0x1000 && sections[4].foff_opl == 0x1040);
+    arena_release(bake_arena);
+  }
+}
