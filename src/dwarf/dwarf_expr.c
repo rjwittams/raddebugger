@@ -4,6 +4,20 @@
 ////////////////////////////////
 //~ rjf: Expression Evaluation Functions
 
+internal Rng1U16
+dw_reg_range_from_code(Arch arch, DW_RegCode code, B32 unwind)
+{
+  ARCH_Info *info = arch_info_from_arch(arch);
+  Rng1U16 range = info->reg_code_rng_table[arch_reg_code_from_dw(arch, code)];
+  U64 size = dim_1u16(range);
+  if(arch == Arch_arm64 && unwind && code >= 64 && code <= 95) {size = Min(size, 8);}
+  if(arch == Arch_x64 && ((code >= DW_RegCodeX64_zmm0 && code <= DW_RegCodeX64_zmm15) ||
+                         (code >= DW_RegCodeX64_zmm16 && code <= DW_RegCodeX64_zmm31))) {size = Min(size, 16);}
+  if(arch == Arch_x64 && code == DW_RegCodeX64_rflags) {size = Min(size, 4);}
+  range.max = range.min + size;
+  return range;
+}
+
 internal DW_Eval
 dw_eval(Arena *arena, DW_Format fmt, Arch arch, MemoryMap *memory_map, void *regs, U64 frame_base, U64 cfa, U64 tls, DW_EvalState *state, String8 expr, U64 op_idx_cap)
 {
@@ -259,10 +273,15 @@ dw_eval(Arena *arena, DW_Format fmt, Arch arch, MemoryMap *memory_map, void *reg
       reg_read:;
       {
         ARCH_RegCode reg_code = arch_reg_code_from_dw(arch, reg_code_dw);
-        Rng1U16 reg_rng = arch_info->reg_code_rng_table[reg_code];
+        Rng1U16 reg_rng = dw_reg_range_from_code(arch, reg_code_dw, state->unwind_register_sizes);
+        if(dim_1u16(reg_rng) == 0) {return result;}
         U64 read_size = dim_1u16(reg_rng);
         read_size = Min(read_size, sizeof(push_vals[0].u512));
         reg_rng.max = reg_rng.min + read_size;
+        if(state->reg_valid) for(U64 i = reg_rng.min; i < reg_rng.max; i += 1)
+        {
+          if(!state->reg_valid[i]) {result.status = DW_EvalStatus_UnavailableRegister; return result;}
+        }
         arch_reg_block_read_range(arch_info, regs, reg_rng, &push_vals[0].u512);
       }break;
       
@@ -281,10 +300,15 @@ dw_eval(Arena *arena, DW_Format fmt, Arch arch, MemoryMap *memory_map, void *reg
       based_reg_read:;
       {
         ARCH_RegCode reg_code = arch_reg_code_from_dw(arch, reg_code_dw);
-        Rng1U16 reg_rng = arch_info->reg_code_rng_table[reg_code];
+        Rng1U16 reg_rng = dw_reg_range_from_code(arch, reg_code_dw, state->unwind_register_sizes);
+        if(dim_1u16(reg_rng) == 0) {return result;}
         U64 read_size = dim_1u16(reg_rng);
         read_size = Min(read_size, sizeof(push_vals[0].u512));
         reg_rng.max = reg_rng.min + read_size;
+        if(state->reg_valid) for(U64 i = reg_rng.min; i < reg_rng.max; i += 1)
+        {
+          if(!state->reg_valid[i]) {result.status = DW_EvalStatus_UnavailableRegister; return result;}
+        }
         arch_reg_block_read_range(arch_info, regs, reg_rng, &push_vals[0].u512);
         push_vals[0].u512.u64[0] += operands[0].s64;
       }break;

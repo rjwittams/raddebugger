@@ -23,6 +23,6 @@ internal X64_RegCode pe_x64_uwnd_reg_code_from_pe_gpr_reg(PE_UnwindGprRegX64 gpr
 ////////////////////////////////
 //~ rjf: Unwinding Abstraction Implementation
 
-internal UWND_StepResult pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64 tls_vaddr, void *regs_opaque, U64 *cfa_out);
+internal UWND_StepResult pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64 tls_vaddr, void *regs_opaque, U8 *reg_valid, U64 *cfa_out);
 
 #endif // PE_X64_UNWIND_H
