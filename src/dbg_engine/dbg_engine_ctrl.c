@@ -368,7 +368,7 @@ d_serialized_string_from_msg_list(Arena *arena, D_MsgList *msgs)
     for(D_MsgNode *msg_n = msgs->first; msg_n != 0; msg_n = msg_n->next)
     {
       D_Msg *msg = &msg_n->v;
-      
+
       // rjf: write flat parts
       str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->kind);
       str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->run_flags);
@@ -393,7 +393,7 @@ d_serialized_string_from_msg_list(Arena *arena, D_MsgList *msgs)
         str8_serial_push_struct(scratch.arena, &msgs_srlzed, &n->string.size);
         str8_serial_push_data(scratch.arena, &msgs_srlzed, n->string.str, n->string.size);
       }
-      
+
       // rjf: write command line string list
       str8_serial_push_struct(scratch.arena, &msgs_srlzed, &msg->cmd_line_string_list.node_count);
       for(String8Node *n = msg->cmd_line_string_list.first; n != 0; n = n->next)
@@ -1915,9 +1915,6 @@ d_initial_debug_info_path_from_module(Arena *arena, D_Handle module_handle)
   return result;
 }
 
-////////////////////////////////
-//~ rjf: Unwinding Functions
-
 internal String8
 d_macho_unwind_info_data_from_module(Arena *arena, D_Handle module_handle)
 {
@@ -1955,6 +1952,9 @@ d_macho_function_start_voff_range_from_module_voff(D_Handle module_handle, U64 v
   access_close(access);
   return result;
 }
+
+////////////////////////////////
+//~ rjf: Unwinding Functions
 
 internal String8
 d_eh_frame_hdr_from_eh_frame(Arena *arena, String8 eh_frame_data, U64 eh_frame_vaddr, Arch arch, EH_PtrCtx *eh_ptr_ctx, B32 require_terminator)
