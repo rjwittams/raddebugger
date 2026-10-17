@@ -31,8 +31,10 @@ entry_point(CmdLine *cmdline)
       {"option-shift",   NSEventModifierFlagOption|NSEventModifierFlagShift,
                                                      0, WM_Key_A, @"\u00c5", 0xc5,   WM_Modifier_Alt|WM_Modifier_Shift},
       {"command-shift-p",NSEventModifierFlagCommand|NSEventModifierFlagShift,
-                                                    35, WM_Key_P, @"p",      0,      WM_Modifier_Ctrl|WM_Modifier_Shift},
-      {"command-f",      NSEventModifierFlagCommand, 3, WM_Key_F, @"f",      0,      WM_Modifier_Ctrl},
+                                                    35, WM_Key_P, @"p",      0,      WM_Modifier_Cmd|WM_Modifier_Shift},
+      {"command-f",      NSEventModifierFlagCommand, 3, WM_Key_F, @"f",      0,      WM_Modifier_Cmd},
+      {"command-control",NSEventModifierFlagCommand|NSEventModifierFlagControl,
+                                                     3, WM_Key_F, @"f",      0,      WM_Modifier_Cmd|WM_Modifier_Ctrl},
       {"control-a",      NSEventModifierFlagControl, 0, WM_Key_A, @"\x01",   0,      WM_Modifier_Ctrl},
       {"control-shift-p",NSEventModifierFlagControl|NSEventModifierFlagShift,
                                                     35, WM_Key_P, @"P",      0,      WM_Modifier_Ctrl|WM_Modifier_Shift},
@@ -40,7 +42,7 @@ entry_point(CmdLine *cmdline)
       {"delete",         0,                         51, WM_Key_Backspace, @"\x7f", 0, 0},
       {"left-arrow",     0,                        123, WM_Key_Left, @"\uf702", 0,   0},
       {"repeat-text",    0,                          0, WM_Key_A, @"a",      'a',    0, 1},
-      {"repeat-command", NSEventModifierFlagCommand, 3, WM_Key_F, @"f",      0,      WM_Modifier_Ctrl, 1},
+      {"repeat-command", NSEventModifierFlagCommand, 3, WM_Key_F, @"f",      0,      WM_Modifier_Cmd, 1},
     };
     U64 failures = 0;
     for EachElement(idx, cases)
@@ -92,6 +94,72 @@ entry_point(CmdLine *cmdline)
       failures += !good;
       scratch_end(scratch);
     }
+    // Modifier keys themselves must remain distinct as well as their masks.
+    B32 right = 0;
+    B32 modifier_keys_good = mac_wm_key_from_key_code(54, &right) == WM_Key_Cmd && right;
+    modifier_keys_good &= mac_wm_key_from_key_code(55, &right) == WM_Key_Cmd && !right;
+    modifier_keys_good &= mac_wm_key_from_key_code(59, &right) == WM_Key_Ctrl && !right;
+    modifier_keys_good &= mac_wm_key_from_key_code(62, &right) == WM_Key_Ctrl && right;
+    fprintf(stderr, "%s: physical modifier keys\n", modifier_keys_good ? "PASS" : "FAIL");
+    failures += !modifier_keys_good;
+
+    // Exercise the native-menu adapter without system-wide input synthesis.
+    WM_MenuItem items[] =
+    {
+      {WM_MenuItemKind_Command, str8_lit("Palette"), str8_lit("open_palette"), WM_Key_P, WM_Modifier_Cmd|WM_Modifier_Shift},
+      {WM_MenuItemKind_Command, str8_lit("Exit"), str8_lit("exit"), WM_Key_Q, WM_Modifier_Cmd},
+      {WM_MenuItemKind_Command, str8_lit("Step"), str8_lit("step_into"), WM_Key_F11, 0},
+    };
+    WM_Menu menu = {str8_lit("Probe"), ArrayCount(items), items};
+    WM_MenuArray menus = {1, &menu};
+    wm_set_preferred_native_menu_bar(1);
+    wm_set_main_menu(menus);
+    NSMenu *native_menu = [[[NSApp mainMenu] itemAtIndex:1] submenu];
+    NSMenuItem *palette = [native_menu itemAtIndex:0];
+    B32 menu_good = [[palette keyEquivalent] isEqualToString:@"p"] &&
+                   [palette keyEquivalentModifierMask] == (NSEventModifierFlagCommand|NSEventModifierFlagShift);
+    NSMenuItem *quit = [[[[NSApp mainMenu] itemAtIndex:0] submenu] itemAtIndex:0];
+    menu_good &= [[quit keyEquivalent] isEqualToString:@"q"] && [quit keyEquivalentModifierMask] == NSEventModifierFlagCommand;
+    menu_good &= [[[native_menu itemAtIndex:1] keyEquivalent] characterAtIndex:0] == NSF11FunctionKey;
+    fprintf(stderr, "menu equivalents: palette=%s/%lx quit=%s/%lx step=%x good=%d\n",
+            [[palette keyEquivalent] UTF8String], (unsigned long)[palette keyEquivalentModifierMask],
+            [[quit keyEquivalent] UTF8String], (unsigned long)[quit keyEquivalentModifierMask],
+            [[[native_menu itemAtIndex:1] keyEquivalent] characterAtIndex:0], menu_good);
+    [mac_wm_state->menu_target menuWillOpen:native_menu];
+    mac_wm_set_focused_window(mac_wm_window_from_handle(window));
+    [mac_wm_state->menu_target menuItemSelected:palette];
+    Temp scratch = scratch_begin(0, 0);
+    WM_EventList menu_events = wm_get_events(scratch.arena, 0);
+    U64 opens = 0, commands = 0, presses = 0;
+    for(WM_Event *event = menu_events.first; event != 0; event = event->next)
+    {
+      opens += event->kind == WM_EventKind_MenuOpen;
+      presses += event->kind == WM_EventKind_Press;
+      if(event->kind == WM_EventKind_MenuCommand)
+      {
+        commands += 1;
+        menu_good &= opens == 1 && str8_match(event->string, str8_lit("open_palette"), 0);
+      }
+    }
+    menu_good &= opens == 1 && commands == 1 && presses == 0;
+    fprintf(stderr, "menu events: open=%llu command=%llu press=%llu good=%d\n", opens, commands, presses, menu_good);
+    scratch_end(scratch);
+    items[0].shortcut_key = WM_Key_L;
+    items[0].shortcut_modifiers = WM_Modifier_Ctrl;
+    wm_set_main_menu(menus);
+    palette = [[[[NSApp mainMenu] itemAtIndex:1] submenu] itemAtIndex:0];
+    menu_good &= [[palette keyEquivalent] isEqualToString:@"l"] && [palette keyEquivalentModifierMask] == NSEventModifierFlagControl;
+    fprintf(stderr, "updated equivalent: %s/%lx good=%d\n", [[palette keyEquivalent] UTF8String],
+            (unsigned long)[palette keyEquivalentModifierMask], menu_good);
+    wm_set_preferred_native_menu_bar(0);
+    wm_set_main_menu(menus);
+    menu_good &= [[NSApp mainMenu] numberOfItems] == 1;
+    quit = [[[[NSApp mainMenu] itemAtIndex:0] submenu] itemAtIndex:0];
+    menu_good &= [[quit keyEquivalent] isEqualToString:@"q"];
+    fprintf(stderr, "minimal menu: count=%ld quit=%s good=%d\n", (long)[[NSApp mainMenu] numberOfItems],
+            [[quit keyEquivalent] UTF8String], menu_good);
+    fprintf(stderr, "%s: native menu bindings, mode and event queue\n", menu_good ? "PASS" : "FAIL");
+    failures += !menu_good;
     wm_window_close(window);
     exit(failures != 0);
   }

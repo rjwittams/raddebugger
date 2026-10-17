@@ -95,6 +95,7 @@ typedef enum WM_EventKind
   WM_EventKind_FileDrop,
   WM_EventKind_Wakeup,
   WM_EventKind_MenuCommand,
+  WM_EventKind_MenuOpen,
   WM_EventKind_COUNT
 }
 WM_EventKind;
@@ -113,6 +114,8 @@ struct WM_MenuItem
   WM_MenuItemKind kind;
   String8 label;
   String8 command_name;
+  WM_Key shortcut_key;
+  U32 shortcut_modifiers;
 };
 
 typedef struct WM_Menu WM_Menu;
@@ -136,6 +139,7 @@ enum
   WM_Modifier_Ctrl  = (1<<0),
   WM_Modifier_Shift = (1<<1),
   WM_Modifier_Alt   = (1<<2),
+  WM_Modifier_Cmd   = (1<<3),
 };
 
 typedef struct WM_Event WM_Event;

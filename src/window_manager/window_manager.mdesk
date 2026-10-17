@@ -150,6 +150,7 @@ WM_KeyTable:
   {LeftMouseButton      "Left Mouse Button"      "left_mouse"                          }
   {MiddleMouseButton    "Middle Mouse Button"    "middle_mouse"                        }
   {RightMouseButton     "Right Mouse Button"     "right_mouse"                         }
+  {Cmd                  "Cmd"                    "cmd"                                 }
 }
 
 ////////////////////////////////
