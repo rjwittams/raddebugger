@@ -1438,22 +1438,7 @@ ui_scroll_bar_styled(Axis2 axis, UI_Size off_axis_size, UI_ScrollBarStyle style,
   return new_pt;
 }
 
-// Active scroll-bar style; classic until selected by the caller.
-thread_static UI_ScrollBarStyle ui_active_scroll_bar_style_v = UI_ScrollBarStyle_Classic;
-
-internal void
-ui_set_active_scroll_bar_style(UI_ScrollBarStyle style)
-{
-  ui_active_scroll_bar_style_v = style;
-}
-
-internal UI_ScrollBarStyle
-ui_active_scroll_bar_style(void)
-{
-  return ui_active_scroll_bar_style_v;
-}
-
-
+// Keep the classic entry point for upstream call-site compatibility.
 internal UI_ScrollPt
 ui_scroll_bar(Axis2 axis, UI_Size off_axis_size, UI_ScrollPt pt, Rng1S64 idx_range, S64 view_num_indices)
 {
