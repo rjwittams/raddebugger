@@ -298,7 +298,7 @@ RD_VocabTable:
         'background_blur': bool,
       
       //- rjf: appearance settings
-      @default(0) @display_name('Overlay Scrollbars') @description("Draws scrollbars over list and table contents without reserving a gutter. Source, disassembly, and memory views currently retain classic scrollbars.")
+      @default(0) @display_name('Overlay Scrollbars') @description("Draws scrollbars over list, table, source, and disassembly contents without reserving a gutter. Memory views currently retain classic scrollbars.")
         'overlay_scrollbars': bool,
       @default(1) @display_name('Drop Shadows') @description("Controls whether or not drop shadows are drawn.")
         'drop_shadows': bool,
