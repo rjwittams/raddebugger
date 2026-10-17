@@ -60,7 +60,9 @@ struct D_CallStackFrame
   U64 unwind_count;
   U64 inline_depth;
   void *regs;
+  U8 *reg_valid;
   U64 cfa;
+  U64 lookup_vaddr;
 };
 
 typedef struct D_CallStack D_CallStack;
