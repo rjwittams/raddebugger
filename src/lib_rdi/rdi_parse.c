@@ -910,7 +910,7 @@ rdi_location_from_location_voff(RDI_Parsed *rdi, RDI_Location location, RDI_U64 
     RDI_LocationSetElement *set_opl = all_elems + set_opl_idx;
     for(RDI_LocationSetElement *e = set_first; e < set_opl; e += 1)
     {
-      if(e->voff_first <= voff && voff <= e->voff_opl)
+      if(e->voff_first <= voff && voff < e->voff_opl)
       {
         result = e->location;
         break;

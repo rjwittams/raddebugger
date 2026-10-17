@@ -276,6 +276,17 @@ rdim_loose_from_rdi(Arena *arena, RDIM_SubsetFlags subset_flags, RDI_Parsed *rdi
   return result;
 }
 
+internal U64
+rdim_location_set_element_count(RDIM_LocationCaseList *cases)
+{
+  U64 count = cases->count;
+  if(count == 1 && cases->first->voff_range.min == 0 && cases->first->voff_range.max == max_U64)
+  {
+    count = 0;
+  }
+  return count;
+}
+
 internal RDIM_BakeResults
 rdim_bake(Arena *arena, RDIM_BakeParams *params)
 {
@@ -3239,10 +3250,7 @@ rdim_bake(Arena *arena, RDIM_BakeParams *params)
           for EachInRange(n_idx, range)
           {
             RDIM_Symbol *s = &n->v[n_idx];
-            if(s->location_cases.count > 1)
-            {
-              lane_chunk_set_element_counts[slot_idx] += s->location_cases.count;
-            }
+            lane_chunk_set_element_counts[slot_idx] += rdim_location_set_element_count(&s->location_cases);
             for EachNode(case_n, RDIM_LocationCase, s->location_cases.first)
             {
               lane_chunk_constant_data_counts[slot_idx] += case_n->location.value_data.size;
@@ -3389,18 +3397,17 @@ rdim_bake(Arena *arena, RDIM_BakeParams *params)
             
             // rjf: fill location set info, if applicable - get set elements to fill
             RDI_LocationSetElement *dst_loc_set_elements = loc_set_elements + dst_set_element_idx; 
-            U64 dst_loc_set_elements_count = 0;
-            if(src->location_cases.count > 1)
+            U64 dst_loc_set_elements_count = rdim_location_set_element_count(&src->location_cases);
+            if(dst_loc_set_elements_count > 0)
             {
               dst->location |= (((U64)RDI_LocationKind_Set) << RDI_Location_KindShift);
               dst->location |= ((src->location_cases.count << RDI_Location_SetCountShift) & RDI_Location_SetCountMask);
               dst->location |= ((dst_set_element_idx << RDI_Location_SetFirstIndexShift) & RDI_Location_SetFirstIndexMask);
-              dst_loc_set_elements_count = src->location_cases.count;
               dst_set_element_idx += dst_loc_set_elements_count;
             }
             
             // rjf: fill virtual offset ranges of location set elements
-            if(src->location_cases.count > 1)
+            if(dst_loc_set_elements_count > 0)
             {
               U64 loc_set_element_idx = 0;
               for EachNode(c, RDIM_LocationCase, src->location_cases.first)
