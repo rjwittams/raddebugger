@@ -5,6 +5,11 @@
 #define DBG_ENGINE_USER_H
 
 ////////////////////////////////
+//~ Numerical Constants
+
+#define D_STEP_TRAP_NET_RETRY_LIMIT 100
+
+////////////////////////////////
 //~ rjf: Line Info Types
 
 typedef struct D_Line D_Line;
