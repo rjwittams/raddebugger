@@ -6,6 +6,22 @@
 
 #include "unwind/generated/unwind.meta.c"
 
+internal U64
+uwnd_lookup_vaddr_from_pc(Arch arch, U64 pc, B32 is_return_address)
+{
+  U64 bias = 0;
+  if(is_return_address)
+  {
+    switch(arch)
+    {
+      default:{}break;
+      case Arch_arm64: {bias = 4;}break;
+      case Arch_x86: case Arch_x64: {bias = 1;}break;
+    }
+  }
+  return pc >= bias ? pc-bias : pc;
+}
+
 internal B32
 uwnd_reg_range_is_valid(U8 *valid, Rng1U16 range)
 {
@@ -121,7 +137,7 @@ uwnd_step_moduleless(Arch arch, MemoryMap *memory_map, void *regs, U8 *reg_valid
 //~ rjf: Abstracted Unwind Step Functions
 
 internal UWND_StepResult
-uwnd_step(UWND_Unwinder unwinder, Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64 tls_vaddr, void *regs, U8 *reg_valid, U64 *cfa_out)
+uwnd_step(UWND_Unwinder unwinder, Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64 tls_vaddr, U64 lookup_pc, void *regs, U8 *reg_valid, U64 *cfa_out)
 {
   UWND_StepResult result = {UWND_StepStatus_Error};
   switch(unwinder)
@@ -137,7 +153,7 @@ uwnd_step(UWND_Unwinder unwinder, Arch arch, MemoryMap *memory_map, UWND_ModuleI
         uwnd_reg_mark_valid(arch, reg_valid, info->stack_pointer_reg_code, 0);
       }
     }break;
-#define X(name, namespace_lower) case UWND_Unwinder_##name:{result = namespace_lower##_uwnd_step(arch, memory_map, module_info, tls_vaddr, regs, reg_valid, cfa_out);}break;
+#define X(name, namespace_lower) case UWND_Unwinder_##name:{result = namespace_lower##_uwnd_step(arch, memory_map, module_info, tls_vaddr, lookup_pc, regs, reg_valid, cfa_out);}break;
     UWND_Unwinder_XList
 #undef X
   }

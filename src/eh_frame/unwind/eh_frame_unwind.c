@@ -2,7 +2,7 @@
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
 internal UWND_StepResult
-eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64 tls_vaddr, void *regs, U8 *reg_valid, U64 *cfa_out)
+eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64 tls_vaddr, U64 lookup_pc, void *regs, U8 *reg_valid, U64 *cfa_out)
 {
   Temp scratch = scratch_begin(0, 0);
   B32 done = 0;
@@ -20,7 +20,7 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
     U8 *caller_valid = push_array(scratch.arena, U8, arch_info->reg_block_size);
     U8 *abi_valid = push_array(scratch.arena, U8, arch_info->reg_block_size);
     uwnd_reg_valid_from_abi(arch, module_info->os, 0, abi_valid);
-    U64 pc = arch_ip_from_reg_block(arch_info, regs);
+    U64 pc = lookup_pc;
     
     //- rjf: find nearest FDE entry to the IP
     U64 fde_vaddr = unwind_info->override_fde_vaddr;
@@ -783,6 +783,7 @@ eh_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64
         cfa_out[0] = cfa;
       }
       result.status = UWND_StepStatus_Good;
+      result.is_interrupted = signal_frame;
       if(reg_valid) {MemoryCopy(reg_valid, caller_valid, arch_info->reg_block_size);}
     }
   }
