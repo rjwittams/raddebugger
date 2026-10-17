@@ -42,6 +42,97 @@ Test(dw2_line_table_v2_header)
   TestCheck(str8_match(header.files.v[1].file_name, str8_lit("main.odin"), 0));
 }
 
+Test(dw2_indexed_loclist)
+{
+  U8 data[] = {18,0,0,0, 5,0,8,0, 1,0,0,0, 4,0,0,0,
+               4,3,6,1,0x50,0};
+  DW_Raw raw = {0};
+  raw.sec[DW_SectionKind_LocLists].data = str8_array_fixed(data);
+  DW2_OffsetTableSet tables = dw2_offset_table_set_from_raw(arena, &raw);
+  TestCheck(tables.loclists_tables_count == 1);
+  DW2_OffsetTable *table = &tables.loclists_tables[0];
+  TestCheck(table->entries_count == 1);
+  TestCheck(table->entry_size == 4);
+  TestCheck(table->entries == data+12);
+  DW2_ParseCtx parse_ctx = {0};
+  parse_ctx.version = DW_Version_5;
+  parse_ctx.addr_size = 8;
+  parse_ctx.unit_base_addr = 0x1140;
+  parse_ctx.loclists_table = table;
+  // No range-list table: it is unrelated to a local's location list.
+  DW2_FormVal value = {0};
+  value.kind = DW_FormKind_LocListx;
+  DW2_LocList locations = dw2_loclist_from_form_val(arena, &parse_ctx, &raw, value);
+  TestCheck(locations.first != 0);
+  TestCheck(locations.first->v.range.min == 0x1143);
+  TestCheck(locations.first->v.range.max == 0x1146);
+  TestCheck(locations.first->v.expr.size == 1 && locations.first->v.expr.str[0] == 0x50);
+  value.u128.u64[0] = 1;
+  TestCheck(dw2_loclist_from_form_val(arena, &parse_ctx, &raw, value).count == 0);
+  parse_ctx.loclists_table = 0;
+  value.u128.u64[0] = 0;
+  TestCheck(dw2_loclist_from_form_val(arena, &parse_ctx, &raw, value).count == 0);
+}
+
+Test(dw2_offset_table_kinds)
+{
+  for(U64 wide = 0; wide < 2; wide += 1)
+  {
+    U64 entry_size = wide ? 8 : 4;
+    U64 length_size = wide ? 12 : 4;
+    U64 entries_off = length_size+8;
+    U64 list_off = entries_off+entry_size;
+    U64 size = list_off+4;
+    U8 data[64] = {0};
+    U64 unit_length = size-length_size;
+    if(wide)
+    {
+      U32 marker = max_U32;
+      MemoryCopy(data, &marker, 4);
+    }
+    MemoryCopy(data+(wide ? 4 : 0), &unit_length, entry_size);
+    data[length_size] = 5;
+    data[length_size+2] = 8;
+    data[length_size+4] = 1;
+    MemoryCopy(data+entries_off, &entry_size, entry_size);
+    data[list_off] = DW_RLE_OffsetPair;
+    data[list_off+1] = 3;
+    data[list_off+2] = 6;
+    DW_Raw raw = {0};
+    // Two contributions check that list offsets include the section position.
+    U8 section[128] = {0};
+    MemoryCopy(section, data, size);
+    MemoryCopy(section+size, data, size);
+    raw.sec[DW_SectionKind_RngLists].data = str8(section, size*2);
+    DW2_OffsetTableSet tables = dw2_offset_table_set_from_raw(arena, &raw);
+    TestCheck(tables.rnglists_tables_count == 2);
+    DW2_ParseCtx parse_ctx = {0};
+    parse_ctx.version = DW_Version_5;
+    parse_ctx.addr_size = 8;
+    parse_ctx.unit_base_addr = 0x1140;
+    parse_ctx.rnglists_table = &tables.rnglists_tables[1];
+    TestCheck(parse_ctx.rnglists_table->entry_size == entry_size);
+    TestCheck(parse_ctx.rnglists_table->entries_count == 1);
+    DW2_FormVal value = {0};
+    value.kind = DW_FormKind_RngListx;
+    Rng1U64List ranges = dw2_rnglist_from_form_val(arena, &parse_ctx, &raw, value);
+    TestCheck(ranges.first != 0);
+    TestCheck(ranges.first->v.min == 0x1143 && ranges.first->v.max == 0x1146);
+  }
+  U8 addr[] = {12,0,0,0, 5,0,8,0, 0x40,0x11,0,0,0,0,0,0};
+  U8 strings[] = {8,0,0,0, 5,0,0,0, 0x23,0,0,0};
+  DW2_OffsetTable table = {0};
+  dw2_read_offset_table(str8_array_fixed(addr), 0, DW_SectionKind_Addr, &table);
+  U64 offset = 0;
+  TestCheck(table.entry_size == 8 && table.entries_count == 1);
+  TestCheck(dw2_try_offset_from_table_idx(&table, 0, &offset) && offset == 0x1140);
+  MemoryZeroStruct(&table);
+  dw2_read_offset_table(str8_array_fixed(strings), 0, DW_SectionKind_StrOffsets, &table);
+  offset = 0;
+  TestCheck(table.entry_size == 4 && table.entries_count == 1);
+  TestCheck(dw2_try_offset_from_table_idx(&table, 0, &offset) && offset == 0x23);
+}
+
 #if 0 // TODO(rjf): this uses concepts from the old parser
 
 internal U64
