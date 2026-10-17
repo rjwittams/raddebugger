@@ -1671,6 +1671,7 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
       // OPCODE STREAM to unpack the actual list of locations!!!
       U64 rle_sentinel = (ctx->addr_size == 4 ? max_U32 : max_U64);
       U64 base_addr = ctx->unit_base_addr;
+      B32 good_base_addr = 1;
       for(U64 off = loclist_off; off < data.size;)
       {
         U64 start_off = off;
@@ -1681,13 +1682,17 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
         
         // rjf: obtain range from op
         B32 good_loc = 1;
+        B32 has_expr = 1;
         Rng1U64 range = {0};
         switch(lle_kind)
         {
-          default:{good_loc = 0;}break;
+          default:{return result;}break;
+          case DW_LLE_EndOfList:{return result;}break;
           case DW_LLE_BaseAddressx:
           {
+            has_expr = 0;
             good_loc = 0;
+            good_base_addr = 0;
             U64 addr_idx = 0;
             off += str8_deserial_read_uleb128(data, off, &addr_idx);
             if(ctx->addr_table != 0)
@@ -1695,7 +1700,7 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
               U64 new_base_addr = 0;
               if(dw2_try_offset_from_table_idx(ctx->addr_table, addr_idx, &new_base_addr))
               {
-                good_loc = 1;
+                good_base_addr = 1;
                 base_addr = new_base_addr;
               }
             }
@@ -1738,6 +1743,7 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
           }break;
           case DW_LLE_OffsetPair:
           {
+            good_loc = good_base_addr;
             U64 range_off_start = 0;
             U64 range_off_end = 0;
             off += str8_deserial_read_uleb128(data, off, &range_off_start);
@@ -1750,9 +1756,11 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
           }break;
           case DW_LLE_BaseAddress:
           {
+            has_expr = 0;
             U64 new_base_addr = 0;
             off += str8_deserial_read(data, off, &new_base_addr, ctx->addr_size, ctx->addr_size);
             base_addr = new_base_addr;
+            good_base_addr = 1;
           }break;
           case DW_LLE_StartEnd:
           {
@@ -1774,16 +1782,25 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
         
         // rjf: read expression
         String8 expr = {0};
-        if(good_loc && lle_kind != DW_LLE_BaseAddress && lle_kind != DW_LLE_BaseAddressx)
+        if(has_expr)
         {
           U64 expr_size = 0;
-          off += str8_deserial_read_uleb128(data, off, &expr_size);
+          // Limit decoding before a malformed length can shift beyond 64 bits.
+          String8 length_data = str8_prefix(str8_skip(data, off), 10);
+          U64 length_size = str8_deserial_read_uleb128(length_data, 0, &expr_size);
+          if(length_size == 0 || (length_data.str[length_size-1] & 0x80) ||
+             (length_size == 10 && length_data.str[9] > 1))
+          {
+            return result;
+          }
+          off += length_size;
+          if(expr_size > data.size-off) {return result;}
           expr = str8_substr(data, r1u64(off, off+expr_size));
           off += expr_size;
         }
         
         // rjf: add range
-        if(good_loc)
+        if(good_loc && has_expr)
         {
           DW2_LocNode *n = push_array(arena, DW2_LocNode, 1);
           n->v.range = range;
