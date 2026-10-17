@@ -233,7 +233,7 @@ dw2_read_abbrev(Arena *arena, String8 data, U64 off, DW2_AbbrevHeader *header_ou
       off += str8_deserial_read_uleb128(data, off, &attrib_form_kind);
       if(attrib_form_kind == DW_FormKind_ImplicitConst)
       {
-        off += str8_deserial_read_uleb128(data, off, &implicit_const);
+        off += str8_deserial_read_sleb128(data, off, (S64 *)&implicit_const);
       }
       if(attrib_kind != 0 && attribs_out != 0)
       {
@@ -837,7 +837,7 @@ dw2_read_tag(Arena *arena, DW_Raw *raw, DW2_ParseCtx *ctx, String8 data, U64 off
       abbrev_read_off += str8_deserial_read_uleb128(abbrev_data, abbrev_read_off, &attrib_form_kind);
       if(attrib_form_kind == DW_FormKind_ImplicitConst)
       {
-        abbrev_read_off += str8_deserial_read_uleb128(abbrev_data, abbrev_read_off, &implicit_const);
+        abbrev_read_off += str8_deserial_read_sleb128(abbrev_data, abbrev_read_off, (S64 *)&implicit_const);
       }
       
       // rjf: indirect form -> form kind is encoded in .debug_info (because why not)
