@@ -142,6 +142,58 @@ d_line_list_copy(Arena *arena, D_LineList *list)
   return dst;
 }
 
+internal D_LineKind
+d_line_kind_from_num(S64 line_num)
+{
+  D_LineKind result = D_LineKind_Source;
+  // MSVC exports line info at these line numbers when /JMC (Just My Code) debugging
+  // is enabled. This is enabled by default normally.
+  if(line_num <= 0)          {result = D_LineKind_Unattributed;}
+  else if(line_num == 0xfeefee) {result = D_LineKind_AlwaysStepInto;}
+  else if(line_num == 0xf00f00) {result = D_LineKind_NeverStepInto;}
+  return result;
+}
+
+internal B32
+d_line_has_source(D_Line *line)
+{
+  return line->file_path.size != 0 && line->voff_range.min < line->voff_range.max &&
+         d_line_kind_from_num(line->pt.line) == D_LineKind_Source;
+}
+
+internal B32
+d_line_list_has_source(D_LineList *lines)
+{
+  B32 result = 0;
+  for EachNode(n, D_LineNode, lines->first)
+  {
+    result |= d_line_has_source(&n->v);
+  }
+  return result;
+}
+
+// Expand only known line-table ranges, never a gap in debug information.
+// Keep the raw mappings unchanged for instruction stepping and inspection.
+internal Rng1U64
+d_source_step_voff_range(Arena *arena, DI_Key key, String8 dbgi_path, D_Line *line)
+{
+  Rng1U64 result = line->voff_range;
+  for(;;)
+  {
+    D_LineList next = d_lines_from_dbgi_key_path_voff(arena, key, dbgi_path, result.max);
+    D_Line *n = next.first ? &next.first->v : 0;
+    if(n == 0 || n->file_path.size == 0 || n->voff_range.min > result.max ||
+       n->voff_range.max <= result.max ||
+       (d_line_kind_from_num(n->pt.line) == D_LineKind_Source &&
+        (n->pt.line != line->pt.line || !str8_match(n->file_path, line->file_path, 0))))
+    {
+      break;
+    }
+    result.max = n->voff_range.max;
+  }
+  return result;
+}
+
 ////////////////////////////////
 //~ rjf: Command Type Functions
 
@@ -264,8 +316,11 @@ d_cmd_list_push_new(Arena *arena, D_CmdList *cmds, D_CmdKind kind, D_CmdParams *
 // thread's current source line. Every instruction in this range is decoded.
 // Traps are then built in the following way:
 //
-// - 'call' instruction -> place "single-step-after | begin-spoof-mode" trap at
-//     call instruction.
+// - 'call' instruction -> on architectures where calls push return addresses
+//     to the stack, place "single-step-after | begin-spoof-mode" trap at the
+//     call instruction. otherwise, place a trap at the instruction immediately
+//     after the call. if that instruction is outside the current source line,
+//     the trap ends stepping; otherwise, it single-steps after hit.
 // - 'jmp' (both unconditional & conditional) -> if can decode jump destination
 //     address, AND if jump leaves the line, place "end-stepping" trap at
 //     destination. if can't, "end-stepping | single-step-after" trap at jmp.
@@ -276,6 +331,65 @@ d_cmd_list_push_new(Arena *arena, D_CmdList *cmds, D_CmdKind kind, D_CmdParams *
 //     stream.
 // - for any instructions which may change the stack pointer, traps are placed
 //     at them with the "save-stack-pointer | single-step-after" behaviors.
+
+internal B32
+d_vaddr_is_in_any_rng1u64(Rng1U64List *ranges, U64 vaddr)
+{
+  B32 result = 0;
+  for EachNode(n, Rng1U64Node, ranges->first)
+  {
+    if(contains_1u64(n->v, vaddr))
+    {
+      result = 1;
+      break;
+    }
+  }
+  return result;
+}
+
+internal D_Trap
+d_trap_from_step_over_line_call(Arch arch, DASM_CtrlFlowPoint *point, Rng1U64List *all_vaddr_ranges_on_same_line)
+{
+  D_Trap trap = {0};
+  trap.vaddr = point->vaddr;
+  switch(arch_call_return_address_storage_kind(arch))
+  {
+    case ArchCallReturnAddressStorageKind_Stack:
+    {
+      trap.flags = D_TrapFlag_BeginSpoofMode|D_TrapFlag_SingleStepAfterHit;
+    }break;
+    case ArchCallReturnAddressStorageKind_LinkRegister:
+    {
+      trap.vaddr = point->vaddr_opl;
+      trap.flags = d_vaddr_is_in_any_rng1u64(all_vaddr_ranges_on_same_line, point->vaddr_opl) ? D_TrapFlag_SingleStepAfterHit : D_TrapFlag_EndStepping;
+    }break;
+    default:
+    {
+      trap.flags = D_TrapFlag_SingleStepAfterHit;
+    }break;
+  }
+  return trap;
+}
+
+internal B32
+d_step_out_static_trap_vaddr_from_exit_point(DASM_CtrlFlowPoint *point, U64 *vaddr_out)
+{
+  B32 result = 0;
+  if(!(point->inst_flags & DASM_InstFlag_Return) && point->jump_dest_vaddr != 0)
+  {
+    *vaddr_out = point->jump_dest_vaddr;
+    result = 1;
+  }
+  return result;
+}
+
+internal U64
+d_step_out_trap_vaddr_from_return_frame(Arch arch, void *regs)
+{
+  ARCH_Info *arch_info = arch_info_from_arch(arch);
+  U64 result = arch_ip_from_reg_block(arch_info, regs);
+  return result;
+}
 
 internal D_TrapNet
 d_trap_net_from_thread__step_over_inst(Arena *arena, D_Entity *thread)
@@ -347,7 +461,7 @@ d_trap_net_from_thread__step_over_line(Arena *arena, D_Entity *thread)
     Rng1U64 line_voff_rng = {0};
     if(lines.first != 0)
     {
-      line_voff_rng = lines.first->v.voff_range;
+      line_voff_rng = d_source_step_voff_range(scratch.arena, dbgi_key, dbgi_path, &lines.first->v);
       file_path = lines.first->v.file_path;
       line_num = lines.first->v.pt.line;
       line_vaddr_rng = d_vaddr_range_from_voff_range(module, line_voff_rng);
@@ -363,7 +477,7 @@ d_trap_net_from_thread__step_over_line(Arena *arena, D_Entity *thread)
     D_LineList lines = d_lines_from_dbgi_key_file_path_line_num(scratch.arena, dbgi_key, file_path, line_num, max_U64);
     for EachNode(n, D_LineNode, lines.first)
     {
-      Rng1U64 voff_range = n->v.voff_range;
+      Rng1U64 voff_range = d_source_step_voff_range(scratch.arena, dbgi_key, dbgi_path, &n->v);
       Rng1U64 vaddr_range = d_vaddr_range_from_voff_range(module, voff_range);
       rng1u64_list_push(scratch.arena, &all_vaddr_ranges_on_same_line, vaddr_range);
     }
@@ -383,19 +497,6 @@ d_trap_net_from_thread__step_over_line(Arena *arena, D_Entity *thread)
         line_vaddr_rng.max = n->v.max;
         changed = 1;
       }
-    }
-  }
-  
-  // rjf: opl line_vaddr_rng -> 0xf00f00 or 0xfeefee? => include in line vaddr range
-  //
-  // MSVC exports line info at these line numbers when /JMC (Just My Code) debugging
-  // is enabled. This is enabled by default normally.
-  {
-    U64 opl_line_voff_rng = d_voff_from_vaddr(module, line_vaddr_rng.max);
-    D_LineList lines = d_lines_from_dbgi_key_path_voff(scratch.arena, dbgi_key, dbgi_path, opl_line_voff_rng);
-    if(lines.first != 0 && (lines.first->v.pt.line == 0xf00f00 || lines.first->v.pt.line == 0xfeefee))
-    {
-      line_vaddr_rng.max = d_vaddr_from_voff(module, lines.first->v.voff_range.max);
     }
   }
   
@@ -446,7 +547,7 @@ d_trap_net_from_thread__step_over_line(Arena *arena, D_Entity *thread)
     {
       LogInfoNamedBlockF("exit_points") for(DASM_CtrlFlowPointNode *n = ctrl_flow_info.exit_points.first; n != 0; n = n->next)
       {
-        log_infof("{vaddr:0x%I64x, jump_dest_vaddr:0x%I64x, inst_flags:%x}\n", n->v.vaddr, n->v.jump_dest_vaddr, n->v.inst_flags);
+        log_infof("{vaddr:0x%I64x, vaddr_opl:0x%I64x, jump_dest_vaddr:0x%I64x, inst_flags:%x}\n", n->v.vaddr, n->v.vaddr_opl, n->v.jump_dest_vaddr, n->v.inst_flags);
       }
     }
   }
@@ -491,19 +592,13 @@ d_trap_net_from_thread__step_over_line(Arena *arena, D_Entity *thread)
       
     }
     
-    // rjf: call => save stack pointer before, single-step to go into call; trap on return
+    // call => place spoof at return spot in stack when the architecture exposes one; otherwise trap at the call fallthrough.
     else if(point->inst_flags & DASM_InstFlag_Call)
     {
-      flags |= (D_TrapFlag_SaveStackPointerBefore|D_TrapFlag_SingleStepAfterHit);
+      D_Trap trap = d_trap_from_step_over_line_call(arch, point, &all_vaddr_ranges_on_same_line);
+      flags = trap.flags;
+      trap_addr = trap.vaddr;
     }
-    
-#if 0 // TODO(rjf): @spoof_stepping
-    // rjf: call => place spoof at return spot in stack, single-step after hitting
-    else if(point->inst_flags & DASM_InstFlag_Call)
-    {
-      flags |= (D_TrapFlag_BeginSpoofMode|D_TrapFlag_SingleStepAfterHit);
-    }
-#endif
     
     // rjf: instruction changes stack pointer => single-step over, save off the stack pointer, keep stepping
     else if(point->inst_flags & DASM_InstFlag_ChangesStackPointer)
@@ -585,7 +680,7 @@ d_trap_net_from_thread__step_into_line(Arena *arena, D_Entity *thread)
     Rng1U64 line_voff_rng = {0};
     if(lines.first != 0)
     {
-      line_voff_rng = lines.first->v.voff_range;
+      line_voff_rng = d_source_step_voff_range(scratch.arena, dbgi_key, dbgi_path, &lines.first->v);
       file_path = lines.first->v.file_path;
       line_num = lines.first->v.pt.line;
       line_vaddr_rng = d_vaddr_range_from_voff_range(module, line_voff_rng);
@@ -601,22 +696,9 @@ d_trap_net_from_thread__step_into_line(Arena *arena, D_Entity *thread)
     D_LineList lines = d_lines_from_dbgi_key_file_path_line_num(scratch.arena, dbgi_key, file_path, line_num, max_U64);
     for EachNode(n, D_LineNode, lines.first)
     {
-      Rng1U64 voff_range = n->v.voff_range;
+      Rng1U64 voff_range = d_source_step_voff_range(scratch.arena, dbgi_key, dbgi_path, &n->v);
       Rng1U64 vaddr_range = d_vaddr_range_from_voff_range(module, voff_range);
       rng1u64_list_push(scratch.arena, &all_vaddr_ranges_on_same_line, vaddr_range);
-    }
-  }
-  
-  // rjf: opl line_vaddr_rng -> 0xf00f00 or 0xfeefee? => include in line vaddr range
-  //
-  // MSVC exports line info at these line numbers when /JMC (Just My Code) debugging
-  // is enabled. This is enabled by default normally.
-  {
-    U64 opl_line_voff_rng = d_voff_from_vaddr(module, line_vaddr_rng.max);
-    D_LineList lines = d_lines_from_dbgi_key_path_voff(scratch.arena, dbgi_key, dbgi_path, opl_line_voff_rng);
-    if(lines.first != 0 && (lines.first->v.pt.line == 0xf00f00 || lines.first->v.pt.line == 0xfeefee))
-    {
-      line_vaddr_rng.max = d_vaddr_from_voff(module, lines.first->v.voff_range.max);
     }
   }
   
@@ -680,7 +762,7 @@ d_trap_net_from_thread__step_into_line(Arena *arena, D_Entity *thread)
       String8 jump_dest_dbgi_path = jump_dest_dbg_path->string;
       DI_Key jump_dest_dbgi_key = d_dbgi_key_from_debug_info_path(jump_dest_dbg_path);
       D_LineList lines = d_lines_from_dbgi_key_path_voff(scratch.arena, jump_dest_dbgi_key, jump_dest_dbgi_path, jump_dest_voff);
-      if(lines.count == 0)
+      if(!d_line_list_has_source(&lines))
       {
         add = 0;
       }
@@ -817,20 +899,23 @@ d_trap_net_from_thread__step_out_scope(Arena *arena, D_Entity *thread)
         // rjf: add traps at all jump destinations which do *not* fall into any of the scope's ranges
         for EachNode(exit_pt_n, DASM_CtrlFlowPointNode, ctrl_flow_info.exit_points.first)
         {
-          U64 jump_dest_vaddr = exit_pt_n->v.jump_dest_vaddr;
-          B32 jump_dest_vaddr_is_out_of_scope = 1;
-          for EachNode(scope_n, Rng1U64Node, scope_voff_rngs.first)
+          U64 jump_dest_vaddr = 0;
+          if(d_step_out_static_trap_vaddr_from_exit_point(&exit_pt_n->v, &jump_dest_vaddr))
           {
-            if(contains_1u64(scope_n->v, d_voff_from_vaddr(module, jump_dest_vaddr)))
+            B32 jump_dest_vaddr_is_out_of_scope = 1;
+            for EachNode(scope_n, Rng1U64Node, scope_voff_rngs.first)
             {
-              jump_dest_vaddr_is_out_of_scope = 0;
-              break;
+              if(contains_1u64(scope_n->v, d_voff_from_vaddr(module, jump_dest_vaddr)))
+              {
+                jump_dest_vaddr_is_out_of_scope = 0;
+                break;
+              }
             }
-          }
-          if(jump_dest_vaddr_is_out_of_scope)
-          {
-            D_Trap trap = {D_TrapFlag_EndStepping|D_TrapFlag_IgnoreStackPointerCheck, jump_dest_vaddr};
-            d_trap_list_push(arena, &result.traps, &trap);
+            if(jump_dest_vaddr_is_out_of_scope)
+            {
+              D_Trap trap = {D_TrapFlag_EndStepping|D_TrapFlag_IgnoreStackPointerCheck, jump_dest_vaddr};
+              d_trap_list_push(arena, &result.traps, &trap);
+            }
           }
         }
         
@@ -863,8 +948,7 @@ d_trap_net_from_thread__step_out_scope(Arena *arena, D_Entity *thread)
     // rjf: use first unwind frame to generate trap
     if(result.good_read && callstack.concrete_frames_count > 1)
     {
-      ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
-      U64 vaddr = arch_ip_from_reg_block(arch_info, callstack.concrete_frames[1]->regs);
+      U64 vaddr = d_step_out_trap_vaddr_from_return_frame(thread->arch, callstack.concrete_frames[1]->regs);
       D_Trap trap = {D_TrapFlag_EndStepping|D_TrapFlag_IgnoreStackPointerCheck, vaddr};
       d_trap_list_push(arena, &result.traps, &trap);
     }
@@ -1009,9 +1093,9 @@ d_lines_from_dbgi_key_path_voff(Arena *arena, DI_Key dbgi_key, String8 dbgi_path
     LineTableNode *top_line_table = 0;
     RDI_Scope *scope = rdi_scope_from_voff(rdi, voff);
     {
-      for(RDI_Scope *s = scope;
+      for(RDI_Scope *s = rdi_inline_scope_from_scope(rdi, scope);
           s->inline_site_idx != 0;
-          s = rdi_element_from_name_idx(rdi, Scopes, s->parent_scope_idx))
+          s = rdi_inline_scope_from_scope(rdi, rdi_parent_from_scope(rdi, s)))
       {
         RDI_InlineSite *inline_site = rdi_element_from_name_idx(rdi, InlineSites, s->inline_site_idx);
         if(inline_site->line_table_idx != 0)
@@ -1114,30 +1198,17 @@ d_lines_array_from_dbgi_key_file_path_line_range(Arena *arena, DI_Key dbgi_key, 
       override_n = override_n->next)
   {
     String8 file_path = override_n->string;
-    String8 file_path_normalized = rdim_normalized_from_path(scratch.arena, file_path);
     
     // rjf: binary -> rdi
     RDI_Parsed *rdi = di_rdi_from_key(access, dbgi_key, 0, 0);
     
-    // rjf: file_path_normalized * rdi -> src_id
+    // rjf: file_path * rdi -> src_id
     B32 good_src_id = 0;
     U32 src_id = 0;
     if(rdi != &rdi_parsed_nil) ProfScope("file_path_normalized * rdi -> src_id")
     {
-      RDI_NameMap *mapptr = rdi_element_from_name_idx(rdi, NameMaps, RDI_NameMapKind_NormalSourcePaths);
-      RDI_ParsedNameMap map = {0};
-      rdi_parsed_from_name_map(rdi, mapptr, &map);
-      RDI_NameMapNode *node = rdi_name_map_lookup(rdi, &map, file_path_normalized.str, file_path_normalized.size);
-      if(node != 0)
-      {
-        U32 id_count = 0;
-        U32 *ids = rdi_matches_from_map_node(rdi, node, &id_count);
-        if(id_count > 0)
-        {
-          good_src_id = 1;
-          src_id = ids[0];
-        }
-      }
+      src_id = rdi_source_file_idx_from_path(rdi, file_path);
+      good_src_id = src_id != 0;
     }
     
     // rjf: good src-id -> look up line info for visible range
@@ -1209,7 +1280,6 @@ d_lines_array_from_file_path_line_range(Arena *arena, String8 file_path, Rng1S64
       override_n = override_n->next)
   {
     String8 file_path = override_n->string;
-    String8 file_path_normalized = rdim_normalized_from_path(scratch.arena, file_path);
     for EachIndex(idx, dbgi_keys.count)
     {
       Access *access = access_open();
@@ -1218,25 +1288,13 @@ d_lines_array_from_file_path_line_range(Arena *arena, String8 file_path, Rng1S64
       DI_Key key = dbgi_keys.v[idx];
       RDI_Parsed *rdi = di_rdi_from_key(access, key, 1, 0);
       
-      // rjf: file_path_normalized * rdi -> src_id
+      // rjf: file_path * rdi -> src_id
       B32 good_src_id = 0;
       U32 src_id = 0;
       if(rdi != &rdi_parsed_nil) ProfScope("file_path_normalized * rdi -> src_id")
       {
-        RDI_NameMap *mapptr = rdi_element_from_name_idx(rdi, NameMaps, RDI_NameMapKind_NormalSourcePaths);
-        RDI_ParsedNameMap map = {0};
-        rdi_parsed_from_name_map(rdi, mapptr, &map);
-        RDI_NameMapNode *node = rdi_name_map_lookup(rdi, &map, file_path_normalized.str, file_path_normalized.size);
-        if(node != 0)
-        {
-          U32 id_count = 0;
-          U32 *ids = rdi_matches_from_map_node(rdi, node, &id_count);
-          if(id_count > 0)
-          {
-            good_src_id = 1;
-            src_id = ids[0];
-          }
-        }
+        src_id = rdi_source_file_idx_from_path(rdi, file_path);
+        good_src_id = src_id != 0;
       }
       
       // rjf: good src-id -> look up line info for visible range
@@ -1408,8 +1466,7 @@ d_query_cached_rip_from_thread_unwind(D_Entity *thread, U64 unwind_count)
     D_CallStack callstack = d_call_stack_from_thread(access, thread->handle, 1, 0);
     if(callstack.concrete_frames_count != 0)
     {
-      ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
-      result = arch_ip_from_reg_block(arch_info, callstack.concrete_frames[unwind_count%callstack.concrete_frames_count]->regs);
+      result = callstack.concrete_frames[unwind_count%callstack.concrete_frames_count]->lookup_vaddr;
     }
     access_close(access);
   }
@@ -1463,13 +1520,14 @@ d_query_cached_locals_map_from_dbgi_key_voff(DI_Key dbgi_key, U64 voff)
     {
       Access *access = access_open();
       RDI_Parsed *rdi = di_rdi_from_key(access, dbgi_key, 1, 0);
-      E_String2NumMap *map = e_push_locals_map_from_rdi_voff(cache->arena, rdi, voff);
-      if(map->slots_count != 0)
+      // An allocated map can be empty because debug info is still loading.
+      // Only cache maps built from loaded RDI, including genuinely empty scopes.
+      if(rdi->raw_data_size != 0)
       {
         node = push_array(cache->arena, D_RunLocalsCacheNode, 1);
         node->dbgi_key = dbgi_key;
         node->voff = voff;
-        node->locals_map = map;
+        node->locals_map = e_push_locals_map_from_rdi_voff(cache->arena, rdi, voff);
         SLLQueuePush_N(slot->first, slot->last, node, hash_next);
       }
       access_close(access);
@@ -1517,13 +1575,13 @@ d_query_cached_member_map_from_dbgi_key_voff(DI_Key dbgi_key, U64 voff)
     {
       Access *access = access_open();
       RDI_Parsed *rdi = di_rdi_from_key(access, dbgi_key, 1, 0);
-      E_String2NumMap *map = e_push_member_map_from_rdi_voff(cache->arena, rdi, voff);
-      if(map->slots_count != 0)
+      // Do not retain a missing member map while debug info is still loading.
+      if(rdi->raw_data_size != 0)
       {
         node = push_array(cache->arena, D_RunLocalsCacheNode, 1);
         node->dbgi_key = dbgi_key;
         node->voff = voff;
-        node->locals_map = map;
+        node->locals_map = e_push_member_map_from_rdi_voff(cache->arena, rdi, voff);
         SLLQueuePush_N(slot->first, slot->last, node, hash_next);
       }
       access_close(access);
@@ -1579,6 +1637,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
   //- rjf: sync with ctrl thread
   //
   D_EventList events = {0};
+  D_Event *source_step_stop = 0;
   ProfScope("sync with ctrl thread")
   {
     //- rjf: grab next reggen/memgen
@@ -1613,6 +1672,37 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         
         case D_EventKind_Stopped:
         {
+          // A source step may leave its trap net via an indirect branch or
+          // return. Continue through an explicitly unattributed range, but
+          // never consume a user breakpoint, target trap, exception, or halt.
+          if(event->cause == D_EventCause_Finished &&
+             d_user_state->ctrl_source_step_kind != D_CmdKind_Null &&
+             d_handle_match(event->entity, d_user_state->ctrl_last_run_thread_handle) &&
+             d_user_state->cmds.count == 0)
+          {
+            D_Entity *thread = d_entity_from_handle(event->entity);
+            D_Entity *process = d_entity_ancestor_from_kind(thread, D_EntityKind_Process);
+            D_Entity *module = d_module_from_process_vaddr(process, event->rip_vaddr);
+            D_Entity *dbg_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
+            D_LineList lines = d_lines_from_dbgi_key_path_voff(scratch.arena, d_dbgi_key_from_debug_info_path(dbg_path),
+                                                             dbg_path->string, d_voff_from_vaddr(module, event->rip_vaddr));
+            D_Line *line = lines.first ? &lines.first->v : 0;
+            if(line != 0 && line->file_path.size != 0 &&
+               line->voff_range.min <= d_voff_from_vaddr(module, event->rip_vaddr) &&
+               d_voff_from_vaddr(module, event->rip_vaddr) < line->voff_range.max &&
+               (d_line_kind_from_num(line->pt.line) != D_LineKind_Source ||
+                (d_user_state->ctrl_source_step_continuing && d_line_has_source(line) &&
+                 line->pt.line == d_user_state->ctrl_source_step_origin.pt.line &&
+                 str8_match(line->file_path, d_user_state->ctrl_source_step_origin.file_path, 0) &&
+                 d_sp_from_thread(event->entity) == d_user_state->ctrl_source_step_sp)))
+            {
+              source_step_stop = event;
+              // If constructing the continuation fails, report this stop.
+              // Do not defer a retry after exposing it to the user.
+              d_cmd(d_user_state->ctrl_source_step_kind, .thread = event->entity, .retry_idx = D_STEP_TRAP_NET_RETRY_LIMIT);
+            }
+          }
+          d_user_state->ctrl_source_step_kind = D_CmdKind_Null;
           d_user_state->stop_count += 1;
           d_user_state->ctrl_is_running = 0;
           d_user_state->ctrl_thread_run_state = 0;
@@ -1674,6 +1764,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
       d_user_state->member_cache_reggen_idx = new_reg_gen;
     }
   }
+  B32 ctrl_was_running = d_ctrl_targets_running();
   
   //////////////////////////////
   //- rjf: hash ctrl parameterization state
@@ -1732,6 +1823,27 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
     {
       // rjf: unpack command
       D_CmdParams *params = &cmd->params;
+      D_CmdParams params_copy = {0};
+      D_CmdKind cmd_kind = cmd->kind;
+      switch(cmd_kind)
+      {
+        default:{}break;
+        case D_CmdKind_FreezeThread:
+        case D_CmdKind_ThawThread:
+        case D_CmdKind_FreezeProcess:
+        case D_CmdKind_ThawProcess:
+        case D_CmdKind_FreezeMachine:
+        case D_CmdKind_ThawMachine:
+        {
+          params_copy = *params;
+          cmd_kind = ((cmd_kind == D_CmdKind_FreezeThread ||
+                       cmd_kind == D_CmdKind_FreezeProcess ||
+                       cmd_kind == D_CmdKind_FreezeMachine)
+                      ? D_CmdKind_FreezeEntity
+                      : D_CmdKind_ThawEntity);
+          params = &params_copy;
+        }break;
+      }
       
       // rjf: prep ctrl running arguments
       B32 need_run = 0;
@@ -1741,7 +1853,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
       D_TrapList run_traps = {0};
       
       // rjf: process command
-      switch(cmd->kind)
+      switch(cmd_kind)
       {
         default:{}break;
         
@@ -1829,7 +1941,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
             need_run = 1;
             run_kind = D_RunKind_Run;
             run_thread = &d_entity_nil;
-            run_flags = (cmd->kind == D_CmdKind_LaunchAndStepInto) ? D_RunFlag_StopOnEntryPoint : 0;
+            run_flags = (cmd_kind == D_CmdKind_LaunchAndStepInto) ? D_RunFlag_StopOnEntryPoint : 0;
           }
           
           // rjf: no targets -> error
@@ -1908,6 +2020,22 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
               need_run = 1;
               run_kind = D_RunKind_Run;
               run_thread = d_entity_from_handle(params->thread);
+              if(run_thread == &d_entity_nil)
+              {
+                run_thread = d_entity_from_handle(d_user_state->ctrl_last_stop_event.entity);
+              }
+              if(run_thread == &d_entity_nil)
+              {
+                for EachIndex(idx, threads.count)
+                {
+                  D_Entity *thread = threads.v[idx];
+                  if(!thread->is_frozen)
+                  {
+                    run_thread = thread;
+                    break;
+                  }
+                }
+              }
             }
             else
             {
@@ -1923,6 +2051,23 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         case D_CmdKind_StepToExit:
         {
           D_Entity *thread = d_entity_from_handle(params->thread);
+          if(thread == &d_entity_nil)
+          {
+            thread = d_entity_from_handle(d_user_state->ctrl_last_stop_event.entity);
+          }
+          if(thread == &d_entity_nil)
+          {
+            D_EntityArray threads = d_entity_array_from_kind(D_EntityKind_Thread);
+            for EachIndex(idx, threads.count)
+            {
+              D_Entity *candidate = threads.v[idx];
+              if(!candidate->is_frozen)
+              {
+                thread = candidate;
+                break;
+              }
+            }
+          }
           if(thread == &d_entity_nil)
           {
             log_user_error(s("Must have a selected thread to step."));
@@ -1945,7 +2090,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
           else
           {
             D_TrapNet trap_net = {0};
-            switch(cmd->kind)
+            switch(cmd_kind)
             {
               default: break;
               case D_CmdKind_StepIntoInst: {trap_net.good_read = 1;}break;
@@ -1972,11 +2117,11 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
               run_flags  = 0;
               run_traps  = trap_net.traps;
             }
-            else if(!good_trap_net && params->retry_idx < 100)
+            else if(!good_trap_net && params->retry_idx < D_STEP_TRAP_NET_RETRY_LIMIT)
             {
               D_CmdParams params_copy = *params;
               params_copy.retry_idx += 1;
-              d_cmd_list_push_new(scratch.arena, &deferred_cmds, cmd->kind, &params_copy);
+              d_cmd_list_push_new(scratch.arena, &deferred_cmds, cmd_kind, &params_copy);
             }
             else if(!good_trap_net)
             {
@@ -2066,13 +2211,13 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
           D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
           if(processes.count != 0)
           {
-            D_CmdKind step_cmd_kind = (cmd->kind == D_CmdKind_StepInto
+            D_CmdKind step_cmd_kind = (cmd_kind == D_CmdKind_StepInto
                                        ? D_CmdKind_StepIntoLine
                                        : D_CmdKind_StepOverLine);
             B32 prefer_disasm = params->prefer_disasm;
             if(prefer_disasm)
             {
-              step_cmd_kind = (cmd->kind == D_CmdKind_StepInto
+              step_cmd_kind = (cmd_kind == D_CmdKind_StepInto
                                ? D_CmdKind_StepIntoInst
                                : D_CmdKind_StepOverInst);
             }
@@ -2085,20 +2230,6 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         }break;
         
         //- rjf: debug control context management operations
-        case D_CmdKind_FreezeThread:
-        case D_CmdKind_ThawThread:
-        case D_CmdKind_FreezeProcess:
-        case D_CmdKind_ThawProcess:
-        case D_CmdKind_FreezeMachine:
-        case D_CmdKind_ThawMachine:
-        {
-          D_CmdKind disptch_kind = ((cmd->kind == D_CmdKind_FreezeThread ||
-                                     cmd->kind == D_CmdKind_FreezeProcess ||
-                                     cmd->kind == D_CmdKind_FreezeMachine)
-                                    ? D_CmdKind_FreezeEntity
-                                    : D_CmdKind_ThawEntity);
-          d_push_cmd(disptch_kind, params);
-        }break;
         case D_CmdKind_FreezeLocalMachine:
         {
           D_MachineID machine_id = D_MachineID_Local;
@@ -2112,7 +2243,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         case D_CmdKind_FreezeEntity:
         case D_CmdKind_ThawEntity:
         {
-          B32 should_freeze = (cmd->kind == D_CmdKind_FreezeEntity);
+          B32 should_freeze = (cmd_kind == D_CmdKind_FreezeEntity);
           D_Entity *root = d_entity_from_handle(params->entity);
           for(D_Entity *e = root; e != &d_entity_nil; e = d_entity_rec_depth_first_pre(e, root).next)
           {
@@ -2248,8 +2379,29 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         D_TrapList run_traps_copy = d_trap_list_copy(scratch.arena, &run_traps);
         D_BreakpointArray run_extra_bps_copy = d_breakpoint_array_copy(scratch.arena, &run_extra_bps);
         
+        // Keep the original source location across automatic continuations.
+        D_Line source_step_origin = d_user_state->ctrl_source_step_origin;
+        if(cmd_kind == D_CmdKind_StepIntoLine || cmd_kind == D_CmdKind_StepOverLine)
+        {
+          if(source_step_stop == 0)
+          {
+            U64 ip = d_cached_ip_from_thread(run_thread->handle);
+            D_Entity *process = d_entity_ancestor_from_kind(run_thread, D_EntityKind_Process);
+            D_Entity *module = d_module_from_process_vaddr(process, ip);
+            D_Entity *dbg_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
+            D_LineList lines = d_lines_from_dbgi_key_path_voff(scratch.arena, d_dbgi_key_from_debug_info_path(dbg_path),
+                                                             dbg_path->string, d_voff_from_vaddr(module, ip));
+            MemoryZeroStruct(&source_step_origin);
+            if(lines.first != 0) {source_step_origin = lines.first->v;}
+            d_user_state->ctrl_source_step_sp = d_sp_from_thread(run_thread->handle);
+          }
+        }
+        source_step_origin.file_path = str8_copy(scratch.arena, source_step_origin.file_path);
+
         // rjf: store last run info
         arena_clear(d_user_state->ctrl_last_run_arena);
+        d_user_state->ctrl_source_step_origin = source_step_origin;
+        d_user_state->ctrl_source_step_origin.file_path = str8_copy(d_user_state->ctrl_last_run_arena, source_step_origin.file_path);
         d_user_state->ctrl_last_run_kind              = run_kind;
         d_user_state->ctrl_last_run_frame_idx         = d_frame_index();
         d_user_state->ctrl_last_run_thread_handle     = run_thread->handle;
@@ -2257,6 +2409,19 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         d_user_state->ctrl_last_run_traps             = d_trap_list_copy(d_user_state->ctrl_last_run_arena, &run_traps_copy);
         d_user_state->ctrl_last_run_extra_bps         = d_breakpoint_array_copy(d_user_state->ctrl_last_run_arena, &run_extra_bps_copy);
         d_user_state->ctrl_is_running                 = 1;
+        if(cmd_kind != D_CmdKind_SoftHaltRefresh)
+        {
+          d_user_state->ctrl_source_step_continuing = (source_step_stop != 0);
+          d_user_state->ctrl_source_step_kind =
+            (cmd_kind == D_CmdKind_StepIntoLine || cmd_kind == D_CmdKind_StepOverLine) ? cmd_kind : D_CmdKind_Null;
+        }
+        if(source_step_stop != 0 && d_user_state->ctrl_source_step_kind != D_CmdKind_Null &&
+           d_handle_match(source_step_stop->entity, run_thread->handle))
+        {
+          source_step_stop->kind = D_EventKind_Null;
+          d_user_state->stop_count -= 1;
+          source_step_stop = 0;
+        }
       }
     }
   }
@@ -2287,12 +2452,15 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
     d_msg_list_concat_in_place(&d_user_state->ctrl_msgs, &msgs_copy);
     if(d_user_state->ctrl_msgs.count != 0)
     {
-      if(!d_user_state->ctrl_soft_halt_issued && d_user_state->ctrl_thread_run_state)
+      if(d_user_state->ctrl_thread_run_state || ctrl_was_running)
       {
-        d_user_state->ctrl_soft_halt_issued = 1;
-        d_halt();
+        if(!d_user_state->ctrl_soft_halt_issued)
+        {
+          d_user_state->ctrl_soft_halt_issued = 1;
+          d_halt();
+        }
       }
-      if(d_u2c_push_msgs(&d_user_state->ctrl_msgs, now_time_us()+100))
+      else if(d_u2c_push_msgs(&d_user_state->ctrl_msgs, now_time_us()+100))
       {
         MemoryZeroStruct(&d_user_state->ctrl_msgs);
         arena_clear(d_user_state->ctrl_msg_arena);

@@ -77,6 +77,7 @@ struct D2R_ConvertParams
 {
   String8 exe_name;
   String8 exe_data;
+  Guid guid;
   Arch arch;
   U64 base_vaddr;
   RDIM_BinarySectionList binary_sections;

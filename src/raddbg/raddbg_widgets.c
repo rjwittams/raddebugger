@@ -559,7 +559,6 @@ rd_title_fstrs_from_ctrl_entity(Arena *arena, D_Entity *entity, B32 include_extr
     Access *access = access_open();
     D_Entity *process = d_entity_ancestor_from_kind(entity, D_EntityKind_Process);
     Arch arch = entity->arch;
-    ARCH_Info *arch_info = arch_info_from_arch(entity->arch);
     B32 call_stack_high_priority = d_handle_match(entity->handle, rd_base_regs()->thread);
     D_CallStack call_stack = d_call_stack_from_thread(access, entity->handle, call_stack_high_priority, call_stack_high_priority ? rd_state->frame_eval_memread_endt_us : 0);
     B32 did_first_in_main_module = 0;
@@ -573,7 +572,7 @@ rd_title_fstrs_from_ctrl_entity(Arena *arena, D_Entity *entity, B32 include_extr
       D_CallStackFrame *f = &call_stack.frames[call_stack.frames_count - 1 - idx];
       if(f->inline_depth == 0)
       {
-        U64 rip_vaddr = arch_ip_from_reg_block(arch_info, f->regs);
+        U64 rip_vaddr = f->lookup_vaddr;
         D_Entity *module = d_module_from_process_vaddr(process, rip_vaddr);
         if(did_first_in_main_module || module == first_module)
         {

@@ -42,6 +42,71 @@ di_key_array_from_list(Arena *arena, DI_KeyList *list)
   return array;
 }
 
+internal String8
+di_rdi_path_from_original_path(Arena *arena, String8 path)
+{
+  String8 result = {0};
+  String8 dsym_marker = str8_lit(".dSYM/");
+  U64 dsym_opl = path.size >= dsym_marker.size
+    ? str8_find_needle_reverse(path, 0, dsym_marker, StringMatchFlag_CaseInsensitive|StringMatchFlag_SlashInsensitive)
+    : 0;
+  if(dsym_opl != 0)
+  {
+    result = str8f(arena, "%S.rdi", str8_prefix(path, dsym_opl-dsym_marker.size));
+  }
+  else
+  {
+    result = str8f(arena, "%S.rdi", path);
+  }
+  return result;
+}
+
+internal String8
+di_rdi_path_from_identity(Arena *arena, String8 original_path, String8 cache_folder, Arch arch, Guid guid)
+{
+  String8 result = di_rdi_path_from_original_path(arena, original_path);
+  if(cache_folder.size != 0)
+  {
+    U128 path_hash = u128_hash_from_seed_str8(0, original_path);
+    result = str8f(arena, "%S/%S.%016I64x%016I64x.rdi", cache_folder,
+                   str8_skip_last_slash(original_path), path_hash.u64[0], path_hash.u64[1]);
+  }
+  if(arch != Arch_Null)
+  {
+    result = str8f(arena, "%S.%S.%S.rdi", str8_chop_last_dot(result),
+                   string_from_arch(arch), string_from_guid(arena, guid));
+  }
+  return result;
+}
+
+internal B32
+di_rdi_file_matches_identity(File file, Arch arch, Guid guid)
+{
+  RDI_Header header = {0};
+  B32 result = (file_read_struct(file, 0, &header) == sizeof(header) &&
+                header.magic == RDI_MAGIC_CONSTANT && header.encoding_version == RDI_ENCODING_VERSION);
+  if(result && arch != Arch_Null)
+  {
+    Guid zero = {0};
+    RDI_Section section = {0};
+    RDI_TopLevelInfo info = {0};
+    U64 size = properties_from_file(file).size;
+    U64 section_off = (U64)header.data_section_off + RDI_SectionKind_TopLevelInfo*sizeof(RDI_Section);
+    result = (!MemoryMatchStruct(&guid, &zero) &&
+              header.data_section_count > RDI_SectionKind_TopLevelInfo &&
+              header.data_section_off >= sizeof(header) &&
+              section_off <= size && sizeof(section) <= size-section_off &&
+              file_read_struct(file, section_off, &section) == sizeof(section) &&
+              section.encoding == RDI_SectionEncoding_Unpacked &&
+              section.encoded_size >= sizeof(info) && section.unpacked_size >= sizeof(info) &&
+              section.off <= size && section.encoded_size <= size-section.off &&
+              file_read_struct(file, section.off, &info) == sizeof(info) &&
+              info.arch == rdi_arch_from_arch(arch) &&
+              MemoryMatch(&info.guid, &guid, sizeof(guid)));
+  }
+  return result;
+}
+
 ////////////////////////////////
 //~ rjf: Main Layer Initialization
 
@@ -115,6 +180,12 @@ di_set_auto_downloads(B32 auto_downloads)
 internal DI_Key
 di_key_from_path_timestamp(String8 path, U64 min_timestamp)
 {
+  return di_key_from_path_timestamp_identity(path, min_timestamp, Arch_Null, (Guid){0});
+}
+
+internal DI_Key
+di_key_from_path_timestamp_identity(String8 path, U64 min_timestamp, Arch macho_arch, Guid macho_guid)
+{
   //- rjf: unpack key
   U64 hash = u64_hash_from_str8(path);
   U64 slot_idx = hash%di_shared->path2key_slots_count;
@@ -132,7 +203,8 @@ di_key_from_path_timestamp(String8 path, U64 min_timestamp)
       DI_KeyPathNode *node = 0;
       for(DI_KeyPathNode *n = slot->first; n != 0; n = n->next)
       {
-        if(str8_match(n->path, path, 0) && min_timestamp <= n->min_timestamp)
+        if(str8_match(n->path, path, 0) && min_timestamp <= n->min_timestamp &&
+           n->macho_arch == macho_arch && MemoryMatch(&n->macho_guid, &macho_guid, sizeof(macho_guid)))
         {
           found = 1;
           node = n;
@@ -153,6 +225,8 @@ di_key_from_path_timestamp(String8 path, U64 min_timestamp)
         }
         node->path = str8_copy(stripe->arena, path);
         node->min_timestamp = min_timestamp;
+        node->macho_arch = macho_arch;
+        node->macho_guid = macho_guid;
         node->key = key;
         DLLPushBack(slot->first, slot->last, node);
       }
@@ -171,7 +245,7 @@ di_key_from_path_timestamp(String8 path, U64 min_timestamp)
       B32 made_key = 0;
       
       //- rjf: try to make key from file's contents
-      if(!made_key)
+      if(!made_key && macho_arch == Arch_Null)
       {
         File file = file_open(AccessFlag_Read|AccessFlag_ShareRead, path);
         FileProperties props = properties_from_file(file);
@@ -217,6 +291,12 @@ di_key_from_path_timestamp(String8 path, U64 min_timestamp)
         if(path.size != 0)
         {
           U128 hash = u128_hash_from_seed_str8(min_timestamp, path);
+          if(macho_arch != Arch_Null)
+          {
+            U128 identity_hash = u128_hash_from_seed_str8((U64)macho_arch, str8_struct(&macho_guid));
+            hash.u64[0] ^= identity_hash.u64[0];
+            hash.u64[1] ^= identity_hash.u64[1];
+          }
           MemoryCopy(&key, &hash, Min(sizeof(hash), sizeof(key)));
         }
       }
@@ -253,6 +333,8 @@ di_key_from_path_timestamp(String8 path, U64 min_timestamp)
             DLLPushBack(key_slot->first, key_slot->last, node);
             node->path = str8_copy(key_stripe->arena, path);
             node->min_timestamp = min_timestamp;
+            node->macho_arch = macho_arch;
+            node->macho_guid = macho_guid;
             node->key = key;
           }
         }
@@ -453,6 +535,27 @@ di_push_all_loaded_keys(Arena *arena)
   return array;
 }
 
+internal DI_LoadStatus
+di_load_status_from_key(DI_Key key)
+{
+  DI_LoadStatus result = DI_LoadStatus_None;
+  U64 slot_idx = u64_hash_from_str8(str8_struct(&key))%di_shared->slots_count;
+  Stripe *stripe = stripe_from_slot_idx(&di_shared->stripes, slot_idx);
+  RWMutexScope(stripe->rw_mutex, 0)
+  {
+    for(DI_Node *n = di_shared->slots[slot_idx].first; n != 0; n = n->next)
+    {
+      if(di_key_match(n->key, key) && ins_atomic_u64_eval(&n->refcount) > 0)
+      {
+        if(n->completion_count == 0) {result = DI_LoadStatus_Pending;}
+        else {result = n->rdi.raw_data_size ? DI_LoadStatus_Ready : DI_LoadStatus_Unavailable;}
+        break;
+      }
+    }
+  }
+  return result;
+}
+
 internal RDI_Parsed *
 di_rdi_from_key(Access *access, DI_Key key, B32 high_priority, U64 endt_us)
 {
@@ -559,6 +662,8 @@ di_async_tick(void)
   {
     DI_Key key;
     String8 rdi_path;
+    Arch macho_arch;
+    Guid macho_guid;
   };
   ParseTask *parse_tasks = 0;
   U64 parse_tasks_count = 0;
@@ -680,6 +785,8 @@ di_async_tick(void)
         //- rjf: get key's O.G. path
         String8 og_path = {0};
         U64 og_min_timestamp = 0;
+        Arch expected_macho_arch = Arch_Null;
+        Guid expected_macho_guid = {0};
         RWMutexScope(key_stripe->rw_mutex, 0)
         {
           for(DI_KeyPathNode *n = key_slot->first; n != 0; n = n->next)
@@ -688,6 +795,8 @@ di_async_tick(void)
             {
               og_path = str8_copy(scratch.arena, n->path);
               og_min_timestamp = n->min_timestamp;
+              expected_macho_arch = n->macho_arch;
+              expected_macho_guid = n->macho_guid;
               break;
             }
           }
@@ -730,17 +839,30 @@ di_async_tick(void)
           File file = file_open(AccessFlag_ShareRead|AccessFlag_Read, og_path);
           FileProperties props = properties_from_file(file);
           t->og_size = props.size;
+          t->og_matches_identity = 1;
           U64 rdi_magic_maybe = 0;
           if(file_read_struct(file, 0, &rdi_magic_maybe) == 8 &&
              rdi_magic_maybe == RDI_MAGIC_CONSTANT)
           {
             t->og_is_rdi = 1;
           }
+          else
+          {
+            MachO_UUID uuid = macho_uuid_from_file(file, &t->og_macho_arch);
+            t->og_macho_guid = macho_guid_from_uuid(uuid);
+          }
+          if(expected_macho_arch != Arch_Null)
+          {
+            t->og_matches_identity = (t->og_macho_arch == expected_macho_arch &&
+                                     MemoryMatch(&t->og_macho_guid, &expected_macho_guid, sizeof(expected_macho_guid)));
+            t->og_macho_arch = expected_macho_arch;
+            t->og_macho_guid = expected_macho_guid;
+          }
           file_close(file);
         }
         U64 og_size = t->og_size;
         B32 og_is_rdi = t->og_is_rdi;
-        B32 og_is_good = (og_size > 0);
+        B32 og_is_good = (og_size > 0 && t->og_matches_identity);
         
         //- rjf: compute key's RDI path
         String8 rdi_path = {0};
@@ -752,7 +874,7 @@ di_async_tick(void)
           }
           else
           {
-            rdi_path = str8f(scratch.arena, "%S.rdi", og_path);
+            rdi_path = di_rdi_path_from_identity(scratch.arena, og_path, str8_zero(), t->og_macho_arch, t->og_macho_guid);
           }
         }
         
@@ -781,7 +903,7 @@ di_async_tick(void)
         }
         
         //- rjf: if RDI path is not writable -> adjust into writable cache directory
-        if(!t->og_folder_is_writable)
+        if(!t->og_folder_is_writable && !og_is_rdi)
         {
           String8 cache_folder = get_process_info()->user_program_cache_data_path;
           String8 raddbg_folder = str8f(scratch.arena, "%S/raddbg", cache_folder);
@@ -789,7 +911,7 @@ di_async_tick(void)
           make_directory(cache_folder);
           make_directory(raddbg_folder);
           make_directory(rdis_folder);
-          rdi_path = str8f(scratch.arena, "%S/%S.rdi", rdis_folder, str8_skip_last_slash(og_path));
+          rdi_path = di_rdi_path_from_identity(scratch.arena, og_path, rdis_folder, t->og_macho_arch, t->og_macho_guid);
         }
         
         //- rjf: determine if RDI is stale
@@ -804,12 +926,7 @@ di_async_tick(void)
           }
           else
           {
-            t->rdi_is_stale = 1;
-            RDI_Header header = {0};
-            if(file_read_struct(file, 0, &header) == sizeof(header))
-            {
-              t->rdi_is_stale = (header.encoding_version != RDI_ENCODING_VERSION);
-            }
+            t->rdi_is_stale = !di_rdi_file_matches_identity(file, t->og_macho_arch, t->og_macho_guid);
           }
           file_close(file);
         }
@@ -860,7 +977,9 @@ di_async_tick(void)
             // most recent key.
             for(DI_KeyPathNode *n = path2key_slot->last; n != 0; n = n->prev)
             {
-              if(str8_match(n->path, og_path, 0) && !di_key_match(key, n->key))
+              if(str8_match(n->path, og_path, 0) && !di_key_match(key, n->key) &&
+                 n->macho_arch == expected_macho_arch &&
+                 MemoryMatch(&n->macho_guid, &expected_macho_guid, sizeof(expected_macho_guid)))
               {
                 di_close(n->key, 1);
               }
@@ -971,6 +1090,8 @@ di_async_tick(void)
           ParseTaskNode *n = push_array(scratch.arena, ParseTaskNode, 1);
           n->v.key = key;
           n->v.rdi_path = rdi_path;
+          n->v.macho_arch = t->og_macho_arch;
+          n->v.macho_guid = t->og_macho_guid;
           SLLQueuePush(first_parse_task, last_parse_task, n);
           parse_tasks_count += 1;
         }
@@ -1026,6 +1147,15 @@ di_async_tick(void)
       void *file_base = 0;
       {
         file = file_open(AccessFlag_Read|AccessFlag_ShareRead|AccessFlag_ShareWrite, rdi_path);
+        // Recheck after conversion too: a failed conversion must not expose
+        // an old file that failed the identity check above.
+        if(parse_tasks[parse_task_idx].macho_arch != Arch_Null &&
+           !di_rdi_file_matches_identity(file, parse_tasks[parse_task_idx].macho_arch, parse_tasks[parse_task_idx].macho_guid))
+        {
+          log_infof("Ignoring generated RDI %S: missing or mismatched Mach-O identity\n", rdi_path);
+          file_close(file);
+          file = file_zero();
+        }
         file_map = file_map_open(AccessFlag_Read, file);
         file_props = properties_from_file(file);
         file_base = file_map_view_open(file_map, AccessFlag_Read, r1u64(0, file_props.size));
@@ -1584,6 +1714,8 @@ di_match_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_out,
   B32 allow_other_dbgis = 0;
   String8 name = {0};
   DI_Key preferred_key = {0};
+  B32 scoped = 0;
+  DI_KeyArray dbgi_keys = {0};
   {
     U64 key_read_off = 0;
     key_read_off += str8_deserial_read_struct(key, key_read_off, &index);
@@ -1593,6 +1725,13 @@ di_match_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_out,
     key_read_off += str8_deserial_read_struct(key, key_read_off, &name.size);
     name.str = push_array_no_zero(scratch.arena, U8, name.size);
     key_read_off += str8_deserial_read(key, key_read_off, name.str, name.size, 1);
+    key_read_off += str8_deserial_read_struct(key, key_read_off, &scoped);
+    if(scoped)
+    {
+      key_read_off += str8_deserial_read_struct(key, key_read_off, &dbgi_keys.count);
+      dbgi_keys.v = push_array_no_zero(scratch.arena, DI_Key, dbgi_keys.count);
+      key_read_off += str8_deserial_read(key, key_read_off, dbgi_keys.v, sizeof(DI_Key)*dbgi_keys.count, 1);
+    }
   }
   
   //- rjf: find split point between container part of name & "leaf"
@@ -1666,8 +1805,8 @@ di_match_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_out,
     fully_qualified_name = str8_list_join(scratch.arena, &parts, &join);
   }
   
-  //- rjf: get all loaded keys
-  DI_KeyArray dbgi_keys = di_push_all_loaded_keys(scratch.arena);
+  // Unscoped callers search all loaded debug info; scoped callers supply the candidates.
+  if(!scoped) {dbgi_keys = di_push_all_loaded_keys(scratch.arena);}
   
   //- rjf: take cancellation signal
   B32 cancelled = 0;
@@ -1726,6 +1865,31 @@ di_match_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_out,
             RDI_NameMapNode *map_node = rdi_name_map_lookup(rdi, &parsed_name_map, leaf_part_of_name.str, leaf_part_of_name.size);
             U32 matches_count = 0;
             U32 *matches = rdi_matches_from_map_node(rdi, map_node, &matches_count);
+
+            // Some producers put the qualification in the symbol's own name
+            // rather than in namespace DIEs. Search that key as well, then use
+            // the same qualification and unit filters for both representations.
+            if(container_part_of_name.size != 0)
+            {
+              RDI_NameMapNode *full_node = rdi_name_map_lookup(rdi, &parsed_name_map, fully_qualified_name.str, fully_qualified_name.size);
+              U32 full_count = 0;
+              U32 *full_matches = rdi_matches_from_map_node(rdi, full_node, &full_count);
+              if(full_count != 0)
+              {
+                U32 *combined = push_array(scratch.arena, U32, matches_count+full_count);
+                MemoryCopy(combined, matches, sizeof(U32)*matches_count);
+                for EachIndex(full_idx, full_count)
+                {
+                  B32 duplicate = 0;
+                  for EachIndex(match_idx, matches_count)
+                  {
+                    if(combined[match_idx] == full_matches[full_idx]) { duplicate = 1; break; }
+                  }
+                  if(!duplicate) { combined[matches_count++] = full_matches[full_idx]; }
+                }
+                matches = combined;
+              }
+            }
             
             // rjf: do we have a container? -> filter matches according to container string also
             U32 *filtered_matches = matches;
@@ -1862,7 +2026,7 @@ di_match_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_out,
 }
 
 internal DI_Match
-di_match_from_string(String8 string, U32 match_index, U32 unit_idx, B32 allow_other_dbgis, DI_Key preferred_dbgi_key, U64 endt_us)
+di_match_from_string(String8 string, U32 match_index, U32 unit_idx, B32 allow_other_dbgis, DI_Key preferred_dbgi_key, U64 endt_us, DI_KeyArray *scope)
 {
   DI_Match result = {0};
   Access *access = access_open();
@@ -1875,10 +2039,17 @@ di_match_from_string(String8 string, U32 match_index, U32 unit_idx, B32 allow_ot
     str8_list_push(scratch.arena, &key_parts, str8_struct(&preferred_dbgi_key));
     str8_list_push(scratch.arena, &key_parts, str8_struct(&string.size));
     str8_list_push(scratch.arena, &key_parts, string);
+    B32 scoped = (scope != 0);
+    str8_list_push(scratch.arena, &key_parts, str8_struct(&scoped));
+    if(scoped)
+    {
+      str8_list_push(scratch.arena, &key_parts, str8_struct(&scope->count));
+      str8_list_push(scratch.arena, &key_parts, str8((U8 *)scope->v, sizeof(DI_Key)*scope->count));
+    }
     String8 key = str8_list_join(scratch.arena, &key_parts, 0);
-    U64 dbgi_count = di_load_count();
+    U64 dbgi_count = scoped ? scope->count : di_load_count();
     B32 wide = (dbgi_count > 256 && allow_other_dbgis);
-    AC_Artifact artifact = ac_artifact_from_key(access, key, di_match_artifact_create, 0, endt_us, .flags = wide ? AC_Flag_Wide : 0, .gen = di_load_gen(), .evict_threshold_us = wide ? 20000000 : 10000000);
+    AC_Artifact artifact = ac_artifact_from_key(access, key, di_match_artifact_create, 0, endt_us, .flags = wide ? AC_Flag_Wide : 0, .gen = di_load_gen(), .evict_threshold_us = wide ? 20000000 : 10000000, .stale_out = &result.stale);
     result.key.u64[0]   = artifact.u64[0];
     result.key.u64[1]   = artifact.u64[1];
     result.section_kind = artifact.u64[2];

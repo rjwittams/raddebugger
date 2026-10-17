@@ -819,8 +819,12 @@ rdi_procedure_from_voff(RDI_Parsed *rdi, RDI_U64 voff)
 RDI_PROC RDI_U64
 rdi_first_voff_from_scope(RDI_Parsed *rdi, RDI_Scope *scope)
 {
-  RDI_U64 *voffs = rdi_element_from_name_idx(rdi, ScopeVOffData, scope->voff_range_first);
-  RDI_U64 result = *voffs;
+  RDI_U64 result = 0;
+  if(scope->voff_range_first < scope->voff_range_opl)
+  {
+    RDI_U64 *voffs = rdi_element_from_name_idx(rdi, ScopeVOffData, scope->voff_range_first);
+    result = *voffs;
+  }
   return result;
 }
 
@@ -828,7 +832,7 @@ RDI_PROC RDI_U64
 rdi_opl_voff_from_scope(RDI_Parsed *rdi, RDI_Scope *scope)
 {
   RDI_U64 result = 0;
-  if(scope->voff_range_opl != 0)
+  if(scope->voff_range_first < scope->voff_range_opl)
   {
     RDI_U64 *voffs = rdi_element_from_name_idx(rdi, ScopeVOffData, scope->voff_range_opl-1);
     result = *voffs;
@@ -856,6 +860,16 @@ rdi_procedure_from_scope(RDI_Parsed *rdi, RDI_Scope *scope)
 {
   RDI_Symbol *procedure = rdi_element_from_name_idx(rdi, Procedures, scope->proc_idx);
   return procedure;
+}
+
+// Find this scope's nearest inline frame, crossing ordinary lexical blocks.
+RDI_PROC RDI_Scope *
+rdi_inline_scope_from_scope(RDI_Parsed *rdi, RDI_Scope *scope)
+{
+  for(; scope->inline_site_idx == 0 && scope->parent_scope_idx != 0;
+      scope = rdi_parent_from_scope(rdi, scope)) {}
+  if(scope->inline_site_idx == 0) {scope = rdi_element_from_name_idx(rdi, Scopes, 0);}
+  return scope;
 }
 
 RDI_PROC RDI_InlineSite *
@@ -900,7 +914,7 @@ rdi_location_from_location_voff(RDI_Parsed *rdi, RDI_Location location, RDI_U64 
     RDI_LocationSetElement *set_opl = all_elems + set_opl_idx;
     for(RDI_LocationSetElement *e = set_first; e < set_opl; e += 1)
     {
-      if(e->voff_first <= voff && voff <= e->voff_opl)
+      if(e->voff_first <= voff && voff < e->voff_opl)
       {
         result = e->location;
         break;
