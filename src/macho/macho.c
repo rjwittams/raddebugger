@@ -9,6 +9,194 @@ macho_magic_is_32(U32 magic)
 }
 
 internal B32
+macho_symbol_table_vranges(String8 header, MachO_Bin *bin, U64 slide, Rng1U64 *symbols, Rng1U64 *strings)
+{
+  *symbols = *strings = r1u64(0, 0);
+  MachO_SymtabCommand table = {0};
+  for EachIndex(idx, bin->load_commands.count)
+  {
+    MachO_LoadCommandInfo *info = &bin->load_commands.v[idx];
+    if(info->cmd == MACHO_LC_SYMTAB && info->cmd_size >= sizeof(table))
+    {
+      str8_deserial_read_struct(header, info->offset, &table);
+      break;
+    }
+  }
+  if(!bin->is_64 || table.nsyms == 0 || table.strsize == 0) {return 0;}
+  Rng1U64 file_ranges[] = {r1u64(table.symoff, (U64)table.symoff + table.nsyms*sizeof(MachO_Nlist64)),
+                          r1u64(table.stroff, (U64)table.stroff + table.strsize)};
+  Rng1U64 *ranges[] = {symbols, strings};
+  for EachElement(rng_idx, file_ranges)
+  {
+    for EachIndex(idx, bin->load_commands.count)
+    {
+      MachO_LoadCommandInfo *info = &bin->load_commands.v[idx];
+      if(info->cmd != MACHO_LC_SEGMENT_64 || info->cmd_size < sizeof(MachO_SegmentCommand64)) {continue;}
+      MachO_SegmentCommand64 seg = {0};
+      str8_deserial_read_struct(header, info->offset, &seg);
+      Rng1U64 file_range = file_ranges[rng_idx];
+      if(file_range.min < seg.fileoff || file_range.max - seg.fileoff > seg.filesize) {continue;}
+      U64 off = file_range.min - seg.fileoff, size = dim_1u64(file_range);
+      if(off > seg.vmsize || size > seg.vmsize-off) {continue;}
+      U64 start = seg.vmaddr + slide;
+      if(off > max_U64-start || size > max_U64-(start+off)) {continue;}
+      *ranges[rng_idx] = r1u64(start+off, start+off+size);
+      break;
+    }
+  }
+  return dim_1u64(*symbols) != 0 && dim_1u64(*strings) != 0;
+}
+
+internal int
+macho_code_symbol_compare(MachO_CodeSymbol *a, MachO_CodeSymbol *b)
+{
+  if(a->voff != b->voff) {return a->voff < b->voff ? -1 : 1;}
+  // Same-address aliases use bytewise name order, independent of table order.
+  U64 common = Min(a->name.size, b->name.size);
+  for(U64 idx = 0; idx < common; idx += 1)
+  {
+    if(a->name.str[idx] != b->name.str[idx]) {return a->name.str[idx] < b->name.str[idx] ? -1 : 1;}
+  }
+  return a->name.size < b->name.size ? -1 : a->name.size > b->name.size;
+}
+
+internal MachO_CodeSymbolArray
+macho_code_symbols(Arena *arena, String8 header, MachO_Bin *bin, String8 symbols, String8 strings)
+{
+  MachO_CodeSymbolArray result = {0};
+  if(!bin->is_64 || symbols.size % sizeof(MachO_Nlist64) != 0) {return result;}
+  Rng1U64 sections[256] = {0};
+  U64 section_idx = 1;
+  U64 base = macho_base_vaddr_from_bin(header, bin);
+  for EachIndex(idx, bin->load_commands.count)
+  {
+    MachO_LoadCommandInfo *info = &bin->load_commands.v[idx];
+    if(info->cmd != MACHO_LC_SEGMENT_64 || info->cmd_size < sizeof(MachO_SegmentCommand64)) {continue;}
+    MachO_SegmentCommand64 seg = {0};
+    str8_deserial_read_struct(header, info->offset, &seg);
+    if(seg.section_count > (info->cmd_size-sizeof(seg))/sizeof(MachO_Section64)) {return result;}
+    for(U64 idx2 = 0; idx2 < seg.section_count; idx2 += 1, section_idx += 1)
+    {
+      MachO_Section64 sec = {0};
+      str8_deserial_read_struct(header, info->offset+sizeof(seg)+idx2*sizeof(sec), &sec);
+      if(section_idx < ArrayCount(sections) && (seg.initprot & 4) &&
+         (sec.flags & (MACHO_S_ATTR_PURE_INSTRUCTIONS|MACHO_S_ATTR_SOME_INSTRUCTIONS)) &&
+         sec.addr >= base && sec.addr >= seg.vmaddr && sec.addr-seg.vmaddr <= seg.vmsize &&
+         sec.size <= seg.vmsize-(sec.addr-seg.vmaddr) && sec.size <= max_U64-sec.addr)
+      {
+        sections[section_idx] = r1u64(sec.addr-base, sec.addr-base+sec.size);
+      }
+    }
+  }
+  U64 count = symbols.size/sizeof(MachO_Nlist64);
+  result.v = push_array(arena, MachO_CodeSymbol, count);
+  for EachIndex(idx, count)
+  {
+    MachO_Nlist64 n = {0};
+    str8_deserial_read_struct(symbols, idx*sizeof(n), &n);
+    if((n.type & MACHO_N_STAB) || (n.type & MACHO_N_TYPE) != MACHO_N_SECT || n.value < base ||
+       !contains_1u64(sections[n.sect], n.value-base) || n.strx >= strings.size) {continue;}
+    U64 end = n.strx;
+    U64 name_opl = Min(strings.size, (U64)n.strx+4096);
+    for(; end < name_opl && strings.str[end] != 0; end += 1);
+    if(end == n.strx || end == name_opl) {continue;}
+    MachO_CodeSymbol *symbol = &result.v[result.count++];
+    symbol->name = str8_copy(arena, str8_substr(strings, r1u64(n.strx, end)));
+    symbol->voff = n.value-base;
+    symbol->section = sections[n.sect];
+  }
+  quick_sort(result.v, result.count, sizeof(*result.v), macho_code_symbol_compare);
+  // Keep the first alias so lookup cannot depend on sort stability.
+  U64 count_before = result.count;
+  result.count = 0;
+  for EachIndex(idx, count_before)
+  {
+    if(result.count == 0 || result.v[result.count-1].voff != result.v[idx].voff)
+    {
+      result.v[result.count++] = result.v[idx];
+    }
+  }
+  return result;
+}
+
+internal MachO_CodeSymbol *
+macho_code_symbol_from_voff(MachO_CodeSymbolArray symbols, U64 voff)
+{
+  U64 lo = 0, hi = symbols.count;
+  while(lo < hi)
+  {
+    U64 mid = lo+(hi-lo)/2;
+    if(symbols.v[mid].voff <= voff) {lo = mid+1;} else {hi = mid;}
+  }
+  MachO_CodeSymbol *result = lo ? &symbols.v[lo-1] : 0;
+  if(result != 0 && !contains_1u64(result->section, voff)) {result = 0;}
+  return result;
+}
+
+internal MachO_CodeSymbolArray
+macho_code_symbols_from_matching_file(Arena *arena, String8 file, MachO_Header64 *loaded_header, MachO_UUID loaded_uuid)
+{
+  MachO_CodeSymbolArray result = {0};
+  if(macho_uuid_is_zero(loaded_uuid)) {return result;}
+  Temp scratch = scratch_begin(&arena, 1);
+  U32 magic = 0, count = 1;
+  str8_deserial_read_struct(file, 0, &magic);
+  B32 fat = magic == 0xbebafeca || magic == 0xbfbafeca;
+  U64 fat_entry_size = magic == 0xbfbafeca ? 32 : 20;
+  if(fat)
+  {
+    str8_deserial_read_struct(file, 4, &count);
+    count = from_be_u32(count);
+    if(file.size < 8 || count > (file.size-8)/fat_entry_size) {count = 0;}
+  }
+  for(U64 idx = 0; idx < count; idx += 1)
+  {
+    U64 offset = 0, size = file.size;
+    if(fat)
+    {
+      U64 entry = 8 + idx*fat_entry_size;
+      if(fat_entry_size == 32)
+      {
+        str8_deserial_read_struct(file, entry+8, &offset);
+        str8_deserial_read_struct(file, entry+16, &size);
+        offset = from_be_u64(offset); size = from_be_u64(size);
+      }
+      else
+      {
+        U32 off32 = 0, size32 = 0;
+        str8_deserial_read_struct(file, entry+8, &off32);
+        str8_deserial_read_struct(file, entry+12, &size32);
+        offset = from_be_u32(off32); size = from_be_u32(size32);
+      }
+    }
+    if(offset > file.size || size > file.size-offset) {continue;}
+    String8 slice = str8_substr(file, r1u64(offset, offset+size));
+    MachO_Bin bin = macho_bin_from_data(scratch.arena, slice);
+    if(!bin.is_64 || bin.header.cpu_type != loaded_header->cpu_type ||
+       bin.header.cpu_subtype != loaded_header->cpu_subtype ||
+       !macho_uuid_match(loaded_uuid, macho_uuid_from_bin(slice, &bin))) {continue;}
+    for EachIndex(cmd_idx, bin.load_commands.count)
+    {
+      MachO_LoadCommandInfo *info = &bin.load_commands.v[cmd_idx];
+      if(info->cmd != MACHO_LC_SYMTAB || info->cmd_size < sizeof(MachO_SymtabCommand)) {continue;}
+      MachO_SymtabCommand table = {0};
+      str8_deserial_read_struct(slice, info->offset, &table);
+      U64 symbols_size = (U64)table.nsyms*sizeof(MachO_Nlist64);
+      if(table.symoff > slice.size || symbols_size > slice.size-table.symoff ||
+         table.stroff > slice.size || table.strsize > slice.size-table.stroff ||
+         symbols_size > MB(16) || table.strsize > MB(64)) {break;}
+      result = macho_code_symbols(arena, slice, &bin,
+                                  str8_substr(slice, r1u64(table.symoff, table.symoff+symbols_size)),
+                                  str8_substr(slice, r1u64(table.stroff, (U64)table.stroff+table.strsize)));
+      break;
+    }
+    break;
+  }
+  scratch_end(scratch);
+  return result;
+}
+
+internal B32
 macho_magic_is_64(U32 magic)
 {
   B32 result = (magic == MACHO_MAGIC_64);
