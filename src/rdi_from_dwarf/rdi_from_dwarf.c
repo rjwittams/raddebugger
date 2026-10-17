@@ -852,7 +852,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           U32 adjusted_opcode = (U32)(opcode - line_table_header->opcode_base);
           U32 op_advance = adjusted_opcode / line_table_header->line_range;
           S64 line_advance = (S64)line_table_header->line_base + (S64)adjusted_opcode%(S64)line_table_header->line_range;
-          U64 addr_advance = line_table_header->min_inst_length * (vm_regs.vliw_op_index + op_advance) / line_table_header->max_ops_per_inst;
+          U64 addr_advance = line_table_header->min_inst_length * ((vm_regs.vliw_op_index + op_advance) / line_table_header->max_ops_per_inst);
           vm_regs.address += addr_advance;
           vm_regs.vliw_op_index = (vm_regs.vliw_op_index + op_advance) % line_table_header->max_ops_per_inst;
           vm_regs.line += line_advance;
