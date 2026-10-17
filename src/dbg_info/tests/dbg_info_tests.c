@@ -28,6 +28,24 @@ Test(di_rdi_path_from_original_path)
   }
 }
 
+Test(di_build_identity_keys)
+{
+  String8 path = t_make_file_path(arena, str8_lit("same-build-path"));
+  Guid first_guid = {.data1 = 1};
+  Guid second_guid = {.data1 = 2};
+  DI_Key first = di_key_from_path_timestamp_identity(path, 123, Arch_arm64, first_guid);
+  DI_Key second = di_key_from_path_timestamp_identity(path, 123, Arch_arm64, second_guid);
+  DI_Key other_arch = di_key_from_path_timestamp_identity(path, 123, Arch_x64, first_guid);
+  DI_Key portable = di_key_from_path_timestamp(path, 123);
+  TestCheck(!di_key_match(first, second));
+  TestCheck(!di_key_match(first, other_arch));
+  TestCheck(!di_key_match(first, portable));
+  TestCheck(di_key_match(first, di_key_from_path_timestamp_identity(path, 123, Arch_arm64, first_guid)));
+  TestCheck(di_key_match(second, di_key_from_path_timestamp_identity(path, 123, Arch_arm64, second_guid)));
+  TestCheck(di_key_match(portable, di_key_from_path_timestamp(path, 123)));
+  TestCheck(!di_key_match(first, di_key_from_path_timestamp_identity(str8_lit("another-build-path"), 123, Arch_arm64, first_guid)));
+}
+
 Test(di_rdi_identity_paths)
 {
   Guid guid = {.data1=1};
