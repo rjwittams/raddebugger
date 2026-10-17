@@ -15,6 +15,7 @@
 #import <Foundation/NSString.h>
 #import <Foundation/NSRunLoop.h>
 #import <Foundation/NSURL.h>
+#import <Foundation/NSUserDefaults.h>
 #import <AppKit/NSAlert.h>
 #import <AppKit/NSApplication.h>
 #import <AppKit/NSCursor.h>
@@ -52,6 +53,15 @@ typedef enum MAC_WM_MenuMode
   MAC_WM_MenuMode_Native,
 }
 MAC_WM_MenuMode;
+
+typedef enum MAC_WM_MouseOwner
+{
+  MAC_WM_MouseOwner_None,
+  MAC_WM_MouseOwner_Client,
+  MAC_WM_MouseOwner_Native,
+  MAC_WM_MouseOwner_TitleBar,
+}
+MAC_WM_MouseOwner;
 
 typedef struct MAC_WM_MenuCommandNode MAC_WM_MenuCommandNode;
 struct MAC_WM_MenuCommandNode
@@ -130,6 +140,9 @@ struct MAC_WM_State
   MAC_WM_FileDropNode *last_pending_file_drop;
   MAC_WM_FileDropNode *free_file_drop_node;
   B32 key_is_down[WM_Key_COUNT];
+  MAC_WM_MouseOwner left_mouse_owner;
+  MAC_WM_Window *left_mouse_window;
+  NSEvent *title_bar_double_click_event;
   B32 suppress_reentrant_frame;
 };
 
@@ -157,6 +170,9 @@ internal void mac_wm_apply_menu_mode(MAC_WM_MenuMode mode);
 internal void mac_wm_push_menu_command(String8 command_name);
 internal B32 mac_wm_window_pos_is_native_title_bar_control_area(MAC_WM_Window *window, Vec2F32 pos);
 internal B32 mac_wm_window_pos_is_title_bar_client_area(MAC_WM_Window *window, Vec2F32 pos);
+internal B32 mac_wm_window_pos_is_title_bar_background(MAC_WM_Window *window, Vec2F32 pos);
+internal void mac_wm_cancel_title_bar_double_click(void);
+internal void mac_wm_window_title_bar_double_click(MAC_WM_Window *window);
 internal Rng2F32 mac_wm_rect_from_ns_rect(NSRect rect);
 internal Vec2F32 mac_wm_client_pos_from_ns_point(MAC_WM_Window *window, NSPoint point);
 internal NSString *mac_wm_ns_string_from_string8(Arena *arena, String8 string);
