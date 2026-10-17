@@ -2284,7 +2284,7 @@ d_call_stack_from_unwind(Arena *arena, D_Entity *process, D_Unwind *base_unwind)
       // rjf: unpack
       ARCH_Info *arch_info = arch_info_from_arch(arch);
       D_UnwindFrame *src = &base_unwind->frames.v[base_frame_idx];
-      U64 rip_vaddr = arch_ip_from_reg_block(arch_info, src->regs);
+      U64 rip_vaddr = src->lookup_vaddr;
       D_Entity *module = d_module_from_process_vaddr(process, rip_vaddr);
       U64 rip_voff = d_voff_from_vaddr(module, rip_vaddr);
       DI_Key dbgi_key = d_dbgi_key_from_module(module);
@@ -2295,9 +2295,9 @@ d_call_stack_from_unwind(Arena *arena, D_Entity *process, D_Unwind *base_unwind)
       FrameNode *first_inline_frame = 0;
       FrameNode *last_inline_frame = 0;
       U64 inline_frame_count = 0;
-      for(RDI_Scope *s = scope;
+      for(RDI_Scope *s = rdi_inline_scope_from_scope(rdi, scope);
           s->inline_site_idx != 0;
-          s = rdi_element_from_name_idx(rdi, Scopes, s->parent_scope_idx))
+          s = rdi_inline_scope_from_scope(rdi, rdi_parent_from_scope(rdi, s)))
       {
         FrameNode *dst_inline = push_array(scratch.arena, FrameNode, 1);
         if(first_inline_frame == 0)
@@ -2308,7 +2308,9 @@ d_call_stack_from_unwind(Arena *arena, D_Entity *process, D_Unwind *base_unwind)
         SLLQueuePush(first_frame, last_frame, dst_inline);
         dst_inline->v.unwind_count = base_frame_idx;
         dst_inline->v.regs         = src->regs;
+        dst_inline->v.reg_valid    = src->reg_valid;
         dst_inline->v.cfa          = src->cfa;
+        dst_inline->v.lookup_vaddr = src->lookup_vaddr;
         frame_count += 1;
         inline_frame_count += 1;
       }
@@ -2318,7 +2320,9 @@ d_call_stack_from_unwind(Arena *arena, D_Entity *process, D_Unwind *base_unwind)
       SLLQueuePush(first_frame, last_frame, dst_base);
       dst_base->v.unwind_count = base_frame_idx;
       dst_base->v.regs         = src->regs;
+      dst_base->v.reg_valid    = src->reg_valid;
       dst_base->v.cfa          = src->cfa;
+      dst_base->v.lookup_vaddr = src->lookup_vaddr;
       frame_count += 1;
       
       // rjf: hook up inline frames to point to concrete frame, and to account for inline depth
@@ -2784,47 +2788,26 @@ d_ctrl_thread__append_resolved_module_user_bp_traps(Arena *arena, D_EvalScope *e
       // rjf: unpack & normalize
       TxtPt pt = bp->pt;
       String8 filename = bp->file_path;
-      String8 filename_normalized = str8_copy(scratch.arena, filename);
-      for(U64 idx = 0; idx < filename_normalized.size; idx += 1)
-      {
-        filename_normalized.str[idx] = lower_from_char(filename_normalized.str[idx]);
-        filename_normalized.str[idx] = correct_slash_from_char(filename_normalized.str[idx]);
-      }
       
       // rjf: gather filename candidates - the path passed down by the frontend *may*
       // exactly match what the debug info stores, but it may be absolute whereas our
       // debug info stores relative paths. so we'll try both.
       String8 filename_candidates[] =
       {
-        filename_normalized,
-        path_relative_dst_from_absolute_dst_src(scratch.arena, filename_normalized, str8_chop_last_slash(dbgi_path)),
-        path_relative_dst_from_absolute_dst_src(scratch.arena, filename_normalized, str8_chop_last_slash(module_path)),
+        filename,
+        path_relative_dst_from_absolute_dst_src(scratch.arena, filename, str8_chop_last_slash(dbgi_path)),
+        path_relative_dst_from_absolute_dst_src(scratch.arena, filename, str8_chop_last_slash(module_path)),
       };
       
       // rjf: filename -> src_id
       U32 src_id = 0;
       {
-        RDI_NameMap *mapptr = rdi_element_from_name_idx(rdi, NameMaps, RDI_NameMapKind_NormalSourcePaths);
-        if(mapptr != 0)
+        for EachElement(idx, filename_candidates)
         {
-          RDI_ParsedNameMap map = {0};
-          rdi_parsed_from_name_map(rdi, mapptr, &map);
-          for EachElement(idx, filename_candidates)
+          src_id = rdi_source_file_idx_from_path(rdi, filename_candidates[idx]);
+          if(src_id != 0)
           {
-            RDI_NameMapNode *node = rdi_name_map_lookup(rdi, &map, filename_candidates[idx].str, filename_candidates[idx].size);
-            if(node != 0)
-            {
-              U32 id_count = 0;
-              U32 *ids = rdi_matches_from_map_node(rdi, node, &id_count);
-              if(id_count > 0)
-              {
-                src_id = ids[0];
-              }
-            }
-            if(src_id != 0)
-            {
-              break;
-            }
+            break;
           }
         }
       }
@@ -3763,6 +3746,8 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
           
           //- rjf: try to obtain this module's RDI
           RDI_Parsed *rdi = di_rdi_from_key(scope->access, dbgi_key, 0, 0);
+          // Both queued and actively loading RDI need the required-info check.
+          B32 rdi_is_pending = (rdi == &rdi_parsed_nil || rdi == &di_rdi_parsed_nil_waiting);
           
           //- rjf: if this RDI is not yet ready => determine if we need to wait for it
           //
@@ -3773,7 +3758,7 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
           {
             rdi_is_necessary = 0;
           }
-          else if(rdi == &rdi_parsed_nil) ProfScope("determine if RDI is necessary")
+          else if(rdi_is_pending) ProfScope("determine if RDI is necessary")
           {
             // rjf: find cached result
             U64 hash = d_hash_from_handle(mod->handle);
@@ -3848,7 +3833,7 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
           }
           
           //- rjf: if this RDI is necessary, but we do not have it => wait for it forever
-          if(rdi == &rdi_parsed_nil && rdi_is_necessary) ProfScope("RDI is necessary -> wait")
+          if(rdi_is_pending && rdi_is_necessary) ProfScope("RDI is necessary -> wait")
           {
             rdi = di_rdi_from_key(scope->access, dbgi_key, 1, max_U64);
           }
@@ -3909,6 +3894,14 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
     ctx->dbg_infos_count  = eval_dbg_infos_count;
     ctx->primary_dbg_info = eval_dbg_infos_primary;
     ctx->dbg_info_from_name_map = eval_dbg_info_from_name_map;
+    ctx->debug_info_match_endt_us = max_U64;
+    ctx->debug_info_match_scope = push_array(arena, DI_KeyArray, 1);
+    ctx->debug_info_match_scope->count = eval_dbg_infos_count;
+    ctx->debug_info_match_scope->v = push_array(arena, DI_Key, eval_dbg_infos_count);
+    for EachIndex(idx, eval_dbg_infos_count)
+    {
+      ctx->debug_info_match_scope->v[idx] = eval_dbg_infos[idx].dbgi_key;
+    }
     
     //- rjf: fill modules
     ctx->modules        = eval_modules;
@@ -6864,7 +6857,7 @@ d_call_stack_tree_artifact_create(String8 key, B32 *cancel_signal, AC_Status *st
       D_CallStackTreeNode *thread_node = tree->root;
       for EachIndex(frame_idx, call_stack.frames_count)
       {
-        U64 vaddr = arch_ip_from_reg_block(arch_info, call_stack.frames[frame_idx].regs);
+        U64 vaddr = call_stack.frames[frame_idx].lookup_vaddr;
         U64 depth = call_stack.frames[frame_idx].inline_depth;
         D_CallStackTreeNode *next_node = &d_call_stack_tree_node_nil;
         for(D_CallStackTreeNode *child = thread_node->first; child != &d_call_stack_tree_node_nil; child = child->next)
