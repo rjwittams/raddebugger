@@ -1227,9 +1227,8 @@ e_value_eval_from_eval(E_Eval eval)
       Rng1U64 value_vaddr_range = r1u64(eval.value.u64, eval.value.u64 + type_byte_size);
       MemoryZeroStruct(&eval.value);
       E_SpaceRangeInfo range_info = {0};
-      if(!e_type_key_match(type_key, e_type_key_zero()) &&
-         type_byte_size <= sizeof(E_Value) &&
-         e_space_read(eval.space, &eval.value, &range_info, value_vaddr_range))
+      B32 can_read_value = (!e_type_key_match(type_key, e_type_key_zero()) && type_byte_size <= sizeof(E_Value));
+      if(can_read_value && e_space_read(eval.space, &eval.value, &range_info, value_vaddr_range))
       {
         eval.irtree.mode = E_Mode_Value;
         
@@ -1259,11 +1258,10 @@ e_value_eval_from_eval(E_Eval eval)
           case E_TypeKind_S32: {eval.value.s64 = (S64)*((S32 *)&eval.value.u64);}break;
         }
       }
-      else if((range_info.flags & E_SpaceRangeFlag_AnyByteBad) &&
-              e_space_match(eval.space, e_interpret_ctx->reg_space))
+      else if(can_read_value)
       {
         MemoryZeroStruct(&eval.value);
-        eval.code = E_InterpretationCode_BadRegRead;
+        eval.code = e_space_match(eval.space, e_interpret_ctx->reg_space) ? E_InterpretationCode_BadRegRead : E_InterpretationCode_BadMemRead;
       }
     }
   }
