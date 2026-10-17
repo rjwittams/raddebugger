@@ -3486,6 +3486,7 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
       
       // rjf: open debug info
       DI_Key initial_dbgi_key = di_key_from_path_timestamp(initial_debug_info_path, debug_info_timestamp);
+      out_evt2->dbg_info_key = initial_dbgi_key;
       di_open(initial_dbgi_key);
       scratch_end(scratch2);
     }break;
@@ -3493,11 +3494,24 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
     //- rjf: exit process
     case DMN_EventKind_ExitProcess:
     {
+      D_Handle process_handle = d_handle_from_dmn(D_MachineID_Local, event->process);
+      D_Entity *process = d_entity_from_handle(process_handle);
+      for(D_Entity *module = process->first; module != &d_entity_nil; module = module->next)
+      {
+        if(module->kind == D_EntityKind_Module)
+        {
+          d_module_info_evict(module->handle);
+          di_close(d_dbgi_key_from_module(module), 0);
+        }
+      }
       D_Event *out_evt = d_event_list_push(scratch.arena, &evts);
       out_evt->kind       = D_EventKind_EndProc;
       out_evt->msg_id     = msg->msg_id;
-      out_evt->entity     = d_handle_from_dmn(D_MachineID_Local, event->process);
+      out_evt->entity     = process_handle;
       out_evt->u64_code   = event->code;
+      // Distinguish an observed exit from synthetic removal after detach.
+      out_evt->cause      = event->process_detached ? D_EventCause_Null : D_EventCause_Finished;
+      out_evt->entity_id  = process->id;
       d_ctrl_state->process_counter -= 1;
     }break;
     
@@ -4600,6 +4614,7 @@ d_ctrl_thread__open_crash_dump(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       evt->entity     = module_handle;
       evt->parent     = process;
       evt->timestamp  = debug_info_timestamp;
+      evt->dbg_info_key = initial_dbgi_key;
       evt->string     = initial_debug_info_path;
     }
   }
