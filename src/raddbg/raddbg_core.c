@@ -16597,6 +16597,12 @@ rd_frame(void)
 #undef Opt
               }
               
+              RD_ViewState *vs = rd_view_state_from_cfg(view);
+              String8 current_query_cmd_name = cmd->first->string;
+              B32 same_query = str8_match(current_query_cmd_name, cmd_name, 0);
+              B32 focus_query = (!is_floating && !rd_setting_b32_from_name(s("repeat_query_closes_input")));
+              B32 reactivate_query = (focus_query && same_query && vs->query_is_open);
+
               // rjf: choose initial input string
               String8 initial_input = {0};
               if(cmd_name.size != 0)
@@ -16613,20 +16619,18 @@ rd_frame(void)
                   initial_input = current_path_string;
                   initial_input = push_str8f(scratch.arena, "%S/", initial_input);
                 }
-                else if(cmd_kind_info->query.flags & RD_QueryFlag_KeepOldInput)
+                else if(reactivate_query || cmd_kind_info->query.flags & RD_QueryFlag_KeepOldInput)
                 {
                   initial_input = input->first->string;
                 }
               }
               
               // rjf: build query state
-              String8 current_query_cmd_name = cmd->first->string;
               cfg_node_new_replace(rd_state->cfg, input, initial_input);
               cfg_node_new_replace(rd_state->cfg, cmd, cmd_name);
-              RD_ViewState *vs = rd_view_state_from_cfg(view);
               if(cmd_name.size != 0)
               {
-                if(!vs->query_is_open && cmd_kind_info->query.flags & RD_QueryFlag_SelectOldInput)
+                if(reactivate_query || (!vs->query_is_open && cmd_kind_info->query.flags & RD_QueryFlag_SelectOldInput))
                 {
                   vs->query_cursor = input->first->string.size;
                   vs->query_mark = 0;
@@ -16636,7 +16640,7 @@ rd_frame(void)
                   vs->query_cursor = input->first->string.size;
                   vs->query_mark = vs->query_cursor;
                 }
-                if(!str8_match(current_query_cmd_name, cmd_name, 0))
+                if(focus_query || !same_query)
                 {
                   vs->query_is_open = 1;
                 }
