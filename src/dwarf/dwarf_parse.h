@@ -162,6 +162,7 @@ struct DW2_ParseCtx
   U64 unit_base_addr;
   U64 unit_base_info_off;
   DW2_AbbrevMap *abbrev_map;
+  DW2_OffsetTableSet *offset_tables;
   DW2_OffsetTable *rnglists_table;
   DW2_OffsetTable *str_offsets_table;
   DW2_OffsetTable *addr_table;
