@@ -793,7 +793,8 @@ rb_thread_entry_point(void *p)
       RDIM_BakeParamsNode *first_rdi_bake_params = 0;
       RDIM_BakeParamsNode *last_rdi_bake_params = 0;
       {
-        //- PE/ELF/Mach-O inputs w/ DWARF => DWARF -> RDI conversion
+        //- rjf: PE inputs w/ DWARF, or ELF inputs => DWARF -> RDI conversion
+        // Mach-O DWARF inputs use the same conversion path.
         B32 pe_w_dwarf = rb_file_list_has_format_flags(&input_files_from_format_table[RB_FileFormat_PE],
                                                        RB_FileFormatFlag_HasDWARF);
         B32 elf_w_dwarf = (input_files_from_format_table[RB_FileFormat_ELF32].count != 0 ||
