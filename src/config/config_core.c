@@ -334,6 +334,11 @@ cfg_string_from_tree(Arena *arena, CFG_SchemaTable *schema_table, String8 root_p
             {
               String8 path_absolute = c->string;
               String8 path_relative = path_relative_dst_from_absolute_dst_src(arena, path_absolute, root_path);
+              // Keep an explicit directory distinct from an unset path.
+              if(path_absolute.size != 0 && path_relative.size == 0)
+              {
+                path_relative = str8_lit("./");
+              }
               c_serialized_string = path_relative;
             }
             else if(str8_match(c_schema->first->string, str8_lit("path_pt"), 0))
