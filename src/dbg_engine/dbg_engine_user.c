@@ -1699,7 +1699,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
               source_step_stop = event;
               // If constructing the continuation fails, report this stop.
               // Do not defer a retry after exposing it to the user.
-              d_cmd(d_user_state->ctrl_source_step_kind, .thread = event->entity, .retry_idx = 100);
+              d_cmd(d_user_state->ctrl_source_step_kind, .thread = event->entity, .retry_idx = D_STEP_TRAP_NET_RETRY_LIMIT);
             }
           }
           d_user_state->ctrl_source_step_kind = D_CmdKind_Null;
@@ -2119,7 +2119,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
               run_flags  = 0;
               run_traps  = trap_net.traps;
             }
-            else if(!good_trap_net && params->retry_idx < 100)
+            else if(!good_trap_net && params->retry_idx < D_STEP_TRAP_NET_RETRY_LIMIT)
             {
               D_CmdParams params_copy = *params;
               params_copy.retry_idx += 1;
