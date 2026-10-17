@@ -1864,6 +1864,31 @@ d_info_from_module(Access *access, D_Handle module)
   return result;
 }
 
+internal D_SymbolName
+d_symbol_name_from_module_voff(Arena *arena, Access *access, D_Handle module, RDI_Parsed *rdi, U64 voff)
+{
+  D_SymbolName result = {0};
+  RDI_Symbol *procedure = rdi_procedure_from_voff(rdi, voff);
+  result.name = fully_qualified_str8_from_rdi_symbol(arena, rdi, procedure);
+  if(result.name.size != 0)
+  {
+    result.kind = D_SymbolNameKind_DebugInfo;
+    result.voff = rdi_first_voff_from_procedure(rdi, procedure);
+  }
+  else
+  {
+    D_ModuleInfo *info = d_info_from_module(access, module);
+    MachO_CodeSymbol *symbol = macho_code_symbol_from_voff(info->macho_code_symbols, voff);
+    if(symbol != 0)
+    {
+      result.kind = D_SymbolNameKind_SymbolTable;
+      result.name = str8_copy(arena, symbol->name);
+      result.voff = symbol->voff;
+    }
+  }
+  return result;
+}
+
 internal U64
 d_entry_point_voff_from_module(D_Handle module_handle)
 {
@@ -1893,6 +1918,44 @@ d_initial_debug_info_path_from_module(Arena *arena, D_Handle module_handle)
 
 ////////////////////////////////
 //~ rjf: Unwinding Functions
+
+internal String8
+d_macho_unwind_info_data_from_module(Arena *arena, D_Handle module_handle)
+{
+  Access *access = access_open();
+  String8 result = str8_copy(arena, d_info_from_module(access, module_handle)->macho_unwind_info_data);
+  access_close(access);
+  return result;
+}
+
+internal Rng1U64
+d_macho_function_start_voff_range_from_module_voff(D_Handle module_handle, U64 voff)
+{
+  Rng1U64 result = {0};
+  Access *access = access_open();
+  U64Array starts = d_info_from_module(access, module_handle)->macho_function_start_voffs;
+  if(starts.count != 0 && starts.v[0] <= voff)
+  {
+    U64 min_idx = 0;
+    U64 opl_idx = starts.count;
+    for(; min_idx + 1 < opl_idx;)
+    {
+      U64 mid_idx = (min_idx + opl_idx)/2;
+      if(starts.v[mid_idx] <= voff)
+      {
+        min_idx = mid_idx;
+      }
+      else
+      {
+        opl_idx = mid_idx;
+      }
+    }
+    result.min = starts.v[min_idx];
+    result.max = (min_idx + 1 < starts.count) ? starts.v[min_idx + 1] : max_U64;
+  }
+  access_close(access);
+  return result;
+}
 
 internal String8
 d_eh_frame_hdr_from_eh_frame(Arena *arena, String8 eh_frame_data, U64 eh_frame_vaddr, Arch arch, EH_PtrCtx *eh_ptr_ctx, B32 require_terminator)
@@ -2010,6 +2073,227 @@ d_eh_frame_hdr_from_elf_process(Arena *arena, D_Handle process, U64 base_vaddr, 
     }
   }
   scratch_end(scratch);
+  return result;
+}
+
+internal U64 *
+d_unwind_reg_from_macho_reg__macho_x64(X64_RegBlock *regs, MachO_UnwindX64Reg macho_reg)
+{
+  local_persist U64 dummy = {0};
+  U64 *result = &dummy;
+  switch(macho_reg)
+  {
+    case MachO_UnwindX64Reg_Null:{}break;
+    case MachO_UnwindX64Reg_RBX:{result = &regs->rbx;}break;
+    case MachO_UnwindX64Reg_R12:{result = &regs->r12;}break;
+    case MachO_UnwindX64Reg_R13:{result = &regs->r13;}break;
+    case MachO_UnwindX64Reg_R14:{result = &regs->r14;}break;
+    case MachO_UnwindX64Reg_R15:{result = &regs->r15;}break;
+    case MachO_UnwindX64Reg_RBP:{result = &regs->rbp;}break;
+  }
+  return result;
+}
+
+internal B32
+d_macho_compact_unwind_x64_mode_is_supported(U32 encoding)
+{
+  B32 result = 0;
+  switch(encoding & MACHO_UNWIND_X64_MODE_MASK)
+  {
+    case MACHO_UNWIND_X64_MODE_RBP_FRAME:
+    case MACHO_UNWIND_X64_MODE_STACK_IMMD:
+    case MACHO_UNWIND_X64_MODE_STACK_IND:
+    {
+      result = 1;
+    }break;
+  }
+  return result;
+}
+
+internal B32
+d_macho_compact_unwind_x64_frameless_stack_size_from_encoding(D_Handle process_handle, U64 module_base_vaddr, MachO_UnwindInfoLookupResult *lookup, B32 *is_stale_out, U64 endt_us, U64 *stack_size_out)
+{
+  B32 result = 0;
+  U32 encoding = lookup->encoding;
+  switch(encoding & MACHO_UNWIND_X64_MODE_MASK)
+  {
+    case MACHO_UNWIND_X64_MODE_STACK_IMMD:
+    {
+      *stack_size_out = ((encoding & MACHO_UNWIND_X64_FRAMELESS_STACK_SIZE) >> 16)*8;
+      result = 1;
+    }break;
+    case MACHO_UNWIND_X64_MODE_STACK_IND:
+    {
+      U64 stack_size_imm_voff = lookup->voff_range.min + ((encoding & MACHO_UNWIND_X64_FRAMELESS_STACK_SIZE) >> 16);
+      U64 stack_adjust = ((encoding & MACHO_UNWIND_X64_FRAMELESS_STACK_ADJUST) >> 13);
+      U32 stack_size_imm = 0;
+      if(d_process_memory_read_struct(process_handle, module_base_vaddr + stack_size_imm_voff, is_stale_out, &stack_size_imm, endt_us) &&
+         !*is_stale_out)
+      {
+        *stack_size_out = stack_size_imm + stack_adjust*8;
+        result = 1;
+      }
+    }break;
+  }
+  return result;
+}
+
+internal B32
+d_macho_compact_unwind_x64_cfa_from_encoding(D_Handle process_handle, U64 module_base_vaddr, MachO_UnwindInfoLookupResult *lookup, X64_RegBlock *regs, B32 *is_stale_out, U64 endt_us, U64 *cfa_out)
+{
+  B32 result = 0;
+  switch(lookup->encoding & MACHO_UNWIND_X64_MODE_MASK)
+  {
+    case MACHO_UNWIND_X64_MODE_RBP_FRAME:
+    {
+      *cfa_out = regs->rbp + 16;
+      result = 1;
+    }break;
+    case MACHO_UNWIND_X64_MODE_STACK_IMMD:
+    case MACHO_UNWIND_X64_MODE_STACK_IND:
+    {
+      U64 stack_size = 0;
+      if(d_macho_compact_unwind_x64_frameless_stack_size_from_encoding(process_handle, module_base_vaddr, lookup, is_stale_out, endt_us, &stack_size))
+      {
+        *cfa_out = regs->rsp + stack_size;
+        result = 1;
+      }
+    }break;
+  }
+  return result;
+}
+
+internal D_UnwindStepResult
+d_unwind_step__macho_x64(D_Handle process_handle, D_Handle module_handle, U64 module_base_vaddr, U64 lookup_pc, X64_RegBlock *regs, U8 *reg_valid, U64 endt_us)
+{
+  U8 caller_valid[sizeof(*regs)];
+  uwnd_reg_valid_from_abi(Arch_x64, OperatingSystem_Mac, reg_valid, caller_valid);
+  B32 is_stale = 0;
+  B32 is_good = 1;
+  Temp scratch = scratch_begin(0, 0);
+  U64 rip_voff = lookup_pc - module_base_vaddr;
+  String8 unwind_info_data = d_macho_unwind_info_data_from_module(scratch.arena, module_handle);
+  MachO_UnwindInfoLookupResult lookup = {0};
+  if(!macho_unwind_info_lookup(unwind_info_data, rip_voff, &lookup))
+  {
+    is_good = 0;
+  }
+  if(is_good) switch(lookup.encoding & MACHO_UNWIND_X64_MODE_MASK)
+  {
+    case MACHO_UNWIND_X64_MODE_RBP_FRAME:
+    {
+      if(!uwnd_reg_is_valid(Arch_x64, reg_valid, X64_RegCode_rbp)) {is_good = 0; break;}
+      U64 rbp = regs->rbp;
+      U64 saved_rbp = 0;
+      U64 saved_rip = 0;
+      if(!d_process_memory_read_struct(process_handle, rbp, &is_stale, &saved_rbp, endt_us) ||
+         !d_process_memory_read_struct(process_handle, rbp + 8, &is_stale, &saved_rip, endt_us) ||
+         is_stale)
+      {
+        is_good = 0;
+        break;
+      }
+      U64 saved_regs = rbp - ((lookup.encoding & MACHO_UNWIND_X64_RBP_FRAME_OFFSET) >> 16)*8;
+      U32 saved_regs_locations = (lookup.encoding & MACHO_UNWIND_X64_RBP_FRAME_REGISTERS);
+      for(U32 idx = 0; idx < 5; idx += 1)
+      {
+        MachO_UnwindX64Reg macho_reg = (MachO_UnwindX64Reg)(saved_regs_locations & 0x7);
+        if(macho_reg == MachO_UnwindX64Reg_RBP || macho_reg > MachO_UnwindX64Reg_R15)
+        {
+          is_good = 0;
+          break;
+        }
+        else if(macho_reg != MachO_UnwindX64Reg_Null)
+        {
+          U64 value = 0;
+          U64 addr = saved_regs + idx*8;
+          if(!d_process_memory_read_struct(process_handle, addr, &is_stale, &value, endt_us) ||
+             is_stale)
+          {
+            is_good = 0;
+            break;
+          }
+          U64 *reg = d_unwind_reg_from_macho_reg__macho_x64(regs, macho_reg);
+          *reg = value;
+          U64 off = (U8 *)reg - (U8 *)regs;
+          uwnd_reg_set_valid(caller_valid, r1u16(off, off+8), 1);
+        }
+        saved_regs_locations >>= 3;
+      }
+      if(is_good)
+      {
+        regs->rbp = saved_rbp;
+        uwnd_reg_mark_valid(Arch_x64, caller_valid, X64_RegCode_rbp, 0);
+        regs->rip = saved_rip;
+        regs->rsp = rbp + 16;
+      }
+    }break;
+    case MACHO_UNWIND_X64_MODE_STACK_IMMD:
+    case MACHO_UNWIND_X64_MODE_STACK_IND:
+    {
+      if(!uwnd_reg_is_valid(Arch_x64, reg_valid, X64_RegCode_rsp)) {is_good = 0; break;}
+      U64 stack_size = 0;
+      U32 reg_count = ((lookup.encoding & MACHO_UNWIND_X64_FRAMELESS_STACK_REG_COUNT) >> 10);
+      U32 permutation = (lookup.encoding & MACHO_UNWIND_X64_FRAMELESS_STACK_REG_PERMUTATION);
+      U32 regs_saved[6] = {0};
+      if(!d_macho_compact_unwind_x64_frameless_stack_size_from_encoding(process_handle, module_base_vaddr, &lookup, &is_stale, endt_us, &stack_size) ||
+         stack_size < 8 + reg_count*8 ||
+         !macho_unwind_x64_saved_regs_from_permutation(reg_count, permutation, regs_saved))
+      {
+        is_good = 0;
+        break;
+      }
+      U64 saved_regs = regs->rsp + stack_size - 8 - reg_count*8;
+      for(U32 idx = 0; idx < reg_count; idx += 1)
+      {
+        MachO_UnwindX64Reg macho_reg = (MachO_UnwindX64Reg)regs_saved[idx];
+        if(macho_reg == MachO_UnwindX64Reg_Null || macho_reg > MachO_UnwindX64Reg_RBP)
+        {
+          is_good = 0;
+          break;
+        }
+        U64 value = 0;
+        U64 addr = saved_regs + idx*8;
+        if(!d_process_memory_read_struct(process_handle, addr, &is_stale, &value, endt_us) ||
+           is_stale)
+        {
+          is_good = 0;
+          break;
+        }
+        U64 *reg = d_unwind_reg_from_macho_reg__macho_x64(regs, macho_reg);
+        *reg = value;
+        U64 off = (U8 *)reg - (U8 *)regs;
+        uwnd_reg_set_valid(caller_valid, r1u16(off, off+8), 1);
+      }
+      if(is_good)
+      {
+        U64 return_addr_location = saved_regs + reg_count*8;
+        U64 saved_rip = 0;
+        if(!d_process_memory_read_struct(process_handle, return_addr_location, &is_stale, &saved_rip, endt_us) ||
+           is_stale)
+        {
+          is_good = 0;
+          break;
+        }
+        regs->rip = saved_rip;
+        regs->rsp = return_addr_location + 8;
+      }
+    }break;
+    default:
+    {
+      is_good = 0;
+    }break;
+  }
+  if(is_good && !is_stale)
+  {
+    uwnd_reg_mark_valid(Arch_x64, caller_valid, X64_RegCode_rip, 0);
+    uwnd_reg_mark_valid(Arch_x64, caller_valid, X64_RegCode_rsp, 0);
+    MemoryCopy(reg_valid, caller_valid, sizeof(*regs));
+  }
+  scratch_end(scratch);
+  D_UnwindStepResult result = {0};
+  if(!is_good) {result.flags |= D_UnwindFlag_Error;}
+  if(is_stale) {result.flags |= D_UnwindFlag_Stale;}
   return result;
 }
 
@@ -2131,16 +2415,66 @@ d_unwind_from_thread(Arena *arena, D_Handle thread, U64 endt_us)
       //- rjf: do one unwind step
       B32 step_is_good = 0;
       B32 caller_is_interrupted = 0;
-      B32 stop_after_step = 0;
-      for(;!unwind.flags && !step_is_good && !stop_after_step;)
+      for(;!unwind.flags && !step_is_good;)
       {
         // rjf: remember registers pre-step
         MemoryCopy(regs_block_restore, regs_block, arch_reg_block_size);
         MemoryCopy(reg_valid_restore, reg_valid, arch_reg_block_size);
         
+        // Try Mach-O compact unwind first on macOS x64, then fall
+        // back to the generic unwinder path.
         U64 cfa = 0;
         UWND_Unwinder step_unwinder = unwinder;
         UWND_ModuleInfo step_unwinder_module_info = unwinder_module_info;
+        EH_UWND_ModuleUnwindInfo compact_dwarf_unwind_info = {0};
+        if(process_entity->os == OperatingSystem_Mac &&
+           arch == Arch_x64 &&
+           module_info->macho_unwind_info_data.size != 0)
+        {
+          X64_RegBlock *regs_x64 = regs_block;
+          MachO_UnwindInfoLookupResult lookup = {0};
+          B32 compact_is_stale = 0;
+          B32 compact_lookup_good = macho_unwind_info_lookup(module_info->macho_unwind_info_data, lookup_pc - module_entity->vaddr_range.min, &lookup);
+          B32 compact_dwarf = (compact_lookup_good &&
+                               (lookup.encoding & MACHO_UNWIND_X64_MODE_MASK) == MACHO_UNWIND_X64_MODE_DWARF);
+          B32 compact_supported = compact_lookup_good && d_macho_compact_unwind_x64_mode_is_supported(lookup.encoding);
+          B32 compact_cfa_good = compact_supported && d_macho_compact_unwind_x64_cfa_from_encoding(process_entity->handle, module_entity->vaddr_range.min, &lookup, regs_x64, &compact_is_stale, endt_us, &cfa);
+          if(compact_is_stale)
+          {
+            unwind.flags |= D_UnwindFlag_Stale;
+          }
+          else if(compact_dwarf)
+          {
+            EH_UWND_ModuleUnwindInfo *eh_unwind_info = (module_info->unwinder == UWND_Unwinder_EHFrame ? (EH_UWND_ModuleUnwindInfo *)module_info->unwind_info : 0);
+            if(eh_unwind_info != 0 && eh_unwind_info->eh_frame_vaddr != 0)
+            {
+              compact_dwarf_unwind_info = *eh_unwind_info;
+              compact_dwarf_unwind_info.override_fde_vaddr = eh_unwind_info->eh_frame_vaddr + (lookup.encoding & MACHO_UNWIND_X64_DWARF_SECTION_OFFSET);
+              step_unwinder = UWND_Unwinder_EHFrame;
+              step_unwinder_module_info.unwind_info = &compact_dwarf_unwind_info;
+            }
+          }
+          else if(compact_lookup_good &&
+                  compact_supported &&
+                  compact_cfa_good)
+          {
+            D_UnwindStepResult step = d_unwind_step__macho_x64(process_entity->handle, module_entity->handle, module_entity->vaddr_range.min, lookup_pc, regs_x64, reg_valid, endt_us);
+            if(step.flags == 0)
+            {
+              last_frame_node->v.cfa = cfa;
+              step_is_good = 1;
+            }
+            else if(step.flags & D_UnwindFlag_Stale)
+            {
+              unwind.flags |= D_UnwindFlag_Stale;
+            }
+            else
+            {
+              MemoryCopy(regs_block, regs_block_restore, arch_reg_block_size);
+              MemoryCopy(reg_valid, reg_valid_restore, arch_reg_block_size);
+            }
+          }
+        }
         if(!unwind.flags && !step_is_good)
         {
           // rjf: try step
@@ -3320,19 +3654,218 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
       D_Handle module_handle = d_handle_from_dmn(D_MachineID_Local, event->module);
       String8 module_path = path_normalized_from_string(scratch2.arena, event->string);
       U64 exe_timestamp = properties_from_file_path(module_path).modified;
+      Arch macho_arch = Arch_Null;
+      Guid macho_guid = {0};
       DMN_ModuleInfo *module_info = event->module_info;
       U64 base_vaddr = event->address;
       
       //- rjf: allocate / set up basic per-module info
       Arena *arena = arena_alloc();
+      String8 macho_unwind_info_data = {0};
+      U64Array macho_function_start_voffs = {0};
+      MachO_CodeSymbolArray code_symbols = {0};
+      EH_UWND_ModuleUnwindInfo *synthesized_eh_unwind_info = 0;
+      DMN_ModuleInfo synthesized_module_info = {0};
+      B32 is_macho_module = 0;
+      if(module_info == 0 || module_info == &dmn_module_info_nil)
+      {
+        module_info = &synthesized_module_info;
+        module_info->module_path = str8_copy(arena, module_path);
+        module_info->debug_info_path = str8_copy(arena, module_path);
+        module_info->vsize = event->size;
+        U32 magic = 0;
+        if(d_process_read_struct(process_handle, base_vaddr, &magic) == sizeof(magic) &&
+           macho_magic_is_supported(magic))
+        {
+          is_macho_module = 1;
+          module_info->debug_info_path = str8_zero();
+          U64 header_size = macho_header_size_from_magic(magic);
+          MachO_Header64 header = {0};
+          if(header_size != 0 &&
+             d_process_read(process_handle, r1u64(base_vaddr, base_vaddr + header_size), &header) == header_size &&
+             header.load_commands_size < MB(16))
+          {
+            U64 data_size = header_size + header.load_commands_size;
+            U8 *data_bytes = push_array(scratch2.arena, U8, data_size);
+            if(d_process_read(process_handle, r1u64(base_vaddr, base_vaddr + data_size), data_bytes) == data_size)
+            {
+              String8 data = str8(data_bytes, data_size);
+              MachO_Bin bin = macho_bin_from_data(scratch2.arena, data);
+              Arch arch = arch_from_macho_cpu_type(bin.header.cpu_type);
+              macho_arch = arch;
+              macho_guid = macho_guid_from_uuid(macho_uuid_from_bin(data, &bin));
+              U64 file_base_vaddr = macho_base_vaddr_from_bin(data, &bin);
+              U64 slide = base_vaddr - file_base_vaddr;
+              // Read the loaded image's tables so architecture, image identity
+              // and lifetime match the module, including images not on disk.
+              Rng1U64 symbols_range = {0}, strings_range = {0};
+              if(macho_symbol_table_vranges(data, &bin, slide, &symbols_range, &strings_range) &&
+                 dim_1u64(symbols_range) <= MB(16) && dim_1u64(strings_range) <= MB(64))
+              {
+                String8 symbols = d_data_from_process_vaddr_range(scratch2.arena, process_handle, symbols_range, 0);
+                String8 strings = d_data_from_process_vaddr_range(scratch2.arena, process_handle, strings_range, 0);
+                if(symbols.size == dim_1u64(symbols_range) && strings.size == dim_1u64(strings_range))
+                {
+                  code_symbols = macho_code_symbols(arena, data, &bin, symbols, strings);
+                }
+              }
+              // Large shared-cache string pools exceed the read limit above.
+              // This fallback needs an on-disk image matching the UUID and CPU;
+              // it cannot recover symbols for cache-only images.
+              if(code_symbols.count == 0)
+              {
+                FileProperties props = properties_from_file_path(module_path);
+                if(props.size != 0 && props.size <= MB(64))
+                {
+                  String8 file_data = data_from_file_path(scratch2.arena, module_path);
+                  code_symbols = macho_code_symbols_from_matching_file(arena, file_data, &bin.header, macho_uuid_from_bin(data, &bin));
+                }
+              }
+              U64 text_vaddr = 0;
+              Rng1U64 eh_frame_vrange = {0};
+              Rng1U64 unwind_info_vrange = {0};
+              Rng1U64 function_starts_vrange = {0};
+              macho_linkedit_data_vrange_from_bin(data, &bin, MACHO_LC_FUNCTION_STARTS, slide, &function_starts_vrange);
+              module_info->arch = arch;
+              MachO_UUID loaded_uuid = macho_uuid_from_bin(data, &bin);
+              File image_file = file_open(AccessFlag_Read|AccessFlag_ShareRead, module_path);
+              if(macho_file_matches_image(image_file, arch, loaded_uuid))
+              {
+                module_info->debug_info_path = str8_copy(arena, module_path);
+              }
+              file_close(image_file);
+              String8 dsym_path = macho_dsym_path_from_executable_path(scratch2.arena, module_path);
+              FileProperties dsym_props = properties_from_file_path(dsym_path);
+              if(dsym_props.modified != 0 && dsym_props.size != 0)
+              {
+                File dsym_file = file_open(AccessFlag_Read|AccessFlag_ShareRead, dsym_path);
+                if(macho_file_matches_image(dsym_file, arch, loaded_uuid))
+                {
+                  module_info->debug_info_path = str8_copy(arena, dsym_path);
+                }
+                else
+                {
+                  log_infof("Ignoring companion dSYM %S: UUID or architecture does not match loaded image %S\n", dsym_path, module_path);
+                }
+                file_close(dsym_file);
+              }
+              for EachIndex(idx, bin.load_commands.count)
+              {
+                MachO_LoadCommandInfo *info = &bin.load_commands.v[idx];
+                if(info->cmd == MACHO_LC_MAIN && info->offset + sizeof(MachO_EntryPointCommand) <= data.size)
+                {
+                  MachO_EntryPointCommand command = {0};
+                  str8_deserial_read_struct(data, info->offset, &command);
+                  for EachIndex(seg_idx, bin.load_commands.count)
+                  {
+                    MachO_LoadCommandInfo *seg_info = &bin.load_commands.v[seg_idx];
+                    if(seg_info->cmd == MACHO_LC_SEGMENT_64 && seg_info->offset + sizeof(MachO_SegmentCommand64) <= data.size)
+                    {
+                      MachO_SegmentCommand64 segment = {0};
+                      str8_deserial_read_struct(data, seg_info->offset, &segment);
+                      Rng1U64 segment_file_range = r1u64(segment.fileoff, segment.fileoff + segment.filesize);
+                      if(contains_1u64(segment_file_range, command.entryoff))
+                      {
+                        module_info->entry_point_voff = (segment.vmaddr + command.entryoff - segment.fileoff) - file_base_vaddr;
+                        break;
+                      }
+                    }
+                  }
+                }
+                else if(info->cmd == MACHO_LC_SEGMENT_64 && info->offset + sizeof(MachO_SegmentCommand64) <= data.size)
+                {
+                  MachO_SegmentCommand64 segment = {0};
+                  str8_deserial_read_struct(data, info->offset, &segment);
+                  String8 segment_name = macho_string_from_fixed_name(segment.segment_name, sizeof(segment.segment_name));
+                  if(str8_match(segment_name, str8_lit("__TEXT"), 0))
+                  {
+                    text_vaddr = slide + segment.vmaddr;
+                  }
+                  U64 section_array_off = info->offset + sizeof(segment);
+                  U64 section_array_opl = section_array_off + (U64)segment.section_count*sizeof(MachO_Section64);
+                  if(section_array_opl <= info->offset + info->cmd_size && section_array_opl <= data.size)
+                  {
+                    for(U64 section_idx = 0; section_idx < segment.section_count; section_idx += 1)
+                    {
+                      MachO_Section64 section = {0};
+                      str8_deserial_read_struct(data, section_array_off + section_idx*sizeof(section), &section);
+                      String8 section_name = macho_string_from_fixed_name(section.section_name, sizeof(section.section_name));
+                      String8 section_segment_name = macho_string_from_fixed_name(section.segment_name, sizeof(section.segment_name));
+                      if(str8_match(section_name, str8_lit("__eh_frame"), 0) &&
+                         str8_match(section_segment_name, str8_lit("__TEXT"), 0) &&
+                         section.size != 0)
+                      {
+                        eh_frame_vrange = r1u64(slide + section.addr, slide + section.addr + section.size);
+                      }
+                      else if(str8_match(section_name, str8_lit("__unwind_info"), 0) &&
+                              str8_match(section_segment_name, str8_lit("__TEXT"), 0) &&
+                              section.size != 0)
+                      {
+                        unwind_info_vrange = r1u64(slide + section.addr, slide + section.addr + section.size);
+                      }
+                    }
+                  }
+                }
+              }
+              if(unwind_info_vrange.max > unwind_info_vrange.min)
+              {
+                macho_unwind_info_data = d_data_from_process_vaddr_range(arena, process_handle, unwind_info_vrange, 0);
+              }
+              if(function_starts_vrange.max > function_starts_vrange.min)
+              {
+                String8 function_starts_data = d_data_from_process_vaddr_range(arena, process_handle, function_starts_vrange, 0);
+                if(function_starts_data.size == dim_1u64(function_starts_vrange))
+                {
+                  macho_function_start_voffs = macho_function_start_voffs_from_base_vaddr_data(arena, file_base_vaddr, text_vaddr - slide, function_starts_data);
+                }
+              }
+              if(eh_frame_vrange.max > eh_frame_vrange.min)
+              {
+                String8 eh_frame_data = d_data_from_process_vaddr_range(arena, process_handle, eh_frame_vrange, 0);
+                EH_PtrCtx eh_ptr_ctx = {0};
+                eh_ptr_ctx.pc_vaddr = eh_frame_vrange.min;
+                eh_ptr_ctx.text_vaddr = text_vaddr;
+                eh_ptr_ctx.data_vaddr = eh_frame_vrange.min;
+                eh_ptr_ctx.ptr_align = byte_size_from_arch(arch);
+                synthesized_eh_unwind_info = push_array(arena, EH_UWND_ModuleUnwindInfo, 1);
+                synthesized_eh_unwind_info->ptr_ctx = eh_ptr_ctx;
+                synthesized_eh_unwind_info->eh_frame_vaddr = eh_frame_vrange.min;
+                String8 eh_frame_hdr_data = d_eh_frame_hdr_from_eh_frame(arena, eh_frame_data, eh_frame_vrange.min, arch, &eh_ptr_ctx, 0);
+                if(eh_frame_hdr_data.size != 0)
+                {
+                  synthesized_eh_unwind_info->header = eh_parse_frame_hdr(eh_frame_hdr_data, byte_size_from_arch(arch), &synthesized_eh_unwind_info->ptr_ctx);
+                }
+              }
+            }
+            if(module_path.size != 0)
+            {
+              String8 file_data = data_from_file_path(scratch2.arena, module_path);
+              if(file_data.size != 0)
+              {
+                MachO_Bin file_bin = macho_bin_from_data(scratch2.arena, file_data);
+                if(macho_function_start_voffs.count == 0)
+                {
+                  macho_function_start_voffs = macho_function_start_voffs_from_data(arena, file_data, &file_bin);
+                }
+              }
+            }
+          }
+        }
+      }
       String8 raddbg_data = d_data_from_process_vaddr_range(arena, process_handle, shift_1u64(module_info->raddbg_info_voff_range, base_vaddr), 0);
       
       //- rjf: prepare unwind info
       UWND_Unwinder unwinder = UWND_Unwinder_Null;
       void *unwind_info_opaque = 0;
       {
+        if(synthesized_eh_unwind_info != 0)
+        {
+          unwinder = UWND_Unwinder_EHFrame;
+          unwind_info_opaque = synthesized_eh_unwind_info;
+        }
+        
         //- rjf: PE/x64 unwinder
-        if(dim_1u64(module_info->pe_intel_pdatas_vaddr_range) != 0)
+        else if(dim_1u64(module_info->pe_intel_pdatas_vaddr_range) != 0)
         {
           unwinder = UWND_Unwinder_PEx64;
           PE_X64_UWND_ModuleUnwindInfo *unwind_info = push_array(arena, PE_X64_UWND_ModuleUnwindInfo, 1);
@@ -3378,6 +3911,7 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
       
       //- rjf: compute local symbol server cache path for this debug info
       String8 local_symbol_server_cache_path = smsv_local_debug_info_path_from_key(scratch2.arena, str8_skip_last_slash(module_info->debug_info_path), module_info->debug_info_guid, module_info->debug_info_age);
+      if(is_macho_module) {local_symbol_server_cache_path = str8_zero();}
       
       //- rjf: pick default initial debug info path
       String8 initial_debug_info_path = {0};
@@ -3397,6 +3931,7 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
         }
         
         // rjf: push heuristic-based debug info paths
+        if(!is_macho_module)
         {
           String8 exe_path = module_info->module_path;
           String8 exe_path_no_ext = str8_chop_last_dot(exe_path);
@@ -3448,6 +3983,9 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
         info.entry_point_voff             = module_info->entry_point_voff;
         info.unwinder                     = unwinder;
         info.unwind_info                  = unwind_info_opaque;
+        info.macho_unwind_info_data       = str8_copy(arena, macho_unwind_info_data);
+        info.macho_function_start_voffs   = macho_function_start_voffs;
+        info.macho_code_symbols           = code_symbols;
         info.local_debug_info_path        = initial_debug_info_path;
         info.dbg_name                     = str8_copy(arena, str8_skip_last_slash(module_info->debug_info_path));
         info.dbg_guid                     = module_info->debug_info_guid;
@@ -3471,8 +4009,8 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
       out_evt1->rip_vaddr  = event->address;
       out_evt1->timestamp  = exe_timestamp;
       out_evt1->string     = str8_copy(scratch.arena, module_path);
-      out_evt1->tls_index  = event->module_info->tls_index;
-      out_evt1->tls_offset = event->module_info->tls_offset;
+      out_evt1->tls_index  = module_info->tls_index;
+      out_evt1->tls_offset = module_info->tls_offset;
       
       //- rjf: push initial debug info path set
       D_Event *out_evt2 = d_event_list_push(scratch.arena, &evts);
@@ -3485,7 +4023,7 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
       out_evt2->string     = initial_debug_info_path;
       
       // rjf: open debug info
-      DI_Key initial_dbgi_key = di_key_from_path_timestamp(initial_debug_info_path, debug_info_timestamp);
+      DI_Key initial_dbgi_key = di_key_from_path_timestamp_identity(initial_debug_info_path, debug_info_timestamp, macho_arch, macho_guid);
       out_evt2->dbg_info_key = initial_dbgi_key;
       di_open(initial_dbgi_key);
       scratch_end(scratch2);
@@ -4937,6 +5475,77 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   U64 sp_check_value = d_sp_from_thread(target_thread);
   log_infof("sp_check_value := 0x%I64x\n", sp_check_value);
   
+  //////////////////////////////
+  //- claim pending software-breakpoint stops
+  //
+  // On Darwin, when multiple processes hit the same patched software breakpoint
+  // nearly together, the non-selected tracee may already be stopped just after
+  // the trap instruction when the first breakpoint is reported. Surface that
+  // pending stop before moving any thread for the next run.
+  if(stop_event == 0 && OperatingSystem_CURRENT == OperatingSystem_Mac)
+  {
+    for(D_Entity *machine = entity_ctx->root->first;
+        machine != &d_entity_nil && stop_event == 0;
+        machine = machine->next)
+    {
+      if(machine->kind != D_EntityKind_Machine) { continue; }
+      for(D_Entity *process = machine->first;
+          process != &d_entity_nil && stop_event == 0;
+          process = process->next)
+      {
+        if(process->kind != D_EntityKind_Process) { continue; }
+        DMN_Handle process_dmn = d_dmn_from_handle(process->handle);
+        for(D_Entity *thread = process->first;
+            thread != &d_entity_nil && stop_event == 0;
+            thread = thread->next)
+        {
+          if(thread->kind != D_EntityKind_Thread ||
+             dmn_handle_match(d_dmn_from_handle(thread->handle), target_thread_dmn))
+          {
+            continue;
+          }
+          ARCH_Info *arch_info = arch_info_from_arch(thread->arch);
+          U64 rip = d_ip_from_thread(thread->handle);
+          U64 pc_offset = arch_software_breakpoint_pc_offset(OperatingSystem_CURRENT, thread->arch);
+          U64 breakpoint_vaddr = rip;
+          if(pc_offset <= breakpoint_vaddr)
+          {
+            breakpoint_vaddr -= pc_offset;
+          }
+          if(arch_info->trap_instruction.size != 0)
+          {
+            for(DMN_TrapChunkNode *n = user_traps.first; n != 0 && stop_event == 0; n = n->next)
+            {
+              for(DMN_Trap *trap = n->v, *opl = n->v+n->count; trap < opl; trap += 1)
+              {
+                if(dmn_handle_match(trap->process, process_dmn) && trap->vaddr == breakpoint_vaddr)
+                {
+                  void *regs_block = push_array(scratch.arena, U8, arch_info->reg_block_size);
+                  if(d_thread_read_reg_block(thread->handle, regs_block))
+                  {
+                    arch_reg_block_write_ip(arch_info, regs_block, trap->vaddr);
+                    d_thread_write_reg_block(thread->handle, regs_block);
+                  }
+                  DMN_Event *event = push_array(scratch.arena, DMN_Event, 1);
+                  event->kind = DMN_EventKind_Breakpoint;
+                  event->process = process_dmn;
+                  event->thread = d_dmn_from_handle(thread->handle);
+                  event->arch = thread->arch;
+                  event->instruction_pointer = trap->vaddr;
+                  event->address = trap->vaddr;
+                  event->user_data = trap->id;
+                  stop_event = event;
+                  stop_cause = D_EventCause_UserBreakpoint;
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   //////////////////////////////
   //- rjf: single step "stuck threads"
   //
