@@ -355,6 +355,17 @@ macho_string_from_uuid(Arena *arena, MachO_UUID uuid)
   return result;
 }
 
+internal Guid
+macho_guid_from_uuid(MachO_UUID uuid)
+{
+  Guid result = {0};
+  result.data1 = ((U32)uuid.v[0]<<24) | ((U32)uuid.v[1]<<16) | ((U32)uuid.v[2]<<8) | uuid.v[3];
+  result.data2 = ((U16)uuid.v[4]<<8) | uuid.v[5];
+  result.data3 = ((U16)uuid.v[6]<<8) | uuid.v[7];
+  MemoryCopy(result.data4, uuid.v+8, sizeof(result.data4));
+  return result;
+}
+
 internal String8
 macho_dsym_path_from_executable_path(Arena *arena, String8 executable_path)
 {

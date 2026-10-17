@@ -953,6 +953,7 @@ rb_thread_entry_point(void *p)
                 convert_params.arch = arch_from_macho_cpu_type(bin.header.cpu_type);
                 convert_params.base_vaddr = macho_base_vaddr_from_bin(dbg_data, &bin);
                 convert_params.raw = dw_raw_from_macho_bin(arena, dbg_data, &bin);
+                convert_params.guid = macho_guid_from_uuid(macho_uuid_from_bin(dbg_data, &bin));
                 convert_params.path_style = PathStyle_UnixAbsolute;
                 convert_params.binary_sections = m2r_rdi_binary_sections_from_macho_bin(arena, dbg_data, &bin);
                 scratch_end(scratch);
