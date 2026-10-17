@@ -3271,7 +3271,7 @@ cv2r_convert(Arena *arena, CV2R_ConvertParams *params)
           };
           CV2R_ScopeNode *top_scope_node = 0;
           CV2R_ScopeNode *free_scope_node = 0;
-          RDIM_LineTable *inline_site_line_table = sym_idx > 0 ? units_first_inline_site_line_tables[sym_idx-1] : 0;
+          RDIM_LineTable *inline_site_line_table = units_first_inline_site_line_tables[sym_idx];
           for(CV_RecIter iter = {0}; cv_rec_next(sym->data, &sym->sym_ranges, 0, &iter);)
           {
             switch(iter.kind)
