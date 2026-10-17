@@ -2532,6 +2532,11 @@ mac_dmn_push_event_exception(Arena *arena, DMN_EventList *events, MAC_DMN_Entity
   e->arch = process->arch;
   e->code = signo;
   e->exception_repeated = 1;
+  MAC_DMN_ExceptionMessage *exception = &process->pending_exception;
+  if(exception->is_valid && exception->exception == EXC_BAD_ACCESS && exception->code_count >= 2)
+  {
+    e->address = (U64)exception->code[1];
+  }
   if(thread_entity != 0)
   {
     e->thread = mac_dmn_handle_from_entity(thread_entity);
