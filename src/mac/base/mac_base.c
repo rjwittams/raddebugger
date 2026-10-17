@@ -76,6 +76,50 @@ mac_posix_ipc_name(Arena *arena, String8 name)
   return result;
 }
 
+internal MAC_IPCNameNode *
+mac_ipc_name_node_alloc(String8 name, MAC_IPCNameKind kind)
+{
+  MAC_IPCNameNode *node = 0;
+  DeferLoop(pthread_mutex_lock(&mac_state.entity_mutex),
+            pthread_mutex_unlock(&mac_state.entity_mutex))
+  {
+    node = push_array(mac_state.arena, MAC_IPCNameNode, 1);
+    node->name = push_str8_copy(mac_state.arena, name);
+    node->kind = kind;
+    node->active = 1;
+    SLLQueuePush(mac_state.first_owned_ipc_name, mac_state.last_owned_ipc_name, node);
+  }
+  return node;
+}
+
+internal void
+mac_ipc_name_node_unlink(MAC_IPCNameNode *node)
+{
+  DeferLoop(pthread_mutex_lock(&mac_state.entity_mutex),
+            pthread_mutex_unlock(&mac_state.entity_mutex))
+  {
+    if(node != 0 && node->active)
+    {
+      char *name = (char *)node->name.str;
+      switch(node->kind)
+      {
+        case MAC_IPCNameKind_SharedMemory: { shm_unlink(name); }break;
+        case MAC_IPCNameKind_Semaphore:    { sem_unlink(name); }break;
+      }
+      node->active = 0;
+    }
+  }
+}
+
+internal void
+mac_ipc_name_node_cleanup(void)
+{
+  for(MAC_IPCNameNode *node = mac_state.first_owned_ipc_name; node != 0; node = node->next)
+  {
+    mac_ipc_name_node_unlink(node);
+  }
+}
+
 internal void
 mac_safe_call_sig_handler(int x)
 {
@@ -294,11 +338,34 @@ shared_memory_alloc(U64 size, String8 name)
 {
   Temp scratch = scratch_begin(0, 0);
   String8 name_copy = mac_posix_ipc_name(scratch.arena, name);
-  int id = shm_open((char *)name_copy.str, O_RDWR|O_CREAT, 0666);
+  B32 owns_name = 0;
+  int id = shm_open((char *)name_copy.str, O_RDWR|O_CREAT|O_EXCL, 0666);
+  if(id != -1)
+  {
+    owns_name = 1;
+  }
+  else if(errno == EEXIST)
+  {
+    id = shm_open((char *)name_copy.str, O_RDWR, 0);
+  }
   SharedMemory result = {0};
   if(id != -1 && ftruncate(id, size) != -1)
   {
-    result.u64[0] = (U64)id;
+    MAC_Entity *entity = mac_entity_alloc(MAC_EntityKind_SharedMemory);
+    entity->shared_memory.id = id;
+    if(owns_name)
+    {
+      entity->shared_memory.name_node = mac_ipc_name_node_alloc(name_copy, MAC_IPCNameKind_SharedMemory);
+    }
+    result.u64[0] = (U64)entity;
+  }
+  else if(id != -1)
+  {
+    if(owns_name)
+    {
+      shm_unlink((char *)name_copy.str);
+    }
+    close(id);
   }
   scratch_end(scratch);
   return result;
@@ -313,7 +380,9 @@ shared_memory_open(String8 name)
   SharedMemory result = {0};
   if(id != -1)
   {
-    result.u64[0] = (U64)id;
+    MAC_Entity *entity = mac_entity_alloc(MAC_EntityKind_SharedMemory);
+    entity->shared_memory.id = id;
+    result.u64[0] = (U64)entity;
   }
   scratch_end(scratch);
   return result;
@@ -323,15 +392,18 @@ internal void
 shared_memory_close(SharedMemory handle)
 {
   if(MemoryIsZeroStruct(&handle)){return;}
-  int id = (int)handle.u64[0];
-  close(id);
+  MAC_Entity *entity = (MAC_Entity *)handle.u64[0];
+  mac_ipc_name_node_unlink(entity->shared_memory.name_node);
+  close(entity->shared_memory.id);
+  mac_entity_release(entity);
 }
 
 internal void *
 shared_memory_view_open(SharedMemory handle, Rng1U64 range)
 {
   if(MemoryIsZeroStruct(&handle)){return 0;}
-  int id = (int)handle.u64[0];
+  MAC_Entity *entity = (MAC_Entity *)handle.u64[0];
+  int id = entity->shared_memory.id;
   void *base = mmap(0, dim_1u64(range), PROT_READ|PROT_WRITE, MAP_SHARED, id, range.min);
   if(base == MAP_FAILED)
   {
@@ -637,10 +709,12 @@ semaphore_alloc(U32 initial_count, U32 max_count, String8 name)
 {
   Temp scratch = scratch_begin(0, 0);
   Semaphore result = {0};
+  B32 generated_name = 0;
   String8 name_to_open = name;
   if(name_to_open.size == 0)
   {
     name_to_open = str8f(scratch.arena, "/raddbg-%u-%llu", getpid(), ins_atomic_u64_inc_eval(&mac_state.default_env_count));
+    generated_name = 1;
   }
   name_to_open = mac_posix_ipc_name(scratch.arena, name_to_open);
   if(name_to_open.size > 0)
@@ -648,15 +722,26 @@ semaphore_alloc(U32 initial_count, U32 max_count, String8 name)
     for EachIndex(attempt_idx, 64)
     {
       String8 name_copy = str8_copy(scratch.arena, name_to_open);
+      B32 owns_name = 0;
       sem_t *s = sem_open((char *)name_copy.str, O_CREAT | O_EXCL, 0666, initial_count);
+      if(s != SEM_FAILED)
+      {
+        owns_name = 1;
+      }
       if(s == SEM_FAILED)
       {
         s = sem_open((char *)name_copy.str, 0);
       }
       if(s != SEM_FAILED)
       {
-        result.u64[0] = (U64)s;
-        if(name.size == 0)
+        MAC_Entity *entity = mac_entity_alloc(MAC_EntityKind_Semaphore);
+        entity->semaphore.handle = s;
+        if(owns_name && !generated_name)
+        {
+          entity->semaphore.name_node = mac_ipc_name_node_alloc(name_copy, MAC_IPCNameKind_Semaphore);
+        }
+        result.u64[0] = (U64)entity;
+        if(generated_name && owns_name)
         {
           sem_unlink((char *)name_copy.str);
         }
@@ -671,8 +756,11 @@ semaphore_alloc(U32 initial_count, U32 max_count, String8 name)
 internal void
 semaphore_release(Semaphore semaphore)
 {
-  sem_t *s = (sem_t *)semaphore.u64[0];
-  sem_close(s);
+  if(MemoryIsZeroStruct(&semaphore)){return;}
+  MAC_Entity *entity = (MAC_Entity *)semaphore.u64[0];
+  mac_ipc_name_node_unlink(entity->semaphore.name_node);
+  sem_close(entity->semaphore.handle);
+  mac_entity_release(entity);
 }
 
 internal Semaphore
@@ -685,7 +773,9 @@ semaphore_open(String8 name)
     sem_t *s = sem_open((char *)name_copy.str, 0);
     if(s != SEM_FAILED)
     {
-      result.u64[0] = (U64)s;
+      MAC_Entity *entity = mac_entity_alloc(MAC_EntityKind_Semaphore);
+      entity->semaphore.handle = s;
+      result.u64[0] = (U64)entity;
     }
     scratch_end(scratch);
   }
@@ -695,39 +785,69 @@ semaphore_open(String8 name)
 internal void
 semaphore_close(Semaphore semaphore)
 {
-  sem_t *s = (sem_t *)semaphore.u64[0];
-  sem_close(s);
+  if(MemoryIsZeroStruct(&semaphore)){return;}
+  MAC_Entity *entity = (MAC_Entity *)semaphore.u64[0];
+  sem_close(entity->semaphore.handle);
+  mac_entity_release(entity);
 }
 
 internal B32
 semaphore_take(Semaphore semaphore, U64 endt_us)
 {
-  // TODO: we need to use `sem_timedwait` here.
-  AssertAlways(endt_us == max_U64);
-  for(;;)
+  B32 result = 0;
+  MAC_Entity *entity = (MAC_Entity *)semaphore.u64[0];
+  sem_t *s = entity->semaphore.handle;
+  if(endt_us == max_U64)
   {
-    int err = sem_wait((sem_t*)semaphore.u64[0]);
-    if(err == 0)
+    for(;;)
     {
+      int err = sem_wait(s);
+      if(err == 0)
+      {
+        result = 1;
+        break;
+      }
+      else if(errno == EINTR || errno == EAGAIN)
+      {
+        continue;
+      }
       break;
     }
-    else if(errno == EAGAIN)
-    {
-      continue;
-    }
-    break;
   }
-  return 1;
+  else
+  {
+    for(;;)
+    {
+      int err = sem_trywait(s);
+      if(err == 0)
+      {
+        result = 1;
+        break;
+      }
+      if(errno != EAGAIN && errno != EINTR)
+      {
+        break;
+      }
+      if(now_time_us() >= endt_us)
+      {
+        break;
+      }
+      usleep(1000);
+    }
+  }
+  return result;
 }
 
 internal void
 semaphore_drop_count(Semaphore semaphore, U64 count)
 {
+  MAC_Entity *entity = (MAC_Entity *)semaphore.u64[0];
+  sem_t *s = entity->semaphore.handle;
   for(U64 idx = 0; idx < count; idx += 1)
   {
     for(;;)
     {
-      int err = sem_post((sem_t*)semaphore.u64[0]);
+      int err = sem_post(s);
       if(err == 0)
       {
         break;
@@ -861,6 +981,10 @@ file_open(AccessFlags flags, String8 path)
   if(flags & AccessFlag_Append)
   {
     mac_flags |= O_APPEND;
+  }
+  else if(flags & AccessFlag_Write)
+  {
+    mac_flags |= O_TRUNC;
   }
   if(flags & (AccessFlag_Write|AccessFlag_Append))
   {
@@ -1292,9 +1416,18 @@ process_launch(ProcessLaunchParams *params)
       int chdir_code = posix_spawn_file_actions_addchdir_np(&file_actions, (char *)push_cstr(scratch.arena, params->path).str);
       Assert(chdir_code == 0);
     }
-    int stdout_code = posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdout_file.u64[0], STDOUT_FILENO);
-    int stderr_code = posix_spawn_file_actions_adddup2(&file_actions, (int)params->stderr_file.u64[0], STDERR_FILENO);
-    int stdin_code = posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdin_file.u64[0], STDIN_FILENO);
+    if(!file_match(params->stdout_file, file_zero()))
+    {
+      posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdout_file.u64[0], STDOUT_FILENO);
+    }
+    if(!file_match(params->stderr_file, file_zero()))
+    {
+      posix_spawn_file_actions_adddup2(&file_actions, (int)params->stderr_file.u64[0], STDERR_FILENO);
+    }
+    if(!file_match(params->stdin_file, file_zero()))
+    {
+      posix_spawn_file_actions_adddup2(&file_actions, (int)params->stdin_file.u64[0], STDIN_FILENO);
+    }
     posix_spawnattr_t attr = {0};
     int attr_init_code = posix_spawnattr_init(&attr);
     if(attr_init_code == 0)
@@ -1363,6 +1496,7 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
 {
   pid_t pid = (pid_t)process.u64[0];
   B32 result = 0;
+  int status = 0;
   if(endt_us == 0)
   {
     if(kill(pid, 0) >= 0)
@@ -1370,7 +1504,6 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
       result = (errno == ENOENT);
       if(result)
       {
-        int status;
         waitpid(pid, &status, 0);
       }
     }
@@ -1379,10 +1512,13 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
   {
     for(;;)
     {
-      int status = 0;
       int w = waitpid(pid, &status, 0);
       if(w == -1)
       {
+        if(errno == EINTR)
+        {
+          continue;
+        }
         break;
       }
       if(WIFEXITED(status) || WIFSTOPPED(status) || WIFSIGNALED(status))
@@ -1395,6 +1531,21 @@ process_join(Process process, U64 endt_us, U64 *exit_code_out)
   else
   {
     NotImplemented;
+  }
+  if(result && exit_code_out != 0)
+  {
+    if(WIFEXITED(status))
+    {
+      *exit_code_out = (U64)WEXITSTATUS(status);
+    }
+    else if(WIFSIGNALED(status))
+    {
+      *exit_code_out = (U64)(128 + WTERMSIG(status));
+    }
+    else if(WIFSTOPPED(status))
+    {
+      *exit_code_out = (U64)(128 + WSTOPSIG(status));
+    }
   }
   return result;
 }
@@ -1543,6 +1694,7 @@ main(int argc, char **argv)
     mac_state.arena = arena_alloc();
     mac_state.entity_arena = arena_alloc();
     pthread_mutex_init(&mac_state.entity_mutex, 0);
+    atexit(mac_ipc_name_node_cleanup);
 
     // cache default environment
     {
