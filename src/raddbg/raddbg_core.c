@@ -17651,7 +17651,7 @@ rd_frame(void)
             }
           }break;
           
-          //- debug control context management operations
+          //- rjf: debug control context management operations
           case RD_CmdKind_SelectEntity:
           {
             D_Entity *entity = d_entity_from_handle(rd_regs()->ctrl_entity);
