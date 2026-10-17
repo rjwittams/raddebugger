@@ -684,6 +684,7 @@ internal String8 rd_name_from_cfg(CFG_Node *cfg);
 internal String8 rd_label_from_cfg(CFG_Node *cfg);
 internal String8 rd_expr_from_cfg(CFG_Node *cfg);
 internal String8 rd_path_from_cfg(CFG_Node *cfg);
+internal DI_Key rd_dbgi_key_from_cfg(CFG_Node *cfg);
 internal D_Target rd_target_from_cfg(Arena *arena, CFG_Node *cfg);
 
 internal String8 rd_default_setting_from_names(String8 schema_name, String8 setting_name);
