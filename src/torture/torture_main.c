@@ -198,6 +198,7 @@
 #include "raddbg/tests/raddbg_tests.c"
 #include "eval2/tests/eval2_tests.c"
 #include "torture_filesystem.c"
+#include "torture_config.c"
 
 internal B32 frame(void) { return 0; }
 
