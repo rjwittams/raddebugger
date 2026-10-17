@@ -47,6 +47,12 @@ struct UI_ScrollListRowBlockArray
   U64 count;
 };
 
+typedef enum UI_ScrollBarStyle
+{
+  UI_ScrollBarStyle_Classic,
+  UI_ScrollBarStyle_Overlay,
+} UI_ScrollBarStyle;
+
 typedef struct UI_ScrollListParams UI_ScrollListParams;
 struct UI_ScrollListParams
 {
@@ -157,6 +163,9 @@ internal U64 ui_scroll_list_row_from_item(UI_ScrollListRowBlockArray *blocks, U6
 internal U64 ui_scroll_list_item_from_row(UI_ScrollListRowBlockArray *blocks, U64 row);
 
 internal UI_ScrollPt ui_scroll_bar(Axis2 axis, UI_Size off_axis_size, UI_ScrollPt pt, Rng1S64 idx_range, S64 view_num_indices);
+internal UI_ScrollPt ui_scroll_bar_styled(Axis2 axis, UI_Size off_axis_size, UI_ScrollBarStyle style, F32 vis_t, UI_ScrollPt pt, Rng1S64 idx_range, S64 view_num_indices);
+internal void ui_set_active_scroll_bar_style(UI_ScrollBarStyle style);
+internal UI_ScrollBarStyle ui_active_scroll_bar_style(void);
 internal void ui_scroll_list_begin(UI_ScrollListParams *params, UI_ScrollPt *scroll_pt_out, Vec2S64 *cursor_out, Vec2S64 *mark_out, Rng1S64 *visible_row_range_out, UI_ScrollListSignal *signal_out);
 internal void ui_scroll_list_end(void);
 
