@@ -2696,6 +2696,76 @@ Test(d2r_module_types)
   }
 }
 
+Test(d2r_macho_identity)
+{
+  U8 abbrev[] = {1,0x11,1, 3,8, 0,0, 2,0x24,0, 3,8, 0x3e,0x0b, 0x0b,0x0b, 0,0, 0};
+  U8 info[] = {0,0,0,0, 4,0, 0,0,0,0, 8, 1,'a',0, 2,'i','n','t',0,5,4, 0};
+  U32 info_size = sizeof(info)-4;
+  MemoryCopy(info, &info_size, 4);
+  U8 uuid[] = {0xbe,0xbd,0x1f,0x6f,0x7b,0xf2,0x3d,0x6d,0x88,0x45,0x62,0x3c,0x11,0x07,0x41,0x85};
+  Guid expected = {.data1=0xbebd1f6f, .data2=0x7bf2, .data3=0x3d6d,
+                   .data4={0x88,0x45,0x62,0x3c,0x11,0x07,0x41,0x85}};
+  String8 radbin = test_build_exe_path(arena, str8_lit("radbin"));
+  for(U64 cpu = 0; cpu < 2; cpu += 1) for(U64 identity = 0; identity < 3; identity += 1)
+  for(U64 deterministic = 0; deterministic < 2; deterministic += 1)
+  {
+    // Exercise a real UUID, a zero UUID and a missing LC_UUID on both CPUs.
+    U8 bytes[1024] = {0};
+    MachO_Header64 *header = (MachO_Header64 *)bytes;
+    *header = (MachO_Header64){.magic=MACHO_MAGIC_64,
+      .cpu_type=cpu ? MACHO_CPU_TYPE_ARM64 : MACHO_CPU_TYPE_X86_64,
+      .cpu_subtype=cpu ? 0 : 3, .file_type=10, // MH_DSYM
+      .load_command_count=identity == 2 ? 1 : 2};
+    MachO_SegmentCommand64 *segment = (MachO_SegmentCommand64 *)(header+1);
+    *segment = (MachO_SegmentCommand64){.cmd=MACHO_LC_SEGMENT_64,
+      .cmd_size=sizeof(*segment)+2*sizeof(MachO_Section64), .section_count=2,
+      .vmsize=sizeof(bytes), .filesize=sizeof(bytes)};
+    MemoryCopy(segment->segment_name, "__DWARF", 7);
+    MachO_Section64 *sections = (MachO_Section64 *)(segment+1);
+    sections[0].offset = 512;
+    sections[0].addr = 512;
+    sections[0].size = sizeof(info);
+    MemoryCopy(sections[0].section_name, "__debug_info", 12);
+    sections[1].offset = 768;
+    sections[1].addr = 768;
+    sections[1].size = sizeof(abbrev);
+    MemoryCopy(sections[1].section_name, "__debug_abbrev", 14);
+    MemoryCopy(sections[0].segment_name, "__DWARF", 7);
+    MemoryCopy(sections[1].segment_name, "__DWARF", 7);
+    MemoryCopy(bytes+512, info, sizeof(info));
+    MemoryCopy(bytes+768, abbrev, sizeof(abbrev));
+    header->load_commands_size = segment->cmd_size;
+    if(identity != 2)
+    {
+      MachO_UUIDCommand *command = (MachO_UUIDCommand *)((U8 *)segment+segment->cmd_size);
+      *command = (MachO_UUIDCommand){.cmd=MACHO_LC_UUID, .cmd_size=sizeof(*command)};
+      if(identity == 0) {MemoryCopy(command->uuid, uuid, sizeof(uuid));}
+      header->load_commands_size += sizeof(*command);
+    }
+    String8 name = str8f(arena, "%I64u-%I64u-%I64u.macho", cpu, identity, deterministic);
+    TestCheck(t_write_file(name, str8_array_fixed(bytes)));
+    String8 input = t_make_file_path(arena, name);
+    String8 output = str8f(arena, "%S.rdi", input);
+    ProcessLaunchParams launch = {.path = get_process_info()->binary_path, .inherit_env = 1};
+    str8_list_push(arena, &launch.cmd_line, radbin);
+    str8_list_push(arena, &launch.cmd_line, str8_lit("--rdi"));
+    str8_list_push(arena, &launch.cmd_line, str8_lit("--thread_count:1"));
+    if(deterministic) {str8_list_push(arena, &launch.cmd_line, str8_lit("--deterministic"));}
+    str8_list_push(arena, &launch.cmd_line, input);
+    str8_list_pushf(arena, &launch.cmd_line, "--out:%S", output);
+    Process process = process_launch(&launch);
+    U64 exit_code = max_U64;
+    TestCheck(process_join(process, max_U64, &exit_code) && exit_code == 0);
+    String8 data = data_from_file_path(arena, output);
+    RDI_Parsed rdi = {0};
+    TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    RDI_TopLevelInfo *tli = rdi_element_from_name_idx(&rdi, TopLevelInfo, 0);
+    TestCheck(tli->arch == (cpu ? RDI_Arch_ARM64 : RDI_Arch_X64));
+    Guid want = !deterministic && identity == 0 ? expected : (Guid){0};
+    TestCheck(MemoryMatch(&tli->guid, &want, sizeof(want)));
+  }
+}
+
 SkippedTest(d2r_regressions)
 {
   String8 radbin_path = test_build_exe_path(arena, s("radbin"));
