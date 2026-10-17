@@ -150,13 +150,16 @@ d2r_inline_line_tables(Arena *arena, RDIM_LineTableChunkList *tables,
   U64 event_idx = 0;
   for EachNode(n, RDIM_LineSequenceNode, unit_table->first_seq)
   {
-    for(U64 idx = 0; idx <= n->v.line_count; idx += 1, event_idx += 1)
+    for(U64 idx = 0; idx <= n->v.line_count; idx += 1)
     {
+      // Empty rows must not reopen a sequence at its end address.
+      if(idx < n->v.line_count && n->v.voffs[idx] == n->v.voffs[idx+1]) {continue;}
       events[event_idx].seq = &n->v;
       events[event_idx].line_idx = idx;
       events[event_idx].end = (idx == n->v.line_count);
       keys[event_idx].key = n->v.voffs[idx];
       keys[event_idx].val = &events[event_idx];
+      event_idx += 1;
     }
   }
   for EachNode(n, D2R_InlineLines, inlines)
