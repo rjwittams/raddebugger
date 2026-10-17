@@ -148,7 +148,7 @@ TEST(eh_frame_register_availability_rules)
     if(scenario == 4) {uwnd_reg_set_valid(valid, r1, 0);}
     if(scenario == 6) {uwnd_reg_set_valid(valid, rf, 0);}
     U64 cfa = 0;
-    UWND_StepResult step = eh_uwnd_step(arch, &map, &module, 0, regs, valid, &cfa);
+    UWND_StepResult step = eh_uwnd_step(arch, &map, &module, 0, arch_ip_from_reg_block(arch_info_from_arch(arch), regs), regs, valid, &cfa);
     if(scenario == 6) {T_Ok(step.status == UWND_StepStatus_Error); continue;}
     if(scenario == 8)
     {
@@ -187,6 +187,8 @@ TEST(eh_frame_register_availability_rules)
       }break;
       case 9:
       {
+        T_Ok(step.is_interrupted);
+        T_Ok(uwnd_lookup_vaddr_from_pc(arch, arch_ip_from_reg_block(ai, regs), !step.is_interrupted) == 0x3000);
         T_Ok(got == 0 && uwnd_reg_range_is_valid(valid, r0));
         T_Ok(!uwnd_reg_range_is_valid(valid, rp));
         if(arch == Arch_arm64) {T_Ok(uwnd_reg_is_valid(arch, valid, ARM64_RegCode_lr));}
@@ -222,7 +224,7 @@ TEST(eh_frame_signed_cfa_offset)
     arch_reg_block_write_ip(ai, regs, 0x1004);
     arch_reg_block_write_sp(ai, regs, 0x2000);
     U64 cfa = 0;
-    UWND_StepResult step = eh_uwnd_step(arch, &map, &module, 0, regs, valid, &cfa);
+    UWND_StepResult step = eh_uwnd_step(arch, &map, &module, 0, arch_ip_from_reg_block(arch_info_from_arch(arch), regs), regs, valid, &cfa);
     T_Ok(step.status == UWND_StepStatus_Good);
     T_Ok(cfa == expected_cfa && arch_sp_from_reg_block(ai, regs) == expected_cfa);
     T_Ok(arch_ip_from_reg_block(ai, regs) == 0x3000);
@@ -250,7 +252,7 @@ TEST(eh_frame_undefined_return_ends_stack)
     arch_reg_block_write_ip(ai, regs, 0x1004);
     arch_reg_block_write_sp(ai, regs, 0x2000);
     U64 cfa = 0;
-    UWND_StepResult step = eh_uwnd_step(arch, &map, &module, 0, regs, valid, &cfa);
+    UWND_StepResult step = eh_uwnd_step(arch, &map, &module, 0, arch_ip_from_reg_block(arch_info_from_arch(arch), regs), regs, valid, &cfa);
     T_Ok(step.status == UWND_StepStatus_EndOfStack);
     T_Ok(arch_ip_from_reg_block(ai, regs) == 0x1004);
     T_Ok(arch_sp_from_reg_block(ai, regs) == 0x2000);
@@ -259,7 +261,7 @@ TEST(eh_frame_undefined_return_ends_stack)
     // A rule that needs unknown return-address bytes is an error, not an end.
     bytes[sizeof(bytes)-2] = 0x08;
     uwnd_reg_mark_valid(arch, valid, ai->stack_pointer_reg_code, 0);
-    step = eh_uwnd_step(arch, &map, &module, 0, regs, valid, &cfa);
+    step = eh_uwnd_step(arch, &map, &module, 0, arch_ip_from_reg_block(arch_info_from_arch(arch), regs), regs, valid, &cfa);
     T_Ok(step.status == UWND_StepStatus_Error);
   }
 }
@@ -276,7 +278,7 @@ TEST(pe_leaf_register_availability)
   MemorySet(valid, 1, sizeof(valid));
   uwnd_reg_set_valid(valid, x64_reg_code_rng_table[X64_RegCode_rbx], 0);
   U64 cfa = 0;
-  UWND_StepResult step = pe_x64_uwnd_step(Arch_x64, &map, &module, 0, &regs, valid, &cfa);
+  UWND_StepResult step = pe_x64_uwnd_step(Arch_x64, &map, &module, 0, regs.rip, &regs, valid, &cfa);
   T_Ok(step.status == UWND_StepStatus_Good && regs.rip == 0x3000);
   T_Ok(!uwnd_reg_is_valid(Arch_x64, valid, X64_RegCode_rax));
   T_Ok(!uwnd_reg_is_valid(Arch_x64, valid, X64_RegCode_rbx));
@@ -284,6 +286,58 @@ TEST(pe_leaf_register_availability)
   T_Ok(uwnd_reg_is_valid(Arch_x64, valid, X64_RegCode_rdi));
   T_Ok(uwnd_reg_is_valid(Arch_x64, valid, X64_RegCode_xmm6));
   T_Ok(!uwnd_reg_is_valid(Arch_x64, valid, X64_RegCode_ymm6));
+}
+
+TEST(pe_caller_pc_not_epilog)
+{
+  PE_IntelPdata pdata = {.voff_first = 0x1000, .voff_one_past_last = 0x1100, .voff_unwind_info = 0x4000};
+  PE_X64_UWND_ModuleUnwindInfo info = {.pdatas = &pdata, .pdatas_count = 1};
+  UWND_ModuleInfo module = {.unwind_info = &info, .os = OperatingSystem_Windows};
+  U8 xdata[] = {1,4,1,0, 4,(U8)(PE_UnwindOpCode_ALLOC_SMALL | (3<<4))};
+  // The final byte of this call's displacement looks like RET, but is not an instruction.
+  U8 code[] = {0xe8,0,0,0,0xc3,0x90,0x90,0x90};
+  U64 stack[] = {0xdead,0,0,0,0x5000};
+  MemoryMap map = {0};
+  memory_map_push(arena, &map, r1u64(0x10fb, 0x10fb+sizeof(code)), code);
+  memory_map_push(arena, &map, r1u64(0x4000, 0x4000+sizeof(xdata)), xdata);
+  memory_map_push(arena, &map, r1u64(0x2000, 0x2000+sizeof(stack)), stack);
+  for(B32 is_return_address = 0; is_return_address < 2; is_return_address += 1)
+  {
+    // The exact-PC case really is stopped at RET, with the allocation already undone.
+    X64_RegBlock regs = {.rip = is_return_address ? 0x1100 : 0x10ff, .rsp = is_return_address ? 0x2000 : 0x2020};
+    U8 valid[sizeof(regs)];
+    MemorySet(valid, 1, sizeof(valid));
+    U64 cfa = 0;
+    U64 lookup_pc = uwnd_lookup_vaddr_from_pc(Arch_x64, regs.rip, is_return_address);
+    UWND_StepResult step = pe_x64_uwnd_step(Arch_x64, &map, &module, 0, lookup_pc, &regs, valid, &cfa);
+    T_Ok(step.status == UWND_StepStatus_Good && !step.is_interrupted);
+    T_Ok(regs.rip == 0x5000 && regs.rsp == 0x2028);
+  }
+}
+
+TEST(pe_machine_frame_pc)
+{
+  for(U64 has_error_code = 0; has_error_code < 2; has_error_code += 1)
+  {
+    PE_IntelPdata pdata = {.voff_first = 0x1000, .voff_one_past_last = 0x1100, .voff_unwind_info = 0x4000};
+    PE_X64_UWND_ModuleUnwindInfo info = {.pdatas = &pdata, .pdatas_count = 1};
+    UWND_ModuleInfo module = {.unwind_info = &info, .os = OperatingSystem_Windows};
+    U8 xdata[] = {1,0,1,0, 0,(U8)(PE_UnwindOpCode_PUSH_MACHFRAME | (has_error_code<<4))};
+    U8 code[] = {0x90};
+    U64 stack[] = {1234,0x3100,0x33,0x202,0x5000,0x2b};
+    MemoryMap map = {0};
+    memory_map_push(arena, &map, r1u64(0x1004, 0x1004+sizeof(code)), code);
+    memory_map_push(arena, &map, r1u64(0x4000, 0x4000+sizeof(xdata)), xdata);
+    memory_map_push(arena, &map, r1u64(0x2000, 0x2000+sizeof(stack)), stack);
+    X64_RegBlock regs = {.rip = 0x1004, .rsp = has_error_code ? 0x2000 : 0x2008};
+    U8 valid[sizeof(regs)];
+    MemorySet(valid, 1, sizeof(valid));
+    U64 cfa = 0;
+    UWND_StepResult step = pe_x64_uwnd_step(Arch_x64, &map, &module, 0, regs.rip, &regs, valid, &cfa);
+    T_Ok(step.status == UWND_StepStatus_Good && step.is_interrupted);
+    T_Ok(regs.rip == 0x3100 && regs.rsp == 0x5000);
+    T_Ok(uwnd_lookup_vaddr_from_pc(Arch_x64, regs.rip, !step.is_interrupted) == regs.rip);
+  }
 }
 
 TEST(eh_frame_caller_registers)
@@ -317,7 +371,7 @@ TEST(eh_frame_caller_registers)
     ARCH_RegCode fp_reg = arch_reg_code_from_dw(arch, fp);
     arch_reg_block_write_range(arch_info, regs, arch_info->reg_code_rng_table[fp_reg], &stack_va);
     U64 cfa = 0;
-    UWND_StepResult step = eh_uwnd_step(arch, &map, &module, 0, regs, valid, &cfa);
+    UWND_StepResult step = eh_uwnd_step(arch, &map, &module, 0, arch_ip_from_reg_block(arch_info_from_arch(arch), regs), regs, valid, &cfa);
     T_Ok(step.status == UWND_StepStatus_Good);
     T_Ok(arch_ip_from_reg_block(arch_info, regs) == stack[1]);
     T_Ok(arch_sp_from_reg_block(arch_info, regs) == stack_va+16);
@@ -326,5 +380,58 @@ TEST(eh_frame_caller_registers)
     Rng1U16 volatile_rng = arch_info->reg_code_rng_table[arch_reg_code_from_dw(arch, 0)];
     T_Ok(!uwnd_reg_range_is_valid(valid, volatile_rng));
     T_Ok(uwnd_reg_range_is_valid(valid, arch_info->reg_code_rng_table[fp_reg]));
+  }
+}
+
+TEST(eh_frame_caller_pc_boundary)
+{
+  Arch arches[] = {Arch_arm64, Arch_x64};
+  for EachElement(arch_idx, arches)
+  {
+    Arch arch = arches[arch_idx];
+    ARCH_Info *ai = arch_info_from_arch(arch);
+    U8 ra = arch == Arch_arm64 ? 30 : 16;
+    U8 fp = arch == Arch_arm64 ? 29 : 6;
+    U8 sp = arch == Arch_arm64 ? 31 : 7;
+    U8 saved = arch == Arch_arm64 ? 19 : 3;
+    U8 pc_reg = arch == Arch_arm64 ? 32 : 16;
+    U8 bytes[] = {16,0,0,0, 0,0,0,0, 1,'z','R',0, 1,0x78,ra,1,4,0x0c,sp,0,
+                  31,0,0,0, 24,0,0,0, 0,0,0,0,0,0,0,0, 0,1,0,0,0,0,0,0,
+                  0,0x0c,fp,16,(U8)(0x80|ra),1,(U8)(0x80|fp),2,0x09,saved,pc_reg};
+    U64 function_pc = 0x1000;
+    MemoryCopy(bytes+28, &function_pc, 8);
+    U64 stack[] = {0x2010,0x3100, 0,0x5000};
+    MemoryMap map = {0};
+    memory_map_push(arena, &map, r1u64(0x4000, 0x4000+sizeof(bytes)), bytes);
+    memory_map_push(arena, &map, r1u64(0x2000, 0x2000+sizeof(stack)), stack);
+    EH_UWND_ModuleUnwindInfo info = {.override_fde_vaddr = 0x4014};
+    UWND_ModuleInfo module = {.unwind_info = &info};
+    void *regs = push_array(arena, U8, ai->reg_block_size);
+    U8 *valid = push_array(arena, U8, ai->reg_block_size);
+    MemorySet(valid, 1, ai->reg_block_size);
+    arch_reg_block_write_ip(ai, regs, 0x1004);
+    arch_reg_block_write_sp(ai, regs, 0x2000);
+    U64 frame_base = 0x2000;
+    arch_reg_block_write_range(ai, regs, ai->reg_code_rng_table[arch_reg_code_from_dw(arch, fp)], &frame_base);
+    U64 cfa = 0;
+    UWND_StepResult first = eh_uwnd_step(arch, &map, &module, 0, 0x1004, regs, valid, &cfa);
+    T_Ok(first.status == UWND_StepStatus_Good && !first.is_interrupted);
+    T_Ok(arch_ip_from_reg_block(ai, regs) == 0x3100);
+    // The caller's final call ends exactly at its FDE's exclusive upper bound.
+    function_pc = 0x3000;
+    MemoryCopy(bytes+28, &function_pc, 8);
+    U64 lookup_pc = uwnd_lookup_vaddr_from_pc(arch, arch_ip_from_reg_block(ai, regs), !first.is_interrupted);
+    T_Ok(lookup_pc == (arch == Arch_arm64 ? 0x30fc : 0x30ff));
+    T_Ok(arch_ip_from_reg_block(ai, regs) == 0x3100);
+    UWND_StepResult second = eh_uwnd_step(arch, &map, &module, 0, lookup_pc, regs, valid, &cfa);
+    T_Ok(second.status == UWND_StepStatus_Good && !second.is_interrupted);
+    T_Ok(arch_ip_from_reg_block(ai, regs) == 0x5000);
+    T_Ok(arch_sp_from_reg_block(ai, regs) == 0x2020);
+    // A CFI register rule reads the recovered PC, not its lookup adjustment.
+    U64 saved_pc = 0;
+    arch_reg_block_read_range(ai, regs, ai->reg_code_rng_table[arch_reg_code_from_dw(arch, saved)], &saved_pc);
+    T_Ok(saved_pc == 0x3100);
+    T_Ok(uwnd_lookup_vaddr_from_pc(arch, 0, 1) == 0);
+    T_Ok(uwnd_lookup_vaddr_from_pc(arch, 0x3100, 0) == 0x3100);
   }
 }
