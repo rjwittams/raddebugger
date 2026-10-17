@@ -51,6 +51,7 @@ wm_string_from_event_kind(WM_EventKind kind)
     case WM_EventKind_WindowClose:          {result = s("WindowClose");}break;
     case WM_EventKind_FileDrop:             {result = s("FileDrop");}break;
     case WM_EventKind_Wakeup:               {result = s("Wakeup");}break;
+    case WM_EventKind_MenuCommand:          {result = s("MenuCommand");}break;
   }
   return result;
 }
