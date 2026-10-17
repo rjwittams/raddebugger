@@ -1402,6 +1402,23 @@ dw2_offset_table_set_from_raw(Arena *arena, DW_Raw *raw)
 ////////////////////////////////
 //~ rjf: Range List Parsing (.debug_rnglists)
 
+internal B32
+dw2_try_read_list_uleb128(String8 data, U64 *off, U64 *out)
+{
+  // Bound decoding before a malformed operand can shift beyond 64 bits.
+  String8 operand = str8_prefix(str8_skip(data, *off), 10);
+  U64 value = 0;
+  U64 size = str8_deserial_read_uleb128(operand, 0, &value);
+  if(size == 0 || (operand.str[size-1] & 0x80) ||
+     (size == 10 && operand.str[9] > 1))
+  {
+    return 0;
+  }
+  *off += size;
+  *out = value;
+  return 1;
+}
+
 internal Rng1U64List
 dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_FormVal form_val)
 {
@@ -1460,6 +1477,7 @@ dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
     case DW_Version_5:
     {
       String8 data = raw->sec[DW_SectionKind_RngLists].data;
+      if(ctx->addr_size == 0 || ctx->addr_size > sizeof(U64)) {return result;}
       
       // rjf: determine section offset - sometimes this is encoded directly,
       // other times it is relative, based on the form kind - more variability
@@ -1485,7 +1503,7 @@ dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
       
       // rjf: in a HIGHLY UNEXPECTED TURN OF EVENTS, we now have to decode ANOTHER
       // OPCODE STREAM to unpack the actual list of ranges!!!
-      U64 rle_sentinel = (ctx->addr_size == 4 ? max_U32 : max_U64);
+      U64 addr_max = max_U64 >> (8*(sizeof(U64)-ctx->addr_size));
       U64 base_addr = ctx->unit_base_addr;
       B32 good_base_addr = 1;
       for(U64 off = rnglist_off; off < data.size;)
@@ -1508,7 +1526,10 @@ dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
             good_range = 0;
             good_base_addr = 0;
             U64 addr_idx = 0;
-            off += str8_deserial_read_uleb128(data, off, &addr_idx);
+            if(!dw2_try_read_list_uleb128(data, &off, &addr_idx))
+            {
+              return result;
+            }
             if(ctx->addr_table != 0)
             {
               U64 new_base_addr = 0;
@@ -1524,8 +1545,11 @@ dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
             good_range = 0;
             U64 start_idx = 0;
             U64 end_idx = 0;
-            off += str8_deserial_read_uleb128(data, off, &start_idx);
-            off += str8_deserial_read_uleb128(data, off, &end_idx);
+            if(!dw2_try_read_list_uleb128(data, &off, &start_idx) ||
+               !dw2_try_read_list_uleb128(data, &off, &end_idx))
+            {
+              return result;
+            }
             if(ctx->addr_table != 0)
             {
               U64 start = 0;
@@ -1534,7 +1558,7 @@ dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
                  dw2_try_offset_from_table_idx(ctx->addr_table, end_idx, &end))
               {
                 good_range = 1;
-                range = r1u64(start, end);
+                range = (Rng1U64){start, end};
               }
             }
           }break;
@@ -1543,15 +1567,18 @@ dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
             good_range = 0;
             U64 start_idx = 0;
             U64 length = 0;
-            off += str8_deserial_read_uleb128(data, off, &start_idx);
-            off += str8_deserial_read_uleb128(data, off, &length);
+            if(!dw2_try_read_list_uleb128(data, &off, &start_idx) ||
+               !dw2_try_read_list_uleb128(data, &off, &length))
+            {
+              return result;
+            }
             if(ctx->addr_table != 0)
             {
               U64 start = 0;
               if(dw2_try_offset_from_table_idx(ctx->addr_table, start_idx, &start))
               {
-                good_range = 1;
-                range = r1u64(start, start+length);
+                good_range = start <= addr_max && length <= addr_max-start;
+                if(good_range) {range = (Rng1U64){start, start+length};}
               }
             }
           }break;
@@ -1560,14 +1587,20 @@ dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
             good_range = good_base_addr;
             U64 range_off_start = 0;
             U64 range_off_end = 0;
-            off += str8_deserial_read_uleb128(data, off, &range_off_start);
-            off += str8_deserial_read_uleb128(data, off, &range_off_end);
-            range = r1u64(base_addr + range_off_start, base_addr + range_off_end);
+            if(!dw2_try_read_list_uleb128(data, &off, &range_off_start) ||
+               !dw2_try_read_list_uleb128(data, &off, &range_off_end))
+            {
+              return result;
+            }
+            good_range = good_range && base_addr <= addr_max &&
+                         range_off_start <= addr_max-base_addr && range_off_end <= addr_max-base_addr;
+            if(good_range) {range = (Rng1U64){base_addr+range_off_start, base_addr+range_off_end};}
           }break;
           case DW_RLE_BaseAddress:
           {
             good_range = 0;
             U64 new_base_addr = 0;
+            if(ctx->addr_size > data.size-off) {return result;}
             off += str8_deserial_read(data, off, &new_base_addr, ctx->addr_size, ctx->addr_size);
             base_addr = new_base_addr;
             good_base_addr = 1;
@@ -1576,22 +1609,28 @@ dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
           {
             U64 start = 0;
             U64 end = 0;
+            if(2*ctx->addr_size > data.size-off) {return result;}
             off += str8_deserial_read(data, off, &start, ctx->addr_size, ctx->addr_size);
             off += str8_deserial_read(data, off, &end, ctx->addr_size, ctx->addr_size);
-            range = r1u64(start, end);
+            range = (Rng1U64){start, end};
           }break;
           case DW_RLE_StartLength:
           {
             U64 start = 0;
             U64 length = 0;
+            if(ctx->addr_size > data.size-off) {return result;}
             off += str8_deserial_read(data, off, &start, ctx->addr_size, ctx->addr_size);
-            off += str8_deserial_read_uleb128(data, off, &length);
-            range = r1u64(start, start + length);
+            if(!dw2_try_read_list_uleb128(data, &off, &length))
+            {
+              return result;
+            }
+            good_range = length <= addr_max-start;
+            if(good_range) {range = (Rng1U64){start, start+length};}
           }break;
         }
         
         // rjf: add range
-        if(good_range)
+        if(good_range && range.min < range.max && range.max <= addr_max)
         {
           rng1u64_list_push(arena, &result, range);
         }
@@ -1675,6 +1714,7 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
     case DW_Version_5:
     {
       String8 data = raw->sec[DW_SectionKind_LocLists].data;
+      if(ctx->addr_size == 0 || ctx->addr_size > sizeof(U64)) {return result;}
       
       // rjf: determine section offset - sometimes this is encoded directly,
       // other times it is relative, based on the form kind - more variability
@@ -1700,7 +1740,7 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
       
       // rjf: in a HIGHLY UNEXPECTED TURN OF EVENTS, we now have to decode ANOTHER
       // OPCODE STREAM to unpack the actual list of locations!!!
-      U64 rle_sentinel = (ctx->addr_size == 4 ? max_U32 : max_U64);
+      U64 addr_max = max_U64 >> (8*(sizeof(U64)-ctx->addr_size));
       U64 base_addr = ctx->unit_base_addr;
       B32 good_base_addr = 1;
       for(U64 off = loclist_off; off < data.size;)
@@ -1725,7 +1765,10 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
             good_loc = 0;
             good_base_addr = 0;
             U64 addr_idx = 0;
-            off += str8_deserial_read_uleb128(data, off, &addr_idx);
+            if(!dw2_try_read_list_uleb128(data, &off, &addr_idx))
+            {
+              return result;
+            }
             if(ctx->addr_table != 0)
             {
               U64 new_base_addr = 0;
@@ -1741,8 +1784,11 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
             good_loc = 0;
             U64 start_idx = 0;
             U64 end_idx = 0;
-            off += str8_deserial_read_uleb128(data, off, &start_idx);
-            off += str8_deserial_read_uleb128(data, off, &end_idx);
+            if(!dw2_try_read_list_uleb128(data, &off, &start_idx) ||
+               !dw2_try_read_list_uleb128(data, &off, &end_idx))
+            {
+              return result;
+            }
             if(ctx->addr_table != 0)
             {
               U64 start = 0;
@@ -1751,7 +1797,7 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
                  dw2_try_offset_from_table_idx(ctx->addr_table, end_idx, &end))
               {
                 good_loc = 1;
-                range = r1u64(start, end);
+                range = (Rng1U64){start, end};
               }
             }
           }break;
@@ -1760,15 +1806,18 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
             good_loc = 0;
             U64 start_idx = 0;
             U64 length = 0;
-            off += str8_deserial_read_uleb128(data, off, &start_idx);
-            off += str8_deserial_read_uleb128(data, off, &length);
+            if(!dw2_try_read_list_uleb128(data, &off, &start_idx) ||
+               !dw2_try_read_list_uleb128(data, &off, &length))
+            {
+              return result;
+            }
             if(ctx->addr_table != 0)
             {
               U64 start = 0;
               if(dw2_try_offset_from_table_idx(ctx->addr_table, start_idx, &start))
               {
-                good_loc = 1;
-                range = r1u64(start, start+length);
+                good_loc = start <= addr_max && length <= addr_max-start;
+                if(good_loc) {range = (Rng1U64){start, start+length};}
               }
             }
           }break;
@@ -1777,9 +1826,14 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
             good_loc = good_base_addr;
             U64 range_off_start = 0;
             U64 range_off_end = 0;
-            off += str8_deserial_read_uleb128(data, off, &range_off_start);
-            off += str8_deserial_read_uleb128(data, off, &range_off_end);
-            range = r1u64(base_addr + range_off_start, base_addr + range_off_end);
+            if(!dw2_try_read_list_uleb128(data, &off, &range_off_start) ||
+               !dw2_try_read_list_uleb128(data, &off, &range_off_end))
+            {
+              return result;
+            }
+            good_loc = good_loc && base_addr <= addr_max &&
+                       range_off_start <= addr_max-base_addr && range_off_end <= addr_max-base_addr;
+            if(good_loc) {range = (Rng1U64){base_addr+range_off_start, base_addr+range_off_end};}
           }break;
           case DW_LLE_DefaultLocation:
           {
@@ -1789,6 +1843,7 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
           {
             has_expr = 0;
             U64 new_base_addr = 0;
+            if(ctx->addr_size > data.size-off) {return result;}
             off += str8_deserial_read(data, off, &new_base_addr, ctx->addr_size, ctx->addr_size);
             base_addr = new_base_addr;
             good_base_addr = 1;
@@ -1797,17 +1852,23 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
           {
             U64 start = 0;
             U64 end = 0;
+            if(2*ctx->addr_size > data.size-off) {return result;}
             off += str8_deserial_read(data, off, &start, ctx->addr_size, ctx->addr_size);
             off += str8_deserial_read(data, off, &end, ctx->addr_size, ctx->addr_size);
-            range = r1u64(start, end);
+            range = (Rng1U64){start, end};
           }break;
           case DW_LLE_StartLength:
           {
             U64 start = 0;
             U64 length = 0;
+            if(ctx->addr_size > data.size-off) {return result;}
             off += str8_deserial_read(data, off, &start, ctx->addr_size, ctx->addr_size);
-            off += str8_deserial_read_uleb128(data, off, &length);
-            range = r1u64(start, start + length);
+            if(!dw2_try_read_list_uleb128(data, &off, &length))
+            {
+              return result;
+            }
+            good_loc = length <= addr_max-start;
+            if(good_loc) {range = (Rng1U64){start, start+length};}
           }break;
         }
         
@@ -1816,22 +1877,18 @@ dw2_loclist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_Form
         if(has_expr)
         {
           U64 expr_size = 0;
-          // Limit decoding before a malformed length can shift beyond 64 bits.
-          String8 length_data = str8_prefix(str8_skip(data, off), 10);
-          U64 length_size = str8_deserial_read_uleb128(length_data, 0, &expr_size);
-          if(length_size == 0 || (length_data.str[length_size-1] & 0x80) ||
-             (length_size == 10 && length_data.str[9] > 1))
+          if(!dw2_try_read_list_uleb128(data, &off, &expr_size))
           {
             return result;
           }
-          off += length_size;
           if(expr_size > data.size-off) {return result;}
           expr = str8_substr(data, r1u64(off, off+expr_size));
           off += expr_size;
         }
         
         // rjf: add range
-        if(good_loc && has_expr)
+        if(good_loc && has_expr && range.min < range.max &&
+           (lle_kind == DW_LLE_DefaultLocation || range.max <= addr_max))
         {
           DW2_LocNode *n = push_array(arena, DW2_LocNode, 1);
           n->v.range = range;
