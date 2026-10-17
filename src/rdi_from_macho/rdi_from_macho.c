@@ -5,6 +5,7 @@ internal RDIM_BinarySectionList
 m2r_rdi_binary_sections_from_macho_bin(Arena *arena, String8 data, MachO_Bin *bin)
 {
   RDIM_BinarySectionList result = {0};
+  U64 base_vaddr = macho_base_vaddr_from_bin(data, bin);
   if(bin->is_64)
   {
     for EachIndex(command_idx, bin->load_commands.count)
@@ -22,8 +23,13 @@ m2r_rdi_binary_sections_from_macho_bin(Arena *arena, String8 data, MachO_Bin *bi
         MachO_Section64 section = {0};
         str8_deserial_read_struct(data, section_offset, &section);
         String8 section_name = macho_string_from_fixed_name(section.section_name, sizeof(section.section_name));
-        U64 voff_first = section.addr;
-        U64 voff_opl = voff_first + section.size;
+        U64 voff_first = 0;
+        U64 voff_opl = 0;
+        if(section.addr >= base_vaddr)
+        {
+          voff_first = section.addr - base_vaddr;
+          voff_opl = voff_first + section.size;
+        }
         U64 foff_first = section.offset;
         U64 foff_opl = foff_first + section.size;
         if(section_name.size != 0 || voff_opl != voff_first || foff_opl != foff_first)
@@ -31,6 +37,14 @@ m2r_rdi_binary_sections_from_macho_bin(Arena *arena, String8 data, MachO_Bin *bi
           RDIM_BinarySection *dst = rdim_binary_section_list_push(arena, &result);
           dst->name = push_str8_copy(arena, section_name);
           dst->flags = RDI_BinarySectionFlag_Read;
+          if(segment.initprot & MACHO_VM_PROT_WRITE)
+          {
+            dst->flags |= RDI_BinarySectionFlag_Write;
+          }
+          if(section.flags & (MACHO_S_ATTR_PURE_INSTRUCTIONS|MACHO_S_ATTR_SOME_INSTRUCTIONS))
+          {
+            dst->flags |= RDI_BinarySectionFlag_Execute;
+          }
           dst->voff_first = voff_first;
           dst->voff_opl = voff_opl;
           dst->foff_first = foff_first;
