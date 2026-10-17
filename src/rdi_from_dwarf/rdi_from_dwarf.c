@@ -927,14 +927,22 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
             {
               // rjf: read extended opcode size
               U64 ext_opcode_size = 0;
-              op_read_off += str8_deserial_read_uleb128(unit_line_table_data, op_read_off, &ext_opcode_size);
+              U64 size_read = str8_deserial_read_uleb128(unit_line_table_data, op_read_off, &ext_opcode_size);
+              op_read_off += size_read;
+              if(size_read == 0 || ext_opcode_size == 0 || ext_opcode_size > unit_line_table_data.size - op_read_off)
+              {
+                op_read_off = unit_line_table_data.size + 1;
+                break;
+              }
+              // The declared extent includes the opcode byte, but not its length.
+              U64 ext_opcode_opl = op_read_off + ext_opcode_size;
               
               // rjf: read extended opcode
               U8 ext_opcode = 0;
               op_read_off += str8_deserial_read_struct(unit_line_table_data, op_read_off, &ext_opcode);
               
               // rjf: grab truncated data for just this extended opcode
-              String8 ext_op_data = str8_prefix(unit_line_table_data, op_read_off + ext_opcode_size);
+              String8 ext_op_data = str8_prefix(unit_line_table_data, ext_opcode_opl);
               
               // rjf: do extended opcode
               switch(ext_opcode)
@@ -978,6 +986,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                   op_read_off += str8_deserial_read_uleb128(ext_op_data, op_read_off, &vm_regs.discriminator);
                 }break;
               }
+              op_read_off = ext_opcode_opl;
             }break;
           }
         }
