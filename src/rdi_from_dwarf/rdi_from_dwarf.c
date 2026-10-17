@@ -30,6 +30,34 @@ d2r_voff_range_from_vaddr_range(U64 base_vaddr, Rng1U64 range)
   return result;
 }
 
+internal B32
+d2r_code_range_is_mapped(U64 base_vaddr, RDIM_BinarySectionList *sections, Rng1U64 range)
+{
+  B32 result = range.min >= base_vaddr && range.min < range.max;
+  if(result && sections->first != 0)
+  {
+    // Require coverage by executable sections, including adjacent sections.
+    // A linker tombstone can be zero, but zero can also be a real code offset.
+    U64 cursor = range.min-base_vaddr;
+    U64 opl = range.max-base_vaddr;
+    while(cursor < opl)
+    {
+      U64 covered_opl = cursor;
+      for EachNode(n, RDIM_BinarySectionNode, sections->first)
+      {
+        if((n->v.flags & RDI_BinarySectionFlag_Execute) &&
+           n->v.voff_first <= cursor && cursor < n->v.voff_opl)
+        {
+          covered_opl = Max(covered_opl, n->v.voff_opl);
+        }
+      }
+      if(covered_opl == cursor) {result = 0; break;}
+      cursor = covered_opl;
+    }
+  }
+  return result;
+}
+
 internal U64
 d2r_voff_opl_from_high_pc(DW2_ParseCtx *unit_parse_ctx, U64 base_vaddr, U64 voff_base, DW2_FormVal *hipc_val)
 {
@@ -3574,15 +3602,22 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
               Rng1U64List tag_ranges = dw2_rnglist_from_form_val(temp.arena, unit_parse_ctx, raw, ranges_attrib->val);
               for EachNode(n, Rng1U64Node, tag_ranges.first)
               {
-                rdim_rng1u64_list_push(arena, &ranges, d2r_voff_range_from_vaddr_range(base_vaddr, n->v));
+                if(d2r_code_range_is_mapped(base_vaddr, &binary_sections, n->v))
+                {
+                  rdim_rng1u64_list_push(arena, &ranges, d2r_voff_range_from_vaddr_range(base_vaddr, n->v));
+                }
               }
               temp_end(temp);
             }
             if(lopc_attrib != &dw2_attrib_nil && hipc_attrib != &dw2_attrib_nil)
             {
-              U64 voff_base = lopc_attrib->val.addr - base_vaddr;
-              U64 voff_opl = d2r_voff_opl_from_high_pc(unit_parse_ctx, base_vaddr, voff_base, &hipc_attrib->val);
-              rdim_rng1u64_list_push(arena, &ranges, (RDIM_Rng1U64){voff_base, voff_opl});
+              U64 low_pc = lopc_attrib->val.addr;
+              U64 high_pc = d2r_voff_opl_from_high_pc(unit_parse_ctx, 0, low_pc, &hipc_attrib->val);
+              Rng1U64 range = r1u64(low_pc, high_pc);
+              if(d2r_code_range_is_mapped(base_vaddr, &binary_sections, range))
+              {
+                rdim_rng1u64_list_push(arena, &ranges, d2r_voff_range_from_vaddr_range(base_vaddr, range));
+              }
             }
           }
           
