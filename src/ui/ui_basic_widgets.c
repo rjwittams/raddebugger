@@ -1267,27 +1267,27 @@ ui_scroll_bar_styled(Axis2 axis, UI_Size off_axis_size, UI_ScrollBarStyle style,
   B32 overlay = (style == UI_ScrollBarStyle_Overlay);
   ui_push_tag(str8_lit("scroll_bar"));
   if(!overlay) { ui_push_font_size(ui_bottom_font_size()*0.65f); }
-
+  
   //- rjf: unpack
   S64 idx_range_dim = Max(dim_1s64(idx_range), 1);
   F32 thumb_fraction = Clamp(0.05f, (F32)((F64)Max(view_num_indices, 1)/((F64)idx_range_dim + Max(view_num_indices, 1))), 1.f);
   if(idx_range.min == idx_range.max) { thumb_fraction = 1.f; }
   F32 position_fraction = Clamp(0.f, (F32)(((F64)(pt.idx-idx_range.min) + pt.target_off)/(F64)idx_range_dim), 1.f);
-
+  
   //- rjf: produce extra flags for cases in which scrolling is disabled
   UI_BoxFlags disabled_flags = 0;
   if(idx_range.min == idx_range.max)
   {
     disabled_flags |= UI_BoxFlag_Disabled;
   }
-
+  
   //- rjf: build main container
   // Classic uses a bordered gutter; overlay uses a transparent floating strip
   // whose geometry and Floating flag are set by the caller.
   ui_set_next_pref_size(axis2_flip(axis), off_axis_size);
   ui_set_next_child_layout_axis(axis);
   UI_Box *container_box = ui_build_box_from_key(overlay ? 0 : UI_BoxFlag_DrawBorder, ui_key_zero());
-
+  
   //- rjf: build scroll-min button
   UI_Signal min_scroll_sig = {0};
   if(!overlay) UI_Parent(container_box)
@@ -1301,7 +1301,7 @@ ui_scroll_bar_styled(Axis2 axis, UI_Size off_axis_size, UI_ScrollBarStyle style,
     String8 arrow_string = ui_icon_string_from_kind(axis == Axis2_X ? UI_IconKind_LeftArrow : UI_IconKind_UpArrow);
     min_scroll_sig = ui_buttonf("%S##_min_scroll_%i", arrow_string, axis);
   }
-
+  
   //- rjf: main scroller area
   UI_Signal space_before_sig = {0};
   UI_Signal space_after_sig = {0};
@@ -1324,7 +1324,7 @@ ui_scroll_bar_styled(Axis2 axis, UI_Size off_axis_size, UI_ScrollBarStyle style,
         UI_Box *space_before_box = ui_build_box_from_stringf(overlay ? 0 : UI_BoxFlag_Clickable, "##scroll_area_before");
         space_before_sig = ui_signal_from_box(space_before_box);
       }
-
+      
       // rjf: scroller
       UI_Flags(disabled_flags) UI_PrefSize(axis, ui_pct(thumb_fraction, 0.f))
       {
@@ -1352,7 +1352,7 @@ ui_scroll_bar_styled(Axis2 axis, UI_Size off_axis_size, UI_ScrollBarStyle style,
           scroller_box = scroller_sig.box;
         }
       }
-
+      
       // rjf: space after
       if(idx_range.max != idx_range.min)
       {
@@ -1362,7 +1362,7 @@ ui_scroll_bar_styled(Axis2 axis, UI_Size off_axis_size, UI_ScrollBarStyle style,
       }
     }
   }
-
+  
   //- rjf: build scroll-max button
   UI_Signal max_scroll_sig = {0};
   if(!overlay) UI_Parent(container_box)
@@ -1376,7 +1376,7 @@ ui_scroll_bar_styled(Axis2 axis, UI_Size off_axis_size, UI_ScrollBarStyle style,
     String8 arrow_string = ui_icon_string_from_kind(axis == Axis2_X ? UI_IconKind_RightArrow : UI_IconKind_DownArrow);
     max_scroll_sig = ui_buttonf("%S##_max_scroll_%i", arrow_string, axis);
   }
-
+  
   //- rjf: pt * signals -> new pt
   UI_ScrollPt new_pt = pt;
   {
@@ -1432,7 +1432,7 @@ ui_scroll_bar_styled(Axis2 axis, UI_Size off_axis_size, UI_ScrollBarStyle style,
       ui_scroll_pt_target_idx(&new_pt, new_idx);
     }
   }
-
+  
   if(!overlay) { ui_pop_font_size(); }
   ui_pop_tag();
   return new_pt;
