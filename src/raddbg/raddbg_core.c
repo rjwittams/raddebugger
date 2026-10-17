@@ -12319,7 +12319,7 @@ rd_frame(void)
   //////////////////////////////
   //- rjf: loop - consume events in core, tick engine, and repeat
   //
-  D_Handle find_thread_retry = {0};
+  RD_Regs *find_thread_retry = 0;
   RD_Cmd *cmd = 0;
   ProfScope("loop - consume events in core, tick engine, and repeat") for(U64 cmd_process_loop_idx = 0; cmd_process_loop_idx < 3; cmd_process_loop_idx += 1)
   {
@@ -15501,6 +15501,8 @@ rd_frame(void)
           //- rjf: thread finding
           case RD_CmdKind_FindThread:
           {
+            // A newer navigation request replaces any retry from this pass.
+            find_thread_retry = 0;
             Access *access = access_open();
             
             //- rjf: unpack thread info
@@ -15634,9 +15636,10 @@ rd_frame(void)
             }
             
             // rjf: retry on stopped, pending debug info
-            if(!d_ctrl_targets_running() && (dbgi_pending || missing_rip || waiting_on_unwind))
+            if(thread->kind == D_EntityKind_Thread && !d_ctrl_targets_running() &&
+               (dbgi_pending || missing_rip || waiting_on_unwind))
             {
-              find_thread_retry = thread->handle;
+              find_thread_retry = rd_regs_copy(scratch.arena, rd_regs());
             }
             access_close(access);
           }break;
@@ -15788,6 +15791,7 @@ rd_frame(void)
           //- rjf: snap-to-code-location
           case RD_CmdKind_FindCodeLocation:
           {
+            find_thread_retry = 0;
             // NOTE(rjf): This command is where a lot of high-level flow things
             // in the debugger come together. It's that codepath that runs any
             // time a source code location is clicked in the UI, when a thread
@@ -18415,14 +18419,6 @@ rd_frame(void)
   }
   
   //////////////////////////////
-  //- rjf: retry find-thread
-  //
-  if(!d_handle_match(d_handle_zero(), find_thread_retry))
-  {
-    rd_cmd(RD_CmdKind_FindThread, .thread = find_thread_retry);
-  }
-  
-  //////////////////////////////
   //- rjf: update window titles
   //
   if(rd_state->frame_depth == 1)
@@ -18488,6 +18484,18 @@ rd_frame(void)
     }
   }
   
+  //////////////////////////////
+  //- rjf: retry find-thread
+  //
+  // Retry only after rotation: commands queued before it have already missed
+  // core processing and are read only by views. Keep the original frame and
+  // auto-unwind policy instead of inheriting whichever view was last active.
+  if(rd_state->frame_depth == 1 && find_thread_retry != 0 && !d_ctrl_targets_running())
+  {
+    rd_push_cmd(rd_cmd_kind_info_table[RD_CmdKind_FindThread].string, find_thread_retry);
+    rd_request_frame();
+  }
+
   //////////////////////////////
   //- rjf: compute all ambiguous paths from view titles
   //
