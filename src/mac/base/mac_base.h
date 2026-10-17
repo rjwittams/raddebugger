@@ -74,12 +74,30 @@ struct MAC_SafeCallChain
 typedef enum MAC_EntityKind
 {
   MAC_EntityKind_Thread,
+  MAC_EntityKind_SharedMemory,
   MAC_EntityKind_Mutex,
   MAC_EntityKind_RWMutex,
   MAC_EntityKind_ConditionVariable,
+  MAC_EntityKind_Semaphore,
   MAC_EntityKind_Barrier,
 }
 MAC_EntityKind;
+
+typedef enum MAC_IPCNameKind
+{
+  MAC_IPCNameKind_SharedMemory,
+  MAC_IPCNameKind_Semaphore,
+}
+MAC_IPCNameKind;
+
+typedef struct MAC_IPCNameNode MAC_IPCNameNode;
+struct MAC_IPCNameNode
+{
+  MAC_IPCNameNode *next;
+  String8 name;
+  MAC_IPCNameKind kind;
+  B32 active;
+};
 
 typedef struct MAC_Entity MAC_Entity;
 struct MAC_Entity
@@ -94,6 +112,11 @@ struct MAC_Entity
       ThreadEntryPointFunctionType *func;
       void *ptr;
     } thread;
+    struct
+    {
+      int id;
+      MAC_IPCNameNode *name_node;
+    } shared_memory;
     pthread_mutex_t mutex_handle;
     pthread_rwlock_t rwmutex_handle;
     struct
@@ -101,6 +124,11 @@ struct MAC_Entity
       pthread_cond_t cond_handle;
       pthread_mutex_t rwlock_mutex_handle;
     } cv;
+    struct
+    {
+      sem_t *handle;
+      MAC_IPCNameNode *name_node;
+    } semaphore;
     struct
     {
       pthread_mutex_t mutex;
@@ -124,6 +152,8 @@ struct MAC_State
   pthread_mutex_t entity_mutex;
   Arena *entity_arena;
   MAC_Entity *entity_free;
+  MAC_IPCNameNode *first_owned_ipc_name;
+  MAC_IPCNameNode *last_owned_ipc_name;
   U64 default_env_count;
   char **default_env;
 };
@@ -138,6 +168,9 @@ thread_static MAC_SafeCallChain *mac_safe_call_chain = 0;
 //~ Helpers
 
 internal DateTime mac_date_time_from_tm(tm in, U32 msec);
+internal MAC_IPCNameNode *mac_ipc_name_node_alloc(String8 name, MAC_IPCNameKind kind);
+internal void mac_ipc_name_node_unlink(MAC_IPCNameNode *node);
+internal void mac_ipc_name_node_cleanup(void);
 internal tm mac_tm_from_date_time(DateTime dt);
 internal timespec mac_timespec_from_date_time(DateTime dt);
 internal DenseTime mac_dense_time_from_timespec(timespec in);
