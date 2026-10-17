@@ -210,6 +210,7 @@ struct DI_Match
   RDI_SectionKind section_kind;
   U32 idx;
   U32 count;
+  B32 stale;
 };
 
 ////////////////////////////////

@@ -798,6 +798,7 @@ struct E_BaseCtx
   E_DbgInfo *primary_dbg_info;
   E_String2NumMap *dbg_info_from_name_map;
   U64 debug_info_match_endt_us;
+  B32 *debug_info_match_stale_out; // ORs in staleness from every lookup used during evaluation.
   
   // rjf: modules
   E_Module *modules;
