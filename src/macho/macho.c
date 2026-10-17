@@ -52,12 +52,7 @@ macho_code_symbol_compare(MachO_CodeSymbol *a, MachO_CodeSymbol *b)
 {
   if(a->voff != b->voff) {return a->voff < b->voff ? -1 : 1;}
   // Same-address aliases use bytewise name order, independent of table order.
-  U64 common = Min(a->name.size, b->name.size);
-  for(U64 idx = 0; idx < common; idx += 1)
-  {
-    if(a->name.str[idx] != b->name.str[idx]) {return a->name.str[idx] < b->name.str[idx] ? -1 : 1;}
-  }
-  return a->name.size < b->name.size ? -1 : a->name.size > b->name.size;
+  return str8_compar(a->name, b->name, 0);
 }
 
 internal MachO_CodeSymbolArray
