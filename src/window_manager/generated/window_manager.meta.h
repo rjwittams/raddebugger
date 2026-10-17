@@ -151,12 +151,13 @@ WM_Key_Num9,
 WM_Key_LeftMouseButton,
 WM_Key_MiddleMouseButton,
 WM_Key_RightMouseButton,
+WM_Key_Cmd,
 WM_Key_COUNT,
 } WM_Key;
 
 C_LINKAGE_BEGIN
-extern String8 wm_key_display_name_table[143];
-extern String8 wm_key_cfg_name_table[143];
+extern String8 wm_key_display_name_table[144];
+extern String8 wm_key_cfg_name_table[144];
 
 C_LINKAGE_END
 

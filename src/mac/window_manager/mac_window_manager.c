@@ -119,6 +119,10 @@
 @end
 
 @implementation MAC_WM_MenuTarget
+- (void)menuWillOpen:(NSMenu *)menu
+{
+  mac_wm_state->menu_opened = 1;
+}
 - (void)menuItemSelected:(id)sender
 {
   NSString *command = [sender representedObject];
@@ -534,7 +538,8 @@ internal WM_Modifiers
 mac_wm_modifiers_from_ns_flags(NSEventModifierFlags flags)
 {
   WM_Modifiers result = 0;
-  if(flags & (NSEventModifierFlagControl|NSEventModifierFlagCommand)) { result |= WM_Modifier_Ctrl; }
+  if(flags & NSEventModifierFlagControl) { result |= WM_Modifier_Ctrl; }
+  if(flags & NSEventModifierFlagCommand) { result |= WM_Modifier_Cmd; }
   if(flags & NSEventModifierFlagShift) { result |= WM_Modifier_Shift; }
   if(flags & NSEventModifierFlagOption) { result |= WM_Modifier_Alt; }
   return result;
@@ -600,8 +605,8 @@ mac_wm_key_from_key_code(unsigned short key_code, B32 *right_sided_out)
     case 50:{result = WM_Key_Tick;}break;
     case 51:{result = WM_Key_Backspace;}break;
     case 53:{result = WM_Key_Esc;}break;
-    case 54:{result = WM_Key_Ctrl; right_sided = 1;}break;
-    case 55:{result = WM_Key_Ctrl;}break;
+    case 54:{result = WM_Key_Cmd; right_sided = 1;}break;
+    case 55:{result = WM_Key_Cmd;}break;
     case 56:{result = WM_Key_Shift;}break;
     case 57:{result = WM_Key_CapsLock;}break;
     case 58:{result = WM_Key_Alt;}break;
@@ -1288,6 +1293,7 @@ wm_get_events(Arena *arena, B32 wait)
         }
         if(key == WM_Key_Alt   && (wm_event->modifiers & WM_Modifier_Alt))   { wm_event->modifiers &= ~WM_Modifier_Alt; }
         if(key == WM_Key_Ctrl  && (wm_event->modifiers & WM_Modifier_Ctrl))  { wm_event->modifiers &= ~WM_Modifier_Ctrl; }
+        if(key == WM_Key_Cmd   && (wm_event->modifiers & WM_Modifier_Cmd))   { wm_event->modifiers &= ~WM_Modifier_Cmd; }
         if(key == WM_Key_Shift && (wm_event->modifiers & WM_Modifier_Shift)) { wm_event->modifiers &= ~WM_Modifier_Shift; }
         // Shortcut key presses must not also insert text into newly focused inputs.
         if(type == NSEventTypeKeyDown &&
@@ -1308,6 +1314,7 @@ wm_get_events(Arena *arena, B32 wait)
           if(key == WM_Key_Shift) { is_down = !!(modifiers & WM_Modifier_Shift); }
           else if(key == WM_Key_Alt) { is_down = !!(modifiers & WM_Modifier_Alt); }
           else if(key == WM_Key_Ctrl) { is_down = !!(modifiers & WM_Modifier_Ctrl); }
+          else if(key == WM_Key_Cmd) { is_down = !!(modifiers & WM_Modifier_Cmd); }
           if(mac_wm_state->key_is_down[key] != is_down)
           {
             WM_Event *wm_event = mac_wm_push_event(arena, &result, is_down ? WM_EventKind_Press : WM_EventKind_Release, window);
@@ -1465,6 +1472,11 @@ wm_get_events(Arena *arena, B32 wait)
       event->window = mac_wm_handle_from_window(window);
     }
   }
+  if(mac_wm_state->menu_opened)
+  {
+    mac_wm_state->menu_opened = 0;
+    wm_event_list_push_new(arena, &result, WM_EventKind_MenuOpen);
+  }
   for(MAC_WM_MenuCommandNode *node = mac_wm_state->first_pending_menu_command, *next = 0;
       node != 0;
       node = next)
@@ -1540,20 +1552,8 @@ mac_wm_persistent_ns_string_from_string8(String8 string)
 internal void
 mac_wm_set_minimal_main_menu(void)
 {
-  NSMenu *main_menu = [[NSMenu alloc] initWithTitle:@""];
-  NSMenuItem *app_menu_item = [[NSMenuItem alloc] initWithTitle:@"" action:0 keyEquivalent:@""];
-  [main_menu addItem:app_menu_item];
-
-  NSMenu *app_menu = [[NSMenu alloc] initWithTitle:@"RAD Debugger"];
-  NSMenuItem *quit_item = [[NSMenuItem alloc] initWithTitle:@"Quit RAD Debugger"
-                                                     action:@selector(menuItemSelected:)
-                                              keyEquivalent:@"q"];
-  [quit_item setTarget:mac_wm_state->menu_target];
-  [quit_item setRepresentedObject:mac_wm_persistent_ns_string_from_string8(str8_lit("exit"))];
-  [app_menu addItem:quit_item];
-  [main_menu setSubmenu:app_menu forItem:app_menu_item];
-
-  [NSApp setMainMenu:main_menu];
+  WM_MenuArray menus = {0};
+  wm_set_main_menu(menus);
 }
 
 internal void
@@ -1569,31 +1569,83 @@ mac_wm_apply_menu_mode(MAC_WM_MenuMode mode)
   }
 }
 
+internal NSMenuItem *
+mac_wm_menu_item(WM_MenuItem *item)
+{
+  U32 codepoint = wm_codepoint_from_modifiers_and_key(0, item->shortcut_key);
+  if(WM_Key_F1 <= item->shortcut_key && item->shortcut_key <= WM_Key_F24)
+  {
+    codepoint = NSF1FunctionKey + item->shortcut_key - WM_Key_F1;
+  }
+  switch(item->shortcut_key)
+  {
+    default:{}break;
+    case WM_Key_Backspace: {codepoint = NSBackspaceCharacter;}break;
+    case WM_Key_Delete:    {codepoint = NSDeleteCharacter;}break;
+    case WM_Key_Return:    {codepoint = NSCarriageReturnCharacter;}break;
+    case WM_Key_Tab:       {codepoint = NSTabCharacter;}break;
+    case WM_Key_Esc:       {codepoint = 0x1b;}break;
+    case WM_Key_Left:      {codepoint = NSLeftArrowFunctionKey;}break;
+    case WM_Key_Right:     {codepoint = NSRightArrowFunctionKey;}break;
+    case WM_Key_Up:        {codepoint = NSUpArrowFunctionKey;}break;
+    case WM_Key_Down:      {codepoint = NSDownArrowFunctionKey;}break;
+    case WM_Key_Home:      {codepoint = NSHomeFunctionKey;}break;
+    case WM_Key_End:       {codepoint = NSEndFunctionKey;}break;
+    case WM_Key_PageUp:    {codepoint = NSPageUpFunctionKey;}break;
+    case WM_Key_PageDown:  {codepoint = NSPageDownFunctionKey;}break;
+  }
+  unichar character = (unichar)codepoint;
+  NSString *equivalent = codepoint ? [NSString stringWithCharacters:&character length:1] : @"";
+  NSString *label = [mac_wm_persistent_ns_string_from_string8(item->label) autorelease];
+  NSString *command = [mac_wm_persistent_ns_string_from_string8(item->command_name) autorelease];
+  NSMenuItem *result = [[[NSMenuItem alloc] initWithTitle:label action:@selector(menuItemSelected:)
+                                         keyEquivalent:equivalent] autorelease];
+  NSEventModifierFlags modifiers = 0;
+  if(item->shortcut_modifiers & WM_Modifier_Ctrl)  {modifiers |= NSEventModifierFlagControl;}
+  if(item->shortcut_modifiers & WM_Modifier_Cmd)   {modifiers |= NSEventModifierFlagCommand;}
+  if(item->shortcut_modifiers & WM_Modifier_Shift) {modifiers |= NSEventModifierFlagShift;}
+  if(item->shortcut_modifiers & WM_Modifier_Alt)   {modifiers |= NSEventModifierFlagOption;}
+  [result setKeyEquivalentModifierMask:modifiers];
+  [result setTarget:mac_wm_state->menu_target];
+  [result setRepresentedObject:command];
+  return result;
+}
+
 internal void
 wm_set_main_menu(WM_MenuArray menu_array)
 {
+  // RAD's binding configuration also supplies the native menu equivalents.
+  [NSMenuItem setUsesUserKeyEquivalents:NO];
+  NSMenu *main_menu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
+  NSMenuItem *app_menu_item = [[[NSMenuItem alloc] initWithTitle:@"" action:0 keyEquivalent:@""] autorelease];
+  NSMenu *app_menu = [[[NSMenu alloc] initWithTitle:@"RAD Debugger"] autorelease];
+  [app_menu setDelegate:mac_wm_state->menu_target];
+  WM_MenuItem quit = {WM_MenuItemKind_Command, str8_lit("Quit RAD Debugger"), str8_lit("exit")};
+  for(U64 menu_idx = 0; menu_idx < menu_array.count; menu_idx += 1)
+  {
+    WM_Menu *menu = &menu_array.menus[menu_idx];
+    for(U64 item_idx = 0; item_idx < menu->item_count; item_idx += 1)
+    {
+      WM_MenuItem *item = &menu->items[item_idx];
+      if(str8_match(item->command_name, quit.command_name, 0))
+      {
+        quit.shortcut_key = item->shortcut_key;
+        quit.shortcut_modifiers = item->shortcut_modifiers;
+      }
+    }
+  }
+  [app_menu addItem:mac_wm_menu_item(&quit)];
+  [main_menu addItem:app_menu_item];
+  [main_menu setSubmenu:app_menu forItem:app_menu_item];
   if(mac_wm_state->menu_mode == MAC_WM_MenuMode_Native)
   {
-    NSMenu *main_menu = [[NSMenu alloc] initWithTitle:@""];
-
-    NSMenuItem *app_menu_item = [[NSMenuItem alloc] initWithTitle:@"" action:0 keyEquivalent:@""];
-    [main_menu addItem:app_menu_item];
-
-    NSMenu *app_menu = [[NSMenu alloc] initWithTitle:@"RAD Debugger"];
-    NSMenuItem *quit_item = [[NSMenuItem alloc] initWithTitle:@"Quit RAD Debugger"
-                                                       action:@selector(menuItemSelected:)
-                                                keyEquivalent:@"q"];
-    [quit_item setTarget:mac_wm_state->menu_target];
-    [quit_item setRepresentedObject:mac_wm_persistent_ns_string_from_string8(str8_lit("exit"))];
-    [app_menu addItem:quit_item];
-    [main_menu setSubmenu:app_menu forItem:app_menu_item];
-
     for(U64 menu_idx = 0; menu_idx < menu_array.count; menu_idx += 1)
     {
       WM_Menu *menu = &menu_array.menus[menu_idx];
-      NSString *menu_label = mac_wm_persistent_ns_string_from_string8(menu->label);
-      NSMenuItem *menu_item = [[NSMenuItem alloc] initWithTitle:menu_label action:0 keyEquivalent:@""];
-      NSMenu *submenu = [[NSMenu alloc] initWithTitle:menu_label];
+      NSString *menu_label = [mac_wm_persistent_ns_string_from_string8(menu->label) autorelease];
+      NSMenuItem *menu_item = [[[NSMenuItem alloc] initWithTitle:menu_label action:0 keyEquivalent:@""] autorelease];
+      NSMenu *submenu = [[[NSMenu alloc] initWithTitle:menu_label] autorelease];
+      [submenu setDelegate:mac_wm_state->menu_target];
       [main_menu addItem:menu_item];
       [main_menu setSubmenu:submenu forItem:menu_item];
 
@@ -1609,21 +1661,17 @@ wm_set_main_menu(WM_MenuArray menu_array)
           }break;
           case WM_MenuItemKind_Command:
           {
-            NSString *label = mac_wm_persistent_ns_string_from_string8(item->label);
-            NSString *command = mac_wm_persistent_ns_string_from_string8(item->command_name);
-            NSMenuItem *ns_item = [[NSMenuItem alloc] initWithTitle:label
-                                                             action:@selector(menuItemSelected:)
-                                                      keyEquivalent:@""];
-            [ns_item setTarget:mac_wm_state->menu_target];
-            [ns_item setRepresentedObject:command];
-            [submenu addItem:ns_item];
+            if(!str8_match(item->command_name, quit.command_name, 0))
+            {
+              [submenu addItem:mac_wm_menu_item(item)];
+            }
           }break;
         }
       }
     }
 
-    [NSApp setMainMenu:main_menu];
   }
+  [NSApp setMainMenu:main_menu];
 }
 
 internal B32
