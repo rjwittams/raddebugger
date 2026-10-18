@@ -6,7 +6,7 @@
 
 #define RADDBG_MARKUP_IMPLEMENTATION
 #define RADDBG_MARKUP_VSNPRINTF raddbg_vsnprintf
-#if OS_LINUX
+#if OS_LINUX || OS_MAC
 # define RADDBG_MARKUP_STUBS
 #endif
 #include "lib_raddbg_markup/raddbg_markup.h"
