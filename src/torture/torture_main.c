@@ -21,6 +21,7 @@
 
 #include "base/base_inc.h"
 #include "x64/x64_inc.h"
+#include "arm64/arm64.h"
 #include "win32/win32_inc.h"
 #include "linux/linux_inc.h"
 #include "linker/hash_table.h"
@@ -108,6 +109,7 @@
 
 #include "base/base_inc.c"
 #include "x64/x64_inc.c"
+#include "arm64/arm64.c"
 #include "win32/win32_inc.c"
 #include "linux/linux_inc.c"
 #include "linker/hash_table.c"
@@ -189,6 +191,7 @@
 #include "linker/lnk_debug_helper.c"
 #include "torture.c"
 
+#include "torture_arch.c"
 #include "base/tests/base_tests.c"
 #include "mdesk/tests/mdesk_tests.c"
 #include "linker/tests/linker_tests.c"
@@ -208,4 +211,3 @@ entry_point(CmdLine *cmdline)
 {
   t_entry_point(cmdline);
 }
-
