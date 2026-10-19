@@ -17,7 +17,7 @@ typedef struct FileIter FileIter;
 struct FileIter
 {
   FileIterFlags flags;
-  U8 memory[800];
+  AlignType(8) U8 memory[800];
 };
 
 typedef struct FileInfo FileInfo;
