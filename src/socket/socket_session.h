@@ -4,11 +4,13 @@
 #ifndef SOCKET_SESSION_H
 #define SOCKET_SESSION_H
 
+#define SOCK_IO_CONNECTION_LIMIT 64
+
 typedef struct SOCK_IO_Packet SOCK_IO_Packet;
 struct SOCK_IO_Packet
 {
   SOCK_IO_Packet *next;
-  SOCK_Endpoint endpoint;
+  SOCK_Peer peer;
   String8 data;
   U64 pos;
 };
@@ -17,9 +19,11 @@ typedef struct SOCK_IO_Connection SOCK_IO_Connection;
 struct SOCK_IO_Connection
 {
   SOCK_IO_Connection *next;
-  SOCK_Endpoint endpoint;
+  SOCK_Peer peer;
   SOCK_OS_Socket fd;
   B32 connecting;
+  B32 outgoing;
+  B32 ended;
   B32 read_hangup;
   SOCK_IO_Packet *first_send;
   SOCK_IO_Packet *last_send;
@@ -37,6 +41,8 @@ struct SOCK_IO_Session
   B32 stopping;
   U64 send_bytes;
   U64 recv_bytes;
+  SOCK_Peer aborts[SOCK_IO_CONNECTION_LIMIT];
+  U64 abort_count;
   SOCK_IO_Packet *first_send;
   SOCK_IO_Packet *last_send;
   SOCK_IO_Packet *first_recv;
@@ -45,6 +51,6 @@ struct SOCK_IO_Session
 
 // Queue memory is bounded; oversized sends fail rather than truncate.
 read_only global U64 sock_io_queue_limit = MB(16);
-read_only global U64 sock_io_connection_limit = 64;
+global U64 sock_io_last_peer_id;
 
 #endif // SOCKET_SESSION_H

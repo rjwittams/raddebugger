@@ -44,13 +44,37 @@ it never silently truncates. Success is not a peer acknowledgement. The
 deadline bounds waiting for queue space, not a complete network transaction.
 Each send/receive queue has a 16 MiB memory budget, including bookkeeping;
 split larger streams into smaller sends. A session admits up to 64 concurrent
-connections. A failed connection produces an endpoint EOF notification.
+connections, including ended peers awaiting EOF queue space. A failed outbound
+attempt that never obtained a peer id reports endpoint EOF when the receive
+queue has space; callers must still bound transactions with deadlines.
 
-Each successful `sock_recv` returns a stream chunk, not a complete command or
-one matching send call. It preserves arbitrary bytes. A zero-length chunk
-ends the endpoint, including reset/refusal; read-half-close is treated as
+Each successful `sock_recv` returns a stream chunk and `SOCK_Peer` reference,
+not a complete command or one matching send call. It preserves arbitrary bytes.
+The peer retains a stable, nonzero id across chunks; an outbound failure before
+connection creation can return a zero id with EOF. A zero-length chunk ends
+the peer, including reset/refusal; read-half-close is treated as
 endpoint closure. A false result means no queued result before the deadline,
 or a stopped session. Failure leaves output arguments unchanged.
+
+`sock_send` addresses an outbound endpoint and can open/reuse an outgoing
+connection. Replies or follow-up writes for a received peer use
+`sock_send_peer`, which pins that connection. Stale references never reconnect
+or target a new peer that reuses the address. Peer ids do not repeat within
+the process and are not network authentication tokens; network endpoints and
+RDI layouts remain unchanged.
+
+`sock_peer_abort` queues per-peer teardown and discards unsent output for that
+peer. A fixed 64-entry, deduplicated control queue is separate from the data
+budget, so stalled output does not consume abort capacity. A stale abort has
+no effect on replacement connections. EOF is published after the native socket
+closes. If incoming data fills the receive queue, the worker retains the ended
+peer until it can enqueue EOF, without stopping unrelated connections.
+Acceptance of an abort alone is not a synchronous close barrier.
+The owner still observes the session's no-concurrent-close rule below.
+
+Additional cases check stable/distinct ids, isolated abort, abort under data
+send/receive backpressure, and stale send/abort after a native client reuses the exact old
+address and port. The replacement must receive only its own reply.
 
 The wakeup hook runs on the I/O thread outside the queue mutex and may make
 nonblocking receive calls. It must return promptly and must not close the

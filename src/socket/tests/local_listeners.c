@@ -80,7 +80,7 @@ test_occupied_port(void)
   Check(connect(peer, (struct sockaddr *)&address, sizeof(address)) == 0);
   Check(send(peer, "R", 1, 0) == 1);
   SOCK_Protocol protocol;
-  SOCK_Endpoint from;
+  SOCK_Peer from;
   String8 data;
   Check(sock_recv(scratch.arena, session, &protocol, &from, &data, now_time_us()+Million(3)));
   Check(protocol == SOCK_Protocol_TCP && str8_match(data, str8_lit("R"), 0));
@@ -135,7 +135,7 @@ test_listener_separation(void)
     while(received < sizeof(payload))
     {
       SOCK_Protocol protocol;
-      SOCK_Endpoint from;
+      SOCK_Peer from;
       String8 data;
       Check(sock_recv(scratch.arena, sessions[index], &protocol, &from, &data, now_time_us()+Million(3)));
       Check(protocol == SOCK_Protocol_TCP && data.size > 0 && data.size <= sizeof(payload)-received);
@@ -143,7 +143,7 @@ test_listener_separation(void)
       received += data.size;
     }
     SOCK_Protocol protocol;
-    SOCK_Endpoint from;
+    SOCK_Peer from;
     String8 data;
     Check(!sock_recv(scratch.arena, sessions[1-index], &protocol, &from, &data, 0));
   }
