@@ -14,6 +14,8 @@
 
 #define Check(c) do { if(!(c)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); exit(1); } } while(0)
 
+#include "win32_socket_warmup.h"
+
 internal U64
 native_handle_count(void)
 {
@@ -169,6 +171,9 @@ test_exclusive_endpoint(void)
 internal void
 entry_point(CmdLine *cmdline)
 {
+#if OS_WINDOWS
+  warm_native_socket_runtime();
+#endif
   String8 selected = cmd_line_string(cmdline, str8_lit("case"));
   if(str8_match(selected, str8_lit("loopback_listener"), 0)) { test_loopback_listener(); }
   else if(str8_match(selected, str8_lit("occupied_port"), 0)) { test_occupied_port(); }
