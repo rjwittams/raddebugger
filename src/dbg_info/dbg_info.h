@@ -45,6 +45,8 @@ struct DI_KeyPathNode
   DI_KeyPathNode *prev;
   String8 path;
   U64 min_timestamp;
+  Arch macho_arch;
+  Guid macho_guid;
   DI_Key key;
 };
 
@@ -139,9 +141,12 @@ struct DI_LoadTask
   
   B32 og_analyzed;
   B32 og_is_rdi;
+  B32 og_matches_identity;
   B32 og_folder_analyzed;
   B32 og_folder_is_writable;
   U64 og_size;
+  Arch og_macho_arch;
+  Guid og_macho_guid;
   
   B32 rdi_analyzed;
   B32 rdi_is_stale;
@@ -315,6 +320,9 @@ internal DI_Key di_key_zero(void);
 internal B32 di_key_match(DI_Key a, DI_Key b);
 internal void di_key_list_push(Arena *arena, DI_KeyList *list, DI_Key key);
 internal DI_KeyArray di_key_array_from_list(Arena *arena, DI_KeyList *list);
+internal String8 di_rdi_path_from_original_path(Arena *arena, String8 path);
+internal B32 di_rdi_file_matches_identity(File file, Arch arch, Guid guid);
+internal String8 di_rdi_path_from_identity(Arena *arena, String8 original_path, String8 cache_folder, Arch arch, Guid guid);
 
 ////////////////////////////////
 //~ rjf: Main Layer Initialization
@@ -330,6 +338,7 @@ internal void di_set_auto_downloads(B32 auto_downloads);
 //~ rjf: Path * Timestamp Cache Submission & Lookup
 
 internal DI_Key di_key_from_path_timestamp(String8 path, U64 min_timestamp);
+internal DI_Key di_key_from_path_timestamp_identity(String8 path, U64 min_timestamp, Arch macho_arch, Guid macho_guid);
 
 ////////////////////////////////
 //~ rjf: Debug Info Opening / Closing
