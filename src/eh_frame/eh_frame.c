@@ -388,12 +388,14 @@ eh_frame_hdr_from_call_frame_info(Arena *arena, U64 fde_count, U64 *fde_offsets,
   MemoryCopyStr8(buffer, header);
   
   // write the table
-  EH_FrameHdrEntry *table = (EH_FrameHdrEntry *)(buffer + header.size);
+  // Keep typed entries aligned; the serialized header is only twelve bytes.
+  EH_FrameHdrEntry *table = push_array(scratch.arena, EH_FrameHdrEntry, fde_count);
   for EachIndex(fde_idx, fde_count) {
     table[fde_idx].addr       = fde[fde_idx].pc_range.min;
     table[fde_idx].fde_offset = fde_offsets[fde_idx];
   }
   radsort(table, fde_count, eh_frame_hdr_entry_sort);
+  MemoryCopy(buffer + header.size, table, sizeof(EH_FrameHdrEntry) * fde_count);
   
   String8 eh_frame_hdr = str8(buffer, buffer_size);
   scratch_end(scratch);
