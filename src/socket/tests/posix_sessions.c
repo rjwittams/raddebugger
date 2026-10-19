@@ -11,8 +11,11 @@
 
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <libproc.h>
+#include <poll.h>
 #include <sys/resource.h>
+#if OS_MAC
+# include <libproc.h>
+#endif
 
 #define Check(c) do { if(!(c)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); abort_self(1); } } while(0)
 
@@ -24,8 +27,10 @@ peer_connect(SOCK_Endpoint ep)
   struct timeval timeout = {.tv_sec = 3};
   Check(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0);
   Check(setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) == 0);
+#if OS_MAC
   int no_sigpipe = 1;
   Check(setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe)) == 0);
+#endif
   struct sockaddr_in addr = {0};
   addr.sin_family = AF_INET;
   addr.sin_port = htons(ep.port);
@@ -237,6 +242,14 @@ test_duplex_backpressure_disconnect(void)
 internal U64
 descriptor_count(void)
 {
+#if OS_LINUX
+  DIR *directory = opendir("/proc/self/fd");
+  Check(directory != 0);
+  U64 count = 0;
+  while(readdir(directory) != 0) { count += 1; }
+  closedir(directory);
+  return count;
+#else
   int size = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, 0, 0);
   Check(size > 0);
   int cap = size+32*sizeof(struct proc_fdinfo);
@@ -246,6 +259,7 @@ descriptor_count(void)
   Check(filled > 0 && filled < cap);
   free(buffer);
   return (U64)filled/sizeof(struct proc_fdinfo);
+#endif
 }
 
 internal void

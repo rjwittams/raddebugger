@@ -1,18 +1,19 @@
-# Darwin socket session probes
+# POSIX socket session probes
 
-Run on macOS from the repository root:
+Run on macOS or Linux from the repository root:
 
 ```sh
-bash src/socket/tests/run_mac_sessions.sh
-bash src/socket/tests/run_mac_sessions.sh --case:large_duplex
+bash src/socket/tests/run_posix_sessions.sh
+bash src/socket/tests/run_posix_sessions.sh --case:large_duplex
 SOCKET_TEST_CFLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
   ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
-  bash src/socket/tests/run_mac_sessions.sh
+  bash src/socket/tests/run_posix_sessions.sh
 ```
 
 The executable has a 30-second outer timeout. An unknown case fails, rather
 than succeeding without running a test. `CC` selects the compiler; additional
 compile/link flags go in `SOCKET_TEST_CFLAGS`.
+The Darwin-only `run_mac_sessions.sh` command remains an alias for this runner.
 
 These tests cross the public session interface using native TCP peers or a
 second session. They do not inspect provider queues. They cover listener
@@ -23,7 +24,7 @@ disconnect case also checks that an idle session does not busy-poll.
 
 ## Provider contract at this checkpoint
 
-The Darwin provider supports IPv4 TCP. Listeners bind only to `127.0.0.1`;
+The shared macOS/Linux provider supports IPv4 TCP. Listeners bind only to `127.0.0.1`;
 port zero requests an OS-assigned port. `sock_session_listener_endpoint`
 returns that actual endpoint. UDP and IPv6 sends fail explicitly.
 
@@ -47,7 +48,10 @@ API calls have finished; concurrent use of a handle during/after close is not
 supported. Close wakes and joins I/O before releasing descriptors and storage.
 
 This is not command framing, IPC dispatch, authentication, debugger-target or
-GUI coverage. This runner does not validate Windows/Linux transport behavior.
+GUI coverage. This runner does not validate Windows transport behavior.
+The POSIX I/O worker is shared, with Linux `MSG_NOSIGNAL` sends and monotonic
+condition waits; Darwin retains `SO_NOSIGPIPE` and relative condition waits.
+Neither provider changes the process's SIGPIPE disposition.
 
 ## Portable local-listener checks
 
@@ -71,8 +75,10 @@ at the same address. Windows listeners use `SO_EXCLUSIVEADDRUSE`; no listener
 uses `SO_REUSEPORT`. Failed socket/bind/listen construction returns a zero
 session instead of silently listening on a different port.
 
-The Windows/Linux successful-session close functions remain upstream TODOs.
-Each listener case exits its process; it does not assert successful-session
-resource cleanup. Nor does it prove large sends, EOF handling, application
-async-lane progress, IPC authentication or complete framed requests/replies.
-Later IOCP/epoll/thread setup failures remain outside this constructor slice.
+Windows' successful-session close function remains an upstream TODO. Each
+listener case exits its process; that runner does not assert successful-session
+resource cleanup or prove large sends, EOF handling, application async-lane
+progress, IPC authentication or complete framed requests/replies. The POSIX
+session suite above exercises stream/shutdown behavior and descriptor cleanup
+on macOS/Linux. Windows IOCP/thread setup failure paths remain outside these
+listener checks.
