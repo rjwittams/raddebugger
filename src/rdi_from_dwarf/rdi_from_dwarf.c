@@ -4230,6 +4230,8 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       case DW_ExprOp_CallFrameCfa:
                       {
                         rdim_bytecode_push_op(arena, &dst_bytecode, RDI_EvalOp_PushCfa, 0);
+                        push_vals[0].type_kind = RDI_TypeKind_U64;
+                        push_vals[0].is_addr = 1;
                       }break;
                       
                       //- rjf: memory reads
