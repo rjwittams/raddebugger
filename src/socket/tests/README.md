@@ -1,4 +1,4 @@
-# POSIX socket session probes
+# Socket session probes
 
 Run on macOS or Linux from the repository root:
 
@@ -15,6 +15,16 @@ than succeeding without running a test. `CC` selects the compiler; additional
 compile/link flags go in `SOCKET_TEST_CFLAGS`.
 The Darwin-only `run_mac_sessions.sh` command remains an alias for this runner.
 
+On Windows, enter an MSVC x64 developer environment, then run:
+
+```bat
+src\socket\tests\run_windows_sessions.cmd
+src\socket\tests\run_windows_sessions.cmd --case:large_duplex
+```
+
+That runner uses `py -3` for the same 30-second outer timeout and accepts
+additional compiler/linker flags in `SOCKET_TEST_CFLAGS`.
+
 These tests cross the public session interface using native TCP peers or a
 second session. They do not inspect provider queues. They cover listener
 addresses and instance separation, byte delivery in both directions, binary
@@ -24,7 +34,8 @@ disconnect case also checks that an idle session does not busy-poll.
 
 ## Provider contract at this checkpoint
 
-The shared macOS/Linux provider supports IPv4 TCP. Listeners bind only to `127.0.0.1`;
+The shared session worker supports IPv4 TCP on macOS, Linux and Windows.
+Listeners bind only to `127.0.0.1`;
 port zero requests an OS-assigned port. `sock_session_listener_endpoint`
 returns that actual endpoint. UDP and IPv6 sends fail explicitly.
 
@@ -48,10 +59,19 @@ API calls have finished; concurrent use of a handle during/after close is not
 supported. Close wakes and joins I/O before releasing descriptors and storage.
 
 This is not command framing, IPC dispatch, authentication, debugger-target or
-GUI coverage. This runner does not validate Windows transport behavior.
-The POSIX I/O worker is shared, with Linux `MSG_NOSIGNAL` sends and monotonic
+GUI coverage. The worker shares queue ownership, partial-write progress and
+shutdown across OS adapters. Linux uses `MSG_NOSIGNAL` sends and monotonic
 condition waits; Darwin retains `SO_NOSIGPIPE` and relative condition waits.
-Neither provider changes the process's SIGPIPE disposition.
+Neither changes the process's SIGPIPE disposition. Windows uses `WSAPoll`,
+SRW condition waits and an internal connected UDP wakeup pair bound only to
+loopback. This does not add public UDP support. Windows listeners retain
+exclusive binding, and accepted/outgoing sockets are non-inheritable.
+
+On Windows the fixture primes native nonblocking-connect runtime state before
+counting handles. A standalone native control reproduces the AFD, completion
+and event handles retained on first use, without any RAD socket-session code.
+Resource assertions then require exact equality, both for the 64-cycle
+close/bind case and the whole suite; there is no extra-handle allowance.
 
 ## Portable local-listener checks
 
@@ -75,10 +95,11 @@ at the same address. Windows listeners use `SO_EXCLUSIVEADDRUSE`; no listener
 uses `SO_REUSEPORT`. Failed socket/bind/listen construction returns a zero
 session instead of silently listening on a different port.
 
-Windows' successful-session close function remains an upstream TODO. Each
-listener case exits its process; that runner does not assert successful-session
-resource cleanup or prove large sends, EOF handling, application async-lane
-progress, IPC authentication or complete framed requests/replies. The POSIX
-session suite above exercises stream/shutdown behavior and descriptor cleanup
-on macOS/Linux. Windows IOCP/thread setup failure paths remain outside these
-listener checks.
+Each listener case exits its process; that runner alone does not assert
+successful-session resource cleanup or prove large sends, EOF handling,
+application async-lane progress, IPC authentication or complete framed
+requests/replies. The session suite above exercises stream/shutdown behavior
+and descriptor/handle cleanup across the three OS adapters. Constructor
+allocation/thread failures have not been forced by these probes. Windows
+runtime checks currently use Windows 11; older Windows builds' `WSAPoll`
+connect-failure behavior is not covered.

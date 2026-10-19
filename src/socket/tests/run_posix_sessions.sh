@@ -14,5 +14,5 @@ esac
 mkdir -p build
 ${CC:-clang} -g -O0 -I src -D_GNU_SOURCE -Wno-unused-function -Wno-unused-variable \
   -Wno-initializer-overrides -Wno-unused-value "${task_flags[@]}" \
-  ${SOCKET_TEST_CFLAGS:-} src/socket/tests/posix_sessions.c "${task_libs[@]}" -o build/posix_socket_sessions
+  ${SOCKET_TEST_CFLAGS:-} src/socket/tests/sessions.c "${task_libs[@]}" -o build/posix_socket_sessions
 python3 -c 'import subprocess,sys; subprocess.run(sys.argv[1:],check=True,timeout=30)' ./build/posix_socket_sessions "$@"
