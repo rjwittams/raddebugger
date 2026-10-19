@@ -372,6 +372,7 @@ struct D_UserState
   Arena *ctrl_last_run_arena;
   D_RunKind ctrl_last_run_kind;
   D_CmdKind ctrl_source_step_kind;
+  D_Handle ctrl_source_step_thread;
   D_Line ctrl_source_step_origin;
   U64 ctrl_source_step_sp;
   B32 ctrl_source_step_continuing;

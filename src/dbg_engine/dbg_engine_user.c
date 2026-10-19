@@ -1677,7 +1677,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
           // never consume a user breakpoint, target trap, exception, or halt.
           if(event->cause == D_EventCause_Finished &&
              d_user_state->ctrl_source_step_kind != D_CmdKind_Null &&
-             d_handle_match(event->entity, d_user_state->ctrl_last_run_thread_handle) &&
+             d_handle_match(event->entity, d_user_state->ctrl_source_step_thread) &&
              d_user_state->cmds.count == 0)
           {
             D_Entity *thread = d_entity_from_handle(event->entity);
@@ -2388,6 +2388,7 @@ d_tick(Arena *arena, D_TargetArray *targets, D_BreakpointArray *breakpoints, D_P
         {
           if(source_step_stop == 0)
           {
+            d_user_state->ctrl_source_step_thread = run_thread->handle;
             U64 ip = d_cached_ip_from_thread(run_thread->handle);
             D_Entity *process = d_entity_ancestor_from_kind(run_thread, D_EntityKind_Process);
             D_Entity *module = d_module_from_process_vaddr(process, ip);
