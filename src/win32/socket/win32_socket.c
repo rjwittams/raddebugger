@@ -357,6 +357,23 @@ sock_async_tick(void)
 internal SOCK_Session
 sock_session_open(U16 listener_port, SOCK_WakeupFunctionType *wakeup_hook)
 {
+  // Validate the local listener before allocating session state or async work.
+  SOCK_Session failed = {0};
+  SOCKET listener = WSASocketA(AF_INET, SOCK_STREAM, IPPROTO_TCP, 0, 0, WSA_FLAG_OVERLAPPED);
+  if(listener == INVALID_SOCKET) { return failed; }
+  BOOL exclusive = TRUE;
+  struct sockaddr_in server_addr = {0};
+  server_addr.sin_family = AF_INET;
+  server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  server_addr.sin_port = htons(listener_port);
+  if(setsockopt(listener, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (char *)&exclusive, sizeof(exclusive)) != 0 ||
+     bind(listener, (SOCKADDR *)&server_addr, sizeof(server_addr)) != 0 ||
+     listen(listener, SOMAXCONN) != 0)
+  {
+    closesocket(listener);
+    return failed;
+  }
+
   //- rjf: set up state
   Arena *arena = arena_alloc();
   W32_SOCK_Session *session = push_array(arena, W32_SOCK_Session, 1);
@@ -369,15 +386,7 @@ sock_session_open(U16 listener_port, SOCK_WakeupFunctionType *wakeup_hook)
   
   //- rjf: set up listener(s)
   {
-    session->tcp_listen_socket = WSASocketA(AF_INET, SOCK_STREAM, IPPROTO_TCP, 0, 0, WSA_FLAG_OVERLAPPED);
-    DWORD ipv6only = 0;
-    setsockopt(session->tcp_listen_socket, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&ipv6only, sizeof(ipv6only));
-    struct sockaddr_in server_addr;
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(listener_port);
-    bind(session->tcp_listen_socket, (SOCKADDR *)&server_addr, sizeof(server_addr));
-    listen(session->tcp_listen_socket, SOMAXCONN);
+    session->tcp_listen_socket = listener;
   }
   
   //- rjf: associate listener sockets with IOCP

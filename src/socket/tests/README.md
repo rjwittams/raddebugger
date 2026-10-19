@@ -47,6 +47,32 @@ API calls have finished; concurrent use of a handle during/after close is not
 supported. Close wakes and joins I/O before releasing descriptors and storage.
 
 This is not command framing, IPC dispatch, authentication, debugger-target or
-GUI coverage. Windows/Linux have matching endpoint-query implementations, but
-their existing transport behavior is unchanged and is not validated by this
-Darwin-only runner.
+GUI coverage. This runner does not validate Windows/Linux transport behavior.
+
+## Portable local-listener checks
+
+On Windows, first enter an MSVC x64 developer environment. On any supported
+host, run:
+
+```sh
+python3 src/socket/tests/run_local_listeners.py
+python3 src/socket/tests/run_local_listeners.py --case occupied_port
+```
+
+Use `py -3` instead of `python3` when that is the Windows Python launcher.
+The runner builds the native fixture and gives each case its own process and
+15-second deadline. An unknown case fails. POSIX builds accept `CC`; additional
+compile/link flags go in `SOCKET_TEST_CFLAGS`.
+
+The four cases check loopback-only listener addresses, 64 rejected duplicate
+opens without native handle/descriptor growth, independent ephemeral endpoints
+with native-peer byte delivery, and refusal of a native reuse-bind contender
+at the same address. Windows listeners use `SO_EXCLUSIVEADDRUSE`; no listener
+uses `SO_REUSEPORT`. Failed socket/bind/listen construction returns a zero
+session instead of silently listening on a different port.
+
+The Windows/Linux successful-session close functions remain upstream TODOs.
+Each listener case exits its process; it does not assert successful-session
+resource cleanup. Nor does it prove large sends, EOF handling, application
+async-lane progress, IPC authentication or complete framed requests/replies.
+Later IOCP/epoll/thread setup failures remain outside this constructor slice.

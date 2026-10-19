@@ -330,6 +330,21 @@ sock_async_tick(void)
 internal SOCK_Session
 sock_session_open(U16 listener_port, SOCK_WakeupFunctionType *wakeup_hook)
 {
+  // Do not let a failed explicit bind turn into listen's implicit port-zero bind.
+  SOCK_Session result = {0};
+  int listener = socket(AF_INET, SOCK_STREAM, 0);
+  if(listener == -1) { return result; }
+  struct sockaddr_in server_addr = {0};
+  server_addr.sin_family = AF_INET;
+  server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  server_addr.sin_port = htons(listener_port);
+  if(bind(listener, (struct sockaddr *)&server_addr, sizeof(server_addr)) != 0 ||
+     listen(listener, SOMAXCONN) != 0)
+  {
+    close(listener);
+    return result;
+  }
+
   //- rjf: set up state
   Arena *arena = arena_alloc();
   LNX_SOCK_Session *session = push_array(arena, LNX_SOCK_Session, 1);
@@ -340,15 +355,7 @@ sock_session_open(U16 listener_port, SOCK_WakeupFunctionType *wakeup_hook)
   
   //- rjf: set up listener
   {
-    session->tcp_listen_socket = socket(AF_INET, SOCK_STREAM, 0);
-    U32 ipv6only = 0;
-    setsockopt(session->tcp_listen_socket, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&ipv6only, sizeof(ipv6only));
-    struct sockaddr_in server_addr;
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(listener_port);
-    bind(session->tcp_listen_socket, (struct sockaddr *)&server_addr, sizeof(server_addr));
-    listen(session->tcp_listen_socket, SOMAXCONN);
+    session->tcp_listen_socket = listener;
     struct epoll_event evt = {0};
     evt.events = EPOLLIN;
     epoll_ctl(session->epoll_fd, EPOLL_CTL_ADD, session->tcp_listen_socket, &evt);
