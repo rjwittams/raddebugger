@@ -9,24 +9,94 @@
 #include "base/base_inc.c"
 #include "socket/socket_inc.c"
 
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/resource.h>
+#if !OS_WINDOWS
+# include <sys/socket.h>
+# include <netinet/in.h>
+# include <poll.h>
+# include <sys/resource.h>
+#endif
 #if OS_MAC
 # include <libproc.h>
 #endif
 
 #define Check(c) do { if(!(c)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); abort_self(1); } } while(0)
 
-internal int
+#if OS_WINDOWS
+typedef SOCKET PeerSocket;
+typedef int PeerSocketLen;
+# define PeerSocket_Invalid INVALID_SOCKET
+#else
+typedef int PeerSocket;
+typedef socklen_t PeerSocketLen;
+# define PeerSocket_Invalid -1
+#endif
+
+internal void
+peer_close(PeerSocket fd)
+{
+#if OS_WINDOWS
+  closesocket(fd);
+#else
+  close(fd);
+#endif
+}
+
+#if OS_WINDOWS
+typedef struct NativeConnectWarmup NativeConnectWarmup;
+struct NativeConnectWarmup { SOCKET socket; struct sockaddr_in address; };
+
+internal DWORD WINAPI
+native_connect_warmup(void *ptr)
+{
+  NativeConnectWarmup *c = (NativeConnectWarmup *)ptr;
+  int code = connect(c->socket, (struct sockaddr *)&c->address, sizeof(c->address));
+  Check(code == 0 || WSAGetLastError() == WSAEWOULDBLOCK);
+  WSAPOLLFD descriptor = {c->socket, POLLOUT, 0};
+  Check(WSAPoll(&descriptor, 1, 3000) == 1);
+  int error = 0, size = sizeof(error);
+  Check(getsockopt(c->socket, SOL_SOCKET, SO_ERROR, (char *)&error, &size) == 0 && error == 0);
+  return 0;
+}
+
+// Native controls retain process-wide handles on first nonblocking connect.
+// Prime that runtime before counting; no RAD session participates in warm-up.
+internal void
+warm_native_socket_runtime(void)
+{
+  SOCKET listener = WSASocketA(AF_INET, SOCK_STREAM, IPPROTO_TCP, 0, 0, WSA_FLAG_NO_HANDLE_INHERIT);
+  SOCKET client = WSASocketA(AF_INET, SOCK_STREAM, IPPROTO_TCP, 0, 0, WSA_FLAG_NO_HANDLE_INHERIT);
+  Check(listener != INVALID_SOCKET && client != INVALID_SOCKET);
+  NativeConnectWarmup c = {0};
+  c.socket = client;
+  c.address.sin_family = AF_INET;
+  c.address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  Check(bind(listener, (struct sockaddr *)&c.address, sizeof(c.address)) == 0 && listen(listener, 4) == 0);
+  int size = sizeof(c.address);
+  Check(getsockname(listener, (struct sockaddr *)&c.address, &size) == 0);
+  WSAPOLLFD descriptor = {listener, POLLIN, 0};
+  Check(WSAPoll(&descriptor, 1, 0) == 0);
+  u_long nonblocking = 1;
+  Check(ioctlsocket(client, FIONBIO, &nonblocking) == 0);
+  HANDLE thread = CreateThread(0, 0, native_connect_warmup, &c, 0, 0);
+  Check(thread != 0 && WaitForSingleObject(thread, 4000) == WAIT_OBJECT_0 && CloseHandle(thread));
+  SOCKET accepted = accept(listener, 0, 0);
+  Check(accepted != INVALID_SOCKET);
+  Check(closesocket(accepted) == 0 && closesocket(client) == 0 && closesocket(listener) == 0);
+}
+#endif
+
+internal PeerSocket
 peer_connect(SOCK_Endpoint ep)
 {
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
-  Check(fd != -1);
+  PeerSocket fd = socket(AF_INET, SOCK_STREAM, 0);
+  Check(fd != PeerSocket_Invalid);
+#if OS_WINDOWS
+  DWORD timeout = 3000;
+#else
   struct timeval timeout = {.tv_sec = 3};
-  Check(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0);
-  Check(setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) == 0);
+#endif
+  Check(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) == 0);
+  Check(setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout, sizeof(timeout)) == 0);
 #if OS_MAC
   int no_sigpipe = 1;
   Check(setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe)) == 0);
@@ -57,7 +127,7 @@ test_round_trip(void)
   Temp scratch = scratch_begin(0, 0);
   SOCK_Session session = sock_session_open(0, 0);
   Check(session.u64[0] != 0);
-  int peer = peer_connect(sock_session_listener_endpoint(session));
+  PeerSocket peer = peer_connect(sock_session_listener_endpoint(session));
   Check(send(peer, "request", 7, 0) == 7);
   SOCK_Protocol protocol = SOCK_Protocol_UDP;
   SOCK_Endpoint from = {0};
@@ -69,12 +139,12 @@ test_round_trip(void)
   U64 received = 0;
   while(received < sizeof(reply))
   {
-    ssize_t n = recv(peer, reply+received, sizeof(reply)-received, 0);
+    S64 n = recv(peer, (char *)reply+received, (int)(sizeof(reply)-received), 0);
     Check(n > 0);
     received += (U64)n;
   }
   Check(MemoryMatch(reply, "response", sizeof(reply)));
-  close(peer);
+  peer_close(peer);
   sock_session_close(session);
   scratch_end(scratch);
 }
@@ -108,22 +178,22 @@ test_outgoing_and_eof(void)
 }
 
 internal void
-peer_write(int fd, String8 data)
+peer_write(PeerSocket fd, String8 data)
 {
   for(U64 pos = 0; pos < data.size;)
   {
-    ssize_t n = send(fd, data.str+pos, data.size-pos, 0);
+    S64 n = send(fd, (char *)data.str+pos, (int)(data.size-pos), 0);
     Check(n > 0);
     pos += (U64)n;
   }
 }
 
 internal void
-peer_read(int fd, String8 data)
+peer_read(PeerSocket fd, String8 data)
 {
   for(U64 pos = 0; pos < data.size;)
   {
-    ssize_t n = recv(fd, data.str+pos, data.size-pos, 0);
+    S64 n = recv(fd, (char *)data.str+pos, (int)(data.size-pos), 0);
     Check(n > 0);
     pos += (U64)n;
   }
@@ -144,7 +214,7 @@ test_large_duplex(void)
   }
   SOCK_Session session = sock_session_open(0, 0);
   Check(session.u64[0] != 0);
-  int peer = peer_connect(sock_session_listener_endpoint(session));
+  PeerSocket peer = peer_connect(sock_session_listener_endpoint(session));
   // Discover the accepted peer without reaching into the provider's storage.
   peer_write(peer, str8_lit("start"));
   SOCK_Protocol protocol;
@@ -165,7 +235,7 @@ test_large_duplex(void)
     Check(MemoryMatch(data.str, request+pos, data.size));
     pos += data.size;
   }
-  close(peer);
+  peer_close(peer);
   sock_session_close(session);
   scratch_end(scratch);
 }
@@ -199,10 +269,17 @@ test_backpressure_close(void)
 internal U64
 cpu_time_us(void)
 {
+#if OS_WINDOWS
+  FILETIME created, exited, kernel, user;
+  Check(GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user));
+  return ((((U64)kernel.dwHighDateTime << 32)|kernel.dwLowDateTime)+
+          (((U64)user.dwHighDateTime << 32)|user.dwLowDateTime))/10;
+#else
   struct rusage usage = {0};
   Check(getrusage(RUSAGE_SELF, &usage) == 0);
   return (usage.ru_utime.tv_sec+usage.ru_stime.tv_sec)*Million(1)+
     usage.ru_utime.tv_usec+usage.ru_stime.tv_usec;
+#endif
 }
 
 internal void
@@ -242,7 +319,11 @@ test_duplex_backpressure_disconnect(void)
 internal U64
 descriptor_count(void)
 {
-#if OS_LINUX
+#if OS_WINDOWS
+  DWORD count = 0;
+  Check(GetProcessHandleCount(GetCurrentProcess(), &count));
+  return count;
+#elif OS_LINUX
   DIR *directory = opendir("/proc/self/fd");
   Check(directory != 0);
   U64 count = 0;
@@ -285,7 +366,7 @@ internal void
 delayed_peer_write(void *ptr)
 {
   sleep_ms(20);
-  peer_write(*(int *)ptr, str8_lit("wake"));
+  peer_write(*(PeerSocket *)ptr, str8_lit("wake"));
 }
 
 internal void
@@ -302,13 +383,13 @@ test_receive_deadlines(void)
   Check(!sock_recv(scratch.arena, session, &protocol, &from, &data, before+20000));
   Check(now_time_us()-before >= 10000 && now_time_us()-before < Million(3));
   Check(protocol == SOCK_Protocol_UDP && str8_match(data, str8_lit("unchanged"), 0));
-  int peer = peer_connect(sock_session_listener_endpoint(session));
+  PeerSocket peer = peer_connect(sock_session_listener_endpoint(session));
   Thread sender = thread_launch(delayed_peer_write, &peer);
   Check(sender.u64[0] != 0);
   Check(sock_recv(scratch.arena, session, &protocol, &from, &data, max_U64));
   Check(str8_match(data, str8_lit("wake"), 0));
   Check(thread_join(sender, max_U64));
-  close(peer);
+  peer_close(peer);
   sock_session_close(session);
   scratch_end(scratch);
 }
@@ -337,14 +418,14 @@ test_reentrant_wakeup(void)
   SOCK_Session session = sock_session_open(0, receive_in_wakeup);
   Check(session.u64[0] != 0);
   ins_atomic_u64_eval_assign(&hook_session, session.u64[0]);
-  int peer = peer_connect(sock_session_listener_endpoint(session));
+  PeerSocket peer = peer_connect(sock_session_listener_endpoint(session));
   peer_write(peer, str8_lit("hook"));
   U64 deadline = now_time_us()+Million(3);
   while(!ins_atomic_u32_eval(&hook_received) && now_time_us() < deadline) { sleep_ms(1); }
   Check(ins_atomic_u32_eval(&hook_received));
   sock_session_close(session);
   ins_atomic_u64_eval_assign(&hook_session, 0);
-  close(peer);
+  peer_close(peer);
 }
 
 internal void
@@ -353,7 +434,7 @@ test_rejected_send_is_atomic(void)
   Temp scratch = scratch_begin(0, 0);
   SOCK_Session session = sock_session_open(0, 0);
   Check(session.u64[0] != 0);
-  int peer = peer_connect(sock_session_listener_endpoint(session));
+  PeerSocket peer = peer_connect(sock_session_listener_endpoint(session));
   peer_write(peer, str8_lit("start"));
   SOCK_Protocol protocol;
   SOCK_Endpoint from;
@@ -370,7 +451,7 @@ test_rejected_send_is_atomic(void)
   U8 reply[4];
   peer_read(peer, str8(reply, sizeof(reply)));
   Check(MemoryMatch(reply, "only", sizeof(reply)));
-  close(peer);
+  peer_close(peer);
   sock_session_close(session);
   scratch_end(scratch);
 }
@@ -387,8 +468,8 @@ test_instances(void)
   SOCK_Endpoint ep_a = sock_session_listener_endpoint(a);
   SOCK_Endpoint ep_b = sock_session_listener_endpoint(b);
   Check(ep_a.port != ep_b.port);
-  int peer_a = peer_connect(ep_a);
-  int peer_b = peer_connect(ep_b);
+  PeerSocket peer_a = peer_connect(ep_a);
+  PeerSocket peer_b = peer_connect(ep_b);
   peer_write(peer_b, str8_lit("bravo"));
   peer_write(peer_a, str8_lit("alpha"));
   SOCK_Protocol protocol;
@@ -405,8 +486,8 @@ test_instances(void)
   Check(reply == 'A');
   peer_read(peer_b, str8(&reply, 1));
   Check(reply == 'B');
-  close(peer_a);
-  close(peer_b);
+  peer_close(peer_a);
+  peer_close(peer_b);
   sock_session_close(a);
   sock_session_close(b);
   scratch_end(scratch);
@@ -418,7 +499,7 @@ test_reset_and_refused(void)
   Temp scratch = scratch_begin(0, 0);
   SOCK_Session session = sock_session_open(0, 0);
   Check(session.u64[0] != 0);
-  int peer = peer_connect(sock_session_listener_endpoint(session));
+  PeerSocket peer = peer_connect(sock_session_listener_endpoint(session));
   peer_write(peer, str8_lit("before reset"));
   SOCK_Protocol protocol;
   SOCK_Endpoint from;
@@ -426,8 +507,8 @@ test_reset_and_refused(void)
   Check(sock_recv(scratch.arena, session, &protocol, &from, &data, now_time_us()+Million(3)));
   Check(str8_match(data, str8_lit("before reset"), 0));
   struct linger reset = {.l_onoff = 1, .l_linger = 0};
-  Check(setsockopt(peer, SOL_SOCKET, SO_LINGER, &reset, sizeof(reset)) == 0);
-  close(peer);
+  Check(setsockopt(peer, SOL_SOCKET, SO_LINGER, (char *)&reset, sizeof(reset)) == 0);
+  peer_close(peer);
   Check(sock_recv(scratch.arena, session, &protocol, &from, &data, now_time_us()+Million(3)));
   Check(data.size == 0);
   Check(!sock_recv(scratch.arena, session, &protocol, &from, &data, now_time_us()+20000));
@@ -435,24 +516,41 @@ test_reset_and_refused(void)
   peer_write(peer, str8_lit("after reset"));
   Check(sock_recv(scratch.arena, session, &protocol, &from, &data, now_time_us()+Million(3)));
   Check(str8_match(data, str8_lit("after reset"), 0));
-  close(peer);
+  peer_close(peer);
   sock_session_close(session);
 
   session = sock_session_open(0, 0);
   Check(session.u64[0] != 0);
   // A bound-but-unlistening TCP socket drops SYNs on Darwin. Close the bind,
   // then establish refusal independently before exercising the provider.
-  int reserved = socket(AF_INET, SOCK_STREAM, 0);
-  Check(reserved != -1);
+  PeerSocket reserved = socket(AF_INET, SOCK_STREAM, 0);
+  Check(reserved != PeerSocket_Invalid);
   struct sockaddr_in addr = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
   Check(bind(reserved, (struct sockaddr *)&addr, sizeof(addr)) == 0);
-  socklen_t size = sizeof(addr);
+  PeerSocketLen size = sizeof(addr);
   Check(getsockname(reserved, (struct sockaddr *)&addr, &size) == 0);
   SOCK_Endpoint refused = sock_endpoint_from_string_port(str8_lit("127.0.0.1"), ntohs(addr.sin_port));
-  close(reserved);
-  int probe = socket(AF_INET, SOCK_STREAM, 0);
-  Check(probe != -1 && fcntl(probe, F_SETFL, O_NONBLOCK) == 0);
+  peer_close(reserved);
+  PeerSocket probe = socket(AF_INET, SOCK_STREAM, 0);
+  Check(probe != PeerSocket_Invalid);
+#if OS_WINDOWS
+  u_long nonblocking = 1;
+  Check(ioctlsocket(probe, FIONBIO, &nonblocking) == 0);
+#else
+  Check(fcntl(probe, F_SETFL, O_NONBLOCK) == 0);
+#endif
   int code = connect(probe, (struct sockaddr *)&addr, sizeof(addr));
+#if OS_WINDOWS
+  int error = WSAGetLastError();
+  Check(code != 0 && (error == WSAEWOULDBLOCK || error == WSAECONNREFUSED));
+  if(error == WSAEWOULDBLOCK)
+  {
+    WSAPOLLFD fd = {probe, POLLOUT, 0};
+    Check(WSAPoll(&fd, 1, 3000) > 0);
+    size = sizeof(error);
+    Check(getsockopt(probe, SOL_SOCKET, SO_ERROR, (char *)&error, &size) == 0 && error == WSAECONNREFUSED);
+  }
+#else
   if(code != 0 && errno == EINPROGRESS)
   {
     struct pollfd fd = {probe, POLLOUT, 0};
@@ -462,7 +560,8 @@ test_reset_and_refused(void)
     Check(getsockopt(probe, SOL_SOCKET, SO_ERROR, &error, &size) == 0 && error == ECONNREFUSED);
   }
   else { Check(code == -1 && errno == ECONNREFUSED); }
-  close(probe);
+#endif
+  peer_close(probe);
   Check(sock_send(session, SOCK_Protocol_TCP, refused, str8_lit("not delivered"), now_time_us()+Million(3)));
   Check(sock_recv(scratch.arena, session, &protocol, &from, &data, now_time_us()+Million(3)));
   Check(data.size == 0);
@@ -487,6 +586,9 @@ internal void
 entry_point(CmdLine *cmdline)
 {
   sock_init();
+#if OS_WINDOWS
+  warm_native_socket_runtime();
+#endif
   U64 before = descriptor_count();
   run_case(cmdline, "listener", test_listener);
   run_case(cmdline, "round_trip", test_round_trip);
