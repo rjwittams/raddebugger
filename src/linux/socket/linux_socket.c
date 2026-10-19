@@ -379,6 +379,24 @@ sock_session_close(SOCK_Session session)
   // TODO(rjf)
 }
 
+internal SOCK_Endpoint
+sock_session_listener_endpoint(SOCK_Session session)
+{
+  SOCK_Endpoint result = {0};
+  if(session.u64[0] != 0)
+  {
+    LNX_SOCK_Session *s = (LNX_SOCK_Session *)session.u64[0];
+    struct sockaddr_in addr = {0};
+    socklen_t size = sizeof(addr);
+    if(getsockname(s->tcp_listen_socket, (struct sockaddr *)&addr, &size) == 0 && addr.sin_family == AF_INET)
+    {
+      result.port = ntohs(addr.sin_port);
+      MemoryCopy(result.address_u8, &addr.sin_addr, sizeof(addr.sin_addr));
+    }
+  }
+  return result;
+}
+
 ////////////////////////////////
 //~ rjf: @per_os_impl Sends
 
