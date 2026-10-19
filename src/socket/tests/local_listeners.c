@@ -59,10 +59,31 @@ test_loopback_listener(void)
 internal void
 test_occupied_port(void)
 {
+  Temp scratch = scratch_begin(0, 0);
   SOCK_Session session = sock_session_open(0, 0);
   Check(session.u64[0] != 0);
   SOCK_Endpoint endpoint = sock_session_listener_endpoint(session);
   Check(endpoint.port != 0);
+  // Complete a native-peer receive so the live worker is initialized before
+  // measuring failures; keep that connection open throughout the count check.
+#if OS_WINDOWS
+  SOCKET peer = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  Check(peer != INVALID_SOCKET);
+#else
+  int peer = socket(AF_INET, SOCK_STREAM, 0);
+  Check(peer != -1);
+#endif
+  struct sockaddr_in address = {0};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  address.sin_port = htons(endpoint.port);
+  Check(connect(peer, (struct sockaddr *)&address, sizeof(address)) == 0);
+  Check(send(peer, "R", 1, 0) == 1);
+  SOCK_Protocol protocol;
+  SOCK_Endpoint from;
+  String8 data;
+  Check(sock_recv(scratch.arena, session, &protocol, &from, &data, now_time_us()+Million(3)));
+  Check(protocol == SOCK_Protocol_TCP && str8_match(data, str8_lit("R"), 0));
   U64 before = native_handle_count();
   for(U64 index = 0; index < 64; index += 1)
   {
@@ -70,7 +91,13 @@ test_occupied_port(void)
     Check(duplicate.u64[0] == 0);
   }
   Check(native_handle_count() == before);
+#if OS_WINDOWS
+  closesocket(peer);
+#else
+  close(peer);
+#endif
   sock_session_close(session);
+  scratch_end(scratch);
   fprintf(stdout, "PASS occupied_port\n");
 }
 
