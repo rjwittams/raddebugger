@@ -1,0 +1,55 @@
+// Copyright (c) 2026 Robert Wittams
+// Licensed under the MIT license (https://opensource.org/license/mit/)
+
+#ifndef IPC_H
+#define IPC_H
+
+typedef struct IPC_Endpoint IPC_Endpoint;
+struct IPC_Endpoint
+{
+  SOCK_Endpoint address;
+  U128 instance_id;
+};
+
+typedef struct IPC_Message IPC_Message;
+struct IPC_Message
+{
+  SOCK_Peer peer;
+  U64 id;
+  String8 data;
+};
+
+typedef struct IPC_Server IPC_Server;
+
+typedef enum IPC_Status
+{
+  IPC_Status_None,
+  IPC_Status_Success,
+  IPC_Status_Unavailable,
+  IPC_Status_Timeout,
+  IPC_Status_Disconnected,
+  IPC_Status_InvalidReply,
+  IPC_Status_TooLarge,
+} IPC_Status;
+
+typedef struct IPC_Response IPC_Response;
+struct IPC_Response
+{
+  IPC_Status status;
+  String8 data;
+};
+
+// The caller supplies a nonzero instance id, not an authentication secret.
+// Authentication and endpoint publication are separate activation gates.
+// The owner serializes calls and closes only after those calls have finished.
+internal IPC_Server *ipc_server_open(U16 port, U128 instance_id, SOCK_WakeupFunctionType *wakeup);
+internal IPC_Endpoint ipc_server_endpoint(IPC_Server *server);
+internal void ipc_server_close(IPC_Server *server);
+// A false receive leaves outputs unchanged; partial frames are never commands.
+internal B32 ipc_server_receive(Arena *arena, IPC_Server *server, IPC_Message *out, U64 endt_us);
+internal B32 ipc_server_reply(IPC_Server *server, IPC_Message request, String8 data, U64 endt_us);
+// One connection/transaction per call, with one deadline shared by send/receive.
+// Errors return no partial reply; successful bytes belong to the caller arena.
+internal IPC_Response ipc_request(Arena *arena, IPC_Endpoint endpoint, String8 data, U64 endt_us);
+
+#endif // IPC_H
