@@ -407,7 +407,7 @@ rb_thread_entry_point(void *p)
                macho_uuid_match(exe_uuid, dsym_uuid))
             {
               log_infof("Found companion dSYM for %S (%S) at %S with matching UUID %S\n", n->string, rb_file_format_display_name_table[file_format], dsym_path, macho_string_from_uuid(scratch.arena, exe_uuid));
-              str8_list_push(arena, &input_file_path_tasks, dsym_path);
+              str8_list_push(arena, &input_file_path_tasks, push_str8_copy(arena, dsym_path));
             }
             else
             {
