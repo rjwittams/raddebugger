@@ -2012,7 +2012,8 @@ e_push_irtree_and_type_from_expr(Arena *arena, E_IRTreeAndType *root_parent, E_I
               }
               
               // rjf: find match
-              DI_Match match = di_match_from_string(string, match_disambiguating_idx, (U32)unit_idx, allow_other_dbg_infos, target_dbg_info->dbgi_key, 0);
+              DI_Match match = di_match_from_string(string, match_disambiguating_idx, (U32)unit_idx, allow_other_dbg_infos, target_dbg_info->dbgi_key, e_base_ctx->debug_info_match_endt_us, e_base_ctx->debug_info_match_scope);
+              if(e_base_ctx->debug_info_match_stale_out) {*e_base_ctx->debug_info_match_stale_out |= match.stale;}
               
               // rjf: match -> RDI
               RDI_Parsed *rdi = di_rdi_from_key(access, match.key, 0, 0);
@@ -2034,7 +2035,8 @@ e_push_irtree_and_type_from_expr(Arena *arena, E_IRTreeAndType *root_parent, E_I
                   String8 procedure_name = fully_qualified_str8_from_rdi_symbol(scratch.arena, rdi, procedure);
                   fully_qualified_name = str8f(scratch.arena, "%S.%S", procedure_name, string);
                 }
-                DI_Match fully_qualified_match_maybe = di_match_from_string(fully_qualified_name, match_disambiguating_idx, unit_idx, 0, e_base_ctx->primary_dbg_info->dbgi_key, 0);
+                DI_Match fully_qualified_match_maybe = di_match_from_string(fully_qualified_name, match_disambiguating_idx, unit_idx, 0, e_base_ctx->primary_dbg_info->dbgi_key, e_base_ctx->debug_info_match_endt_us, e_base_ctx->debug_info_match_scope);
+                if(e_base_ctx->debug_info_match_stale_out) {*e_base_ctx->debug_info_match_stale_out |= fully_qualified_match_maybe.stale;}
                 if(fully_qualified_match_maybe.idx != 0)
                 {
                   match = fully_qualified_match_maybe;
@@ -2093,6 +2095,10 @@ e_push_irtree_and_type_from_expr(Arena *arena, E_IRTreeAndType *root_parent, E_I
                   case RDI_SectionKind_Procedures:
                   {
                     RDI_Symbol *procedure = (RDI_Symbol *)rdi_section_raw_element_from_kind_idx(rdi, match.section_kind, match.idx);
+                    RDI_Scope *scope = rdi_root_scope_from_procedure(rdi, procedure);
+                    // Abstract inline procedures have no out-of-line address.
+                    // Check the range, not its first offset: offset zero can be valid.
+                    if(scope->voff_range_first >= scope->voff_range_opl) {break;}
                     RDI_TypeNode *type_node = rdi_element_from_name_idx(rdi, TypeNodes, procedure->type_idx);
                     U64 procedure_base_voff = rdi_first_voff_from_procedure(rdi, procedure);
                     mapped_type_key = e_type_key_ext(e_type_kind_from_rdi(type_node->kind), procedure->type_idx, dbg_info_num);

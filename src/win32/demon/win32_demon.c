@@ -2470,7 +2470,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
               U64 user_trap_id = 0;
               if(is_trap)
               {
-                for(DMN_TrapChunkNode *n = ctrls->traps.first; n != 0; n = n->next)
+                for(DMN_TrapChunkNode *n = ctrls->traps.first; n != 0 && !hit_user_trap; n = n->next)
                 {
                   for(U64 idx = 0; idx < n->count; idx += 1)
                   {
@@ -3152,6 +3152,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
           DMN_Event *e = dmn_event_list_push(arena, &events);
           e->kind    = DMN_EventKind_ExitProcess;
           e->process = w32_dmn_handle_from_entity(process);
+          e->process_detached = 1;
         }
         
         // rjf: free process

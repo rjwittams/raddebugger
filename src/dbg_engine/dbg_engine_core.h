@@ -138,6 +138,7 @@ struct D_Entity
   Rng1U64 vaddr_range;
   U64 stack_base;
   U64 timestamp;
+  DI_Key dbg_info_key;
   D_BreakpointFlags bp_flags;
   String8 string;
   U64 tls_root_vaddr;
