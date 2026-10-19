@@ -78,6 +78,7 @@ Test(di_rdi_identity)
                    .data4={1,2,3,4,5,6,7,8}};
   for(U64 cpu = 0; cpu < 2; cpu += 1) for(U64 test_case = 0; test_case < 7; test_case += 1)
   {
+    Arena *bake_arena = arena_alloc();
     RDIM_BakeParams params = {0};
     params.subset_flags = RDIM_SubsetFlag_All;
     params.top_level_info.arch = (cpu != (test_case == 2)) ? RDI_Arch_ARM64 : RDI_Arch_X64;
@@ -86,10 +87,11 @@ Test(di_rdi_identity)
     if(test_case == 3) {MemoryZeroStruct(&params.top_level_info.guid);}
     U64 broadcast = 0;
     LaneCtx restore = lane_ctx(((LaneCtx){.lane_count=1, .broadcast_memory=&broadcast}));
-    RDIM_BakeResults baked = rdim_bake(arena, &params);
+    RDIM_BakeResults baked = rdim_bake(bake_arena, &params);
     lane_ctx(restore);
-    String8List blobs = rdim_file_blobs_from_section_bundle(arena, &baked.section_bundle);
+    String8List blobs = rdim_file_blobs_from_section_bundle(bake_arena, &baked.section_bundle);
     String8 data = str8_list_join(arena, &blobs, 0);
+    arena_release(bake_arena);
     if(test_case == 4) {data.size = sizeof(RDI_Header);}
     if(test_case == 5) {((RDI_Header *)data.str)->magic = 0;}
     String8 name = str8f(arena, "%I64u-%I64u.rdi", cpu, test_case);
