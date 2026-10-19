@@ -810,14 +810,14 @@ Test(d2r_source_directories)
                  0,1,1,1,1,0,0,0,1,0,0,1};
   U8 header4[] = {0,0,0,0, 4,0, 0,0,0,0, 1,1,1,0xfb,14,13,
                   0,1,1,1,1,0,0,0,1,0,0,1};
-  struct {String8 name, file, expected; U64 dirs, dir_idx;} cases[] =
+  struct {String8 name, file, expected; U64 dirs, dir_idx; B32 extra_unit_file;} cases[] =
   {
     {str8_lit("control"), str8_lit("main.c"), str8_lit("/src/main.c"), 1,0},
     {str8_lit("empty-directories"), str8_lit("main.c"), str8_lit("main.c"), 0,0},
-    {str8_lit("one-past-end"), str8_lit("main.c"), str8_lit("main.c"), 1,1},
-    {str8_lit("large-index"), str8_lit("main.c"), str8_lit("main.c"), 1,max_U64},
-    {str8_lit("relative-directory"), str8_lit("main.c"), str8_lit("/src/inc/main.c"), 2,1},
-    {str8_lit("absolute-invalid-index"), str8_lit("/else/main.c"), str8_lit("/else/main.c"), 1,max_U64},
+    {str8_lit("one-past-end"), str8_lit("main.c"), str8_lit("main.c"), 1,1,1},
+    {str8_lit("large-index"), str8_lit("main.c"), str8_lit("main.c"), 1,max_U64,1},
+    {str8_lit("relative-directory"), str8_lit("main.c"), str8_lit("/src/inc/main.c"), 2,1,1},
+    {str8_lit("absolute-invalid-index"), str8_lit("/else/main.c"), str8_lit("/else/main.c"), 1,max_U64,1},
     {str8_lit("absolute-empty-directories"), str8_lit("/src/main.c"), str8_lit("/src/main.c"), 0,0},
   };
   B32 all_paths_match = 1;
@@ -898,7 +898,8 @@ Test(d2r_source_directories)
     LaneCtx restore = lane_ctx(((LaneCtx){.lane_count = 1, .broadcast_memory = &broadcast}));
     Arena *convert_arena = arena_alloc();
     RDIM_BakeParams result = d2r_convert(convert_arena, &params);
-    TestCheck(result.units.total_count == 1 && result.src_files.total_count == 2);
+    U64 expected_files = 2 + (version == 4 && cases[case_idx].extra_unit_file);
+    TestCheck(result.units.total_count == 1 && result.src_files.total_count == expected_files);
     RDIM_LineTable *table = result.units.first->v[0].line_table;
     TestCheck(table->seq_count == 2 && table->line_count == 2);
     String8 paths[] = {cases[case_idx].expected, str8_lit("/src/known.c")};
@@ -919,6 +920,17 @@ Test(d2r_source_directories)
     TestCheck(t_write_file(push_str8f(arena, "%S.rdi", name), data));
     RDI_Parsed rdi = {0};
     TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
+    if(version == 4)
+    {
+      U32 unit_file = rdi_source_file_idx_from_path(&rdi, str8_lit("/src/main.c"));
+      TestCheck(unit_file != 0);
+      if(cases[case_idx].extra_unit_file)
+      {
+        RDI_ParsedSourceLineMap unit_map = {0};
+        rdi_parsed_from_source_line_map(&rdi, rdi_source_line_map_from_source_file(&rdi, rdi_element_from_name_idx(&rdi, SourceFiles, unit_file)), &unit_map);
+        TestCheck(unit_map.count == 0);
+      }
+    }
     RDI_ParsedLineTable parsed = {0};
     rdi_parsed_from_line_table(&rdi, rdi_line_table_from_unit(&rdi, rdi_unit_from_voff(&rdi, 0x1000)), &parsed);
     for(U64 voff = 0x1000; voff < 0x1008; voff += 1)
@@ -1025,7 +1037,7 @@ Test(d2r_source_paths)
     RDIM_BakeParams result = d2r_convert(convert_arena, &params);
     TestCheck(result.units.total_count == 2);
     test_outf("%S: %I64u source files\n", name, result.src_files.total_count);
-    all_paths_match &= result.src_files.total_count == cases[case_idx].files;
+    all_paths_match &= result.src_files.total_count == cases[case_idx].files + (version == 4 ? 2 : 0);
     RDIM_BakeResults baked = rdim_bake(convert_arena, &result);
     lane_ctx(restore);
     String8List blobs = rdim_file_blobs_from_section_bundle(convert_arena, &baked.section_bundle);
@@ -1034,6 +1046,18 @@ Test(d2r_source_paths)
     RDI_Parsed rdi = {0};
     TestCheck(rdi_parse(data.str, data.size, &rdi) == RDI_ParseStatus_Good);
     U32 file_ids[2] = {0};
+    if(version == 4)
+    {
+      String8 unit_paths[] = {str8_lit("/src/a.c"), str8_lit("/src/b.c")};
+      for EachElement(unit_idx, unit_paths)
+      {
+        U32 unit_file = rdi_source_file_idx_from_path(&rdi, unit_paths[unit_idx]);
+        TestCheck(unit_file != 0);
+        RDI_ParsedSourceLineMap unit_map = {0};
+        rdi_parsed_from_source_line_map(&rdi, rdi_source_line_map_from_source_file(&rdi, rdi_element_from_name_idx(&rdi, SourceFiles, unit_file)), &unit_map);
+        TestCheck(unit_map.count == 0);
+      }
+    }
     for EachElement(unit_idx, file_ids)
     {
       U64 address = 0x1000+0x1000*unit_idx;
