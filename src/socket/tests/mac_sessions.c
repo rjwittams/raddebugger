@@ -473,6 +473,7 @@ internal void
 entry_point(CmdLine *cmdline)
 {
   sock_init();
+  U64 before = descriptor_count();
   run_case(cmdline, "listener", test_listener);
   run_case(cmdline, "round_trip", test_round_trip);
   run_case(cmdline, "outgoing_and_eof", test_outgoing_and_eof);
@@ -486,4 +487,5 @@ entry_point(CmdLine *cmdline)
   run_case(cmdline, "instances", test_instances);
   run_case(cmdline, "reset_and_refused", test_reset_and_refused);
   Check(cases_run != 0);
+  Check(descriptor_count() == before);
 }
