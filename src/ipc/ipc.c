@@ -125,7 +125,8 @@ ipc_consume(Arena *arena, IPC_Server *server, IPC_Message *out)
   input->data_pos += size;
   server->pending_pos = pos+size;
   if(input->data_pos != input->data.size) { return 0; }
-  *out = (IPC_Message){peer, input->id, str8_copy(arena, input->data)};
+  String8 data = input->data.size != 0 ? str8_copy(arena, input->data) : str8_zero();
+  *out = (IPC_Message){peer, input->id, data};
   server->buffered_bytes -= input->data.size;
   free(input->data.str);
   input->data = str8_zero();
@@ -315,7 +316,7 @@ ipc_request(Arena *arena, IPC_Endpoint endpoint, String8 data, U64 endt_us)
       payload_pos += size;
       if(payload_pos == payload.size)
       {
-        response.data = str8_copy(arena, payload);
+        response.data = payload.size != 0 ? str8_copy(arena, payload) : str8_zero();
         response.status = IPC_Status_Success;
         scratch_end(scratch);
         break;

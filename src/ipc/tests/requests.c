@@ -539,6 +539,22 @@ test_public_client(void)
   scratch_end(scratch);
 }
 
+internal void
+test_empty_request_reply(void)
+{
+  Temp scratch = scratch_begin(0, 0);
+  IPC_Server *server = ipc_server_open(0, instance_id, 0);
+  Check(server != 0);
+  RequestFixture fixture = {server, str8_zero(), str8_zero()};
+  Thread thread = thread_launch(request_server_thread, &fixture);
+  Check(thread.u64[0] != 0);
+  IPC_Response response = ipc_request(scratch.arena, ipc_server_endpoint(server), str8_zero(), now_time_us()+Million(3));
+  Check(response.status == IPC_Status_Success && response.data.size == 0);
+  Check(thread_join(thread, now_time_us()+Million(3)));
+  ipc_server_close(server);
+  scratch_end(scratch);
+}
+
 global U64 cases_run;
 
 internal void
@@ -569,6 +585,7 @@ entry_point(CmdLine *cmdline)
   run_case(cmdline, "invalid_peer_isolation", test_invalid_peer_isolation);
   run_case(cmdline, "truncated_request", test_truncated_request);
   run_case(cmdline, "public_client", test_public_client);
+  run_case(cmdline, "empty_request_reply", test_empty_request_reply);
   run_case(cmdline, "large_request_reply", test_large_request_reply);
   run_case(cmdline, "instances", test_instances);
   run_case(cmdline, "recycled_endpoint", test_recycled_endpoint);
