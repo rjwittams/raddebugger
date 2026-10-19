@@ -109,6 +109,9 @@ TEST(eh_frame_index_termination)
   for(B32 require_terminator = 0; require_terminator <= 1; require_terminator += 1)
   {
     String8 data = d_eh_frame_hdr_from_eh_frame(arena, str8_array_fixed(bytes), 0x4000, Arch_x64, &ptr_ctx, require_terminator);
+    U8 expected[] = {1,0xff,4,4, 1,0,0,0,0,0,0,0,
+                     0,0x10,0,0,0,0,0,0, 0x14,0x40,0,0,0,0,0,0};
+    T_Ok(str8_match(data, str8_array_fixed(expected), 0));
     EH_FrameHdr header = eh_parse_frame_hdr(data, 8, &ptr_ctx);
     T_Ok(header.fde_count == 1);
     U64 pc = 0, fde = 0;
