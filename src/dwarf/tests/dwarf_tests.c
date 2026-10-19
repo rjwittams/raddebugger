@@ -1,6 +1,183 @@
 // Copyright (c) Epic Games Tools
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
+Test(dw2_line_table_v2_header)
+{
+  // DWARF versions 2 and 3 do not encode maximum_operations_per_instruction.
+  // Keep this fixture literal so a newer-version writer cannot hide a parser
+  // regression by emitting the same incorrect field.
+  U8 line_data[] =
+  {
+    0x26, 0x00, 0x00, 0x00, // unit_length
+    0x02, 0x00,             // version
+    0x20, 0x00, 0x00, 0x00, // header_length
+    0x01,                   // minimum_instruction_length
+    0x01,                   // default_is_stmt
+    0xfb,                   // line_base (-5)
+    0x0e,                   // line_range
+    0x0d,                   // opcode_base
+    0x00, 0x01, 0x01, 0x01, 0x01, 0x00,
+    0x00, 0x00, 0x01, 0x00, 0x00, 0x01, // standard_opcode_lengths
+    0x00,                               // include_directories terminator
+    'm', 'a', 'i', 'n', '.', 'o', 'd', 'i', 'n', 0x00,
+    0x00, 0x00, 0x00,                   // directory, timestamp, size
+    0x00,                               // file_names terminator
+  };
+  DW_Raw raw = {0};
+  DW2_ParseCtx parse_ctx = {0};
+  parse_ctx.addr_size = 8;
+  parse_ctx.unit_dir = str8_lit("/src");
+  parse_ctx.unit_file = str8_lit("main.odin");
+  DW2_LineTableHeader header = {0};
+  dw2_read_line_table_header(arena, &raw, &parse_ctx, str8_array(line_data, ArrayCount(line_data)), 0, &header);
+
+  TestCheck(header.version == DW_Version_2);
+  TestCheck(header.min_inst_length == 1);
+  TestCheck(header.max_ops_per_inst == 1);
+  TestCheck(header.default_is_stmt == 1);
+  TestCheck(header.line_base == -5);
+  TestCheck(header.line_range == 14);
+  TestCheck(header.opcode_base == 13);
+  TestCheck(header.files.count == 2);
+  TestCheck(str8_match(header.files.v[1].file_name, str8_lit("main.odin"), 0));
+}
+
+Test(dw2_indexed_loclist)
+{
+  U8 data[] = {18,0,0,0, 5,0,8,0, 1,0,0,0, 4,0,0,0,
+               4,3,6,1,0x50,0};
+  DW_Raw raw = {0};
+  raw.sec[DW_SectionKind_LocLists].data = str8_array_fixed(data);
+  DW2_OffsetTableSet tables = dw2_offset_table_set_from_raw(arena, &raw);
+  TestCheck(tables.loclists_tables_count == 1);
+  DW2_OffsetTable *table = &tables.loclists_tables[0];
+  TestCheck(table->entries_count == 1);
+  TestCheck(table->entry_size == 4);
+  TestCheck(table->entries == data+12);
+  DW2_ParseCtx parse_ctx = {0};
+  parse_ctx.version = DW_Version_5;
+  parse_ctx.addr_size = 8;
+  parse_ctx.unit_base_addr = 0x1140;
+  parse_ctx.loclists_table = table;
+  // No range-list table: it is unrelated to a local's location list.
+  DW2_FormVal value = {0};
+  value.kind = DW_FormKind_LocListx;
+  DW2_LocList locations = dw2_loclist_from_form_val(arena, &parse_ctx, &raw, value);
+  TestCheck(locations.first != 0);
+  TestCheck(locations.first->v.range.min == 0x1143);
+  TestCheck(locations.first->v.range.max == 0x1146);
+  TestCheck(locations.first->v.expr.size == 1 && locations.first->v.expr.str[0] == 0x50);
+  value.u128.u64[0] = 1;
+  TestCheck(dw2_loclist_from_form_val(arena, &parse_ctx, &raw, value).count == 0);
+  parse_ctx.loclists_table = 0;
+  value.u128.u64[0] = 0;
+  TestCheck(dw2_loclist_from_form_val(arena, &parse_ctx, &raw, value).count == 0);
+}
+
+Test(dw2_offset_table_kinds)
+{
+  for(U64 wide = 0; wide < 2; wide += 1)
+  {
+    U64 entry_size = wide ? 8 : 4;
+    U64 length_size = wide ? 12 : 4;
+    U64 entries_off = length_size+8;
+    U64 list_off = entries_off+entry_size;
+    U64 size = list_off+4;
+    U8 data[64] = {0};
+    U64 unit_length = size-length_size;
+    if(wide)
+    {
+      U32 marker = max_U32;
+      MemoryCopy(data, &marker, 4);
+    }
+    MemoryCopy(data+(wide ? 4 : 0), &unit_length, entry_size);
+    data[length_size] = 5;
+    data[length_size+2] = 8;
+    data[length_size+4] = 1;
+    MemoryCopy(data+entries_off, &entry_size, entry_size);
+    data[list_off] = DW_RLE_OffsetPair;
+    data[list_off+1] = 3;
+    data[list_off+2] = 6;
+    DW_Raw raw = {0};
+    // Two contributions check that list offsets include the section position.
+    U8 section[128] = {0};
+    MemoryCopy(section, data, size);
+    MemoryCopy(section+size, data, size);
+    raw.sec[DW_SectionKind_RngLists].data = str8(section, size*2);
+    DW2_OffsetTableSet tables = dw2_offset_table_set_from_raw(arena, &raw);
+    TestCheck(tables.rnglists_tables_count == 2);
+    DW2_ParseCtx parse_ctx = {0};
+    parse_ctx.version = DW_Version_5;
+    parse_ctx.addr_size = 8;
+    parse_ctx.unit_base_addr = 0x1140;
+    parse_ctx.rnglists_table = &tables.rnglists_tables[1];
+    TestCheck(parse_ctx.rnglists_table->entry_size == entry_size);
+    TestCheck(parse_ctx.rnglists_table->entries_count == 1);
+    DW2_FormVal value = {0};
+    value.kind = DW_FormKind_RngListx;
+    Rng1U64List ranges = dw2_rnglist_from_form_val(arena, &parse_ctx, &raw, value);
+    TestCheck(ranges.first != 0);
+    TestCheck(ranges.first->v.min == 0x1143 && ranges.first->v.max == 0x1146);
+  }
+  U8 addr[] = {12,0,0,0, 5,0,8,0, 0x40,0x11,0,0,0,0,0,0};
+  U8 strings[] = {8,0,0,0, 5,0,0,0, 0x23,0,0,0};
+  DW2_OffsetTable table = {0};
+  dw2_read_offset_table(str8_array_fixed(addr), 0, DW_SectionKind_Addr, &table);
+  U64 offset = 0;
+  TestCheck(table.entry_size == 8 && table.entries_count == 1);
+  TestCheck(dw2_try_offset_from_table_idx(&table, 0, &offset) && offset == 0x1140);
+  MemoryZeroStruct(&table);
+  dw2_read_offset_table(str8_array_fixed(strings), 0, DW_SectionKind_StrOffsets, &table);
+  offset = 0;
+  TestCheck(table.entry_size == 4 && table.entries_count == 1);
+  TestCheck(dw2_try_offset_from_table_idx(&table, 0, &offset) && offset == 0x23);
+}
+
+Test(dw2_address_table_sizes)
+{
+  struct {U8 address, segment; B32 valid;} cases[] =
+  {
+    {1,0,1}, {2,0,1}, {4,0,1}, {8,0,1}, {8,8,1},
+    {9,0,0}, {255,0,0}, {8,9,0}, {8,255,0}, {255,255,0}, {0,8,0},
+  };
+  for(U64 wide = 0; wide < 2; wide += 1) for EachElement(case_idx, cases)
+  {
+    U8 data[544] = {0};
+    U64 length_size = wide ? 12 : 4;
+    U64 header_size = length_size+4;
+    U64 size = header_size+cases[case_idx].address+cases[case_idx].segment;
+    U64 unit_length = size-length_size;
+    if(wide)
+    {
+      U32 marker = max_U32;
+      MemoryCopy(data, &marker, 4);
+    }
+    MemoryCopy(data+(wide ? 4 : 0), &unit_length, wide ? 8 : 4);
+    data[length_size] = 5; // version
+    data[length_size+2] = cases[case_idx].address;
+    data[length_size+3] = cases[case_idx].segment;
+    if(cases[case_idx].address != 0) {data[header_size+cases[case_idx].segment] = 0x42;}
+    // A rejected contribution must not hide the following valid one.
+    U8 next[] = {12,0,0,0, 5,0,8,0, 0x40,0x11,0,0,0,0,0,0};
+    MemoryCopy(data+size, next, sizeof(next));
+    DW_Raw raw = {0};
+    raw.sec[DW_SectionKind_Addr].data = str8(data, size+sizeof(next));
+    DW2_OffsetTableSet tables = dw2_offset_table_set_from_raw(arena, &raw);
+    test_outf("DWARF%u address %u, segment %u: %I64u tables\n",
+              wide ? 64 : 32, cases[case_idx].address, cases[case_idx].segment, tables.addr_tables_count);
+    TestCheck(tables.addr_tables_count == (cases[case_idx].valid ? 2 : 1));
+    U64 value = 0;
+    if(cases[case_idx].valid)
+    {
+      TestCheck(dw2_try_offset_from_table_idx(&tables.addr_tables[0], 0, &value) && value == 0x42);
+      TestCheck(!dw2_try_offset_from_table_idx(&tables.addr_tables[0], 1, &value));
+    }
+    DW2_OffsetTable *last = &tables.addr_tables[tables.addr_tables_count-1];
+    value = 0;
+    TestCheck(dw2_try_offset_from_table_idx(last, 0, &value) && value == 0x1140);
+  }
+}
+
 #if 0 // TODO(rjf): this uses concepts from the old parser
 
 internal U64
