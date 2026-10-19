@@ -4268,6 +4268,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       {
                         rdim_bytecode_push_uconst(arena, &dst_bytecode, operand_u64s[0]);
                         rdim_bytecode_push_op(arena, &dst_bytecode, RDI_EvalOp_Add, RDI_EvalTypeGroup_U);
+                        push_vals[0].is_addr = popped_vals[0].is_addr;
                         push_vals[0].type_kind = RDI_TypeKind_U64; // TODO(rjf): do we need to adjust this based on popped value at all, even?
                       }break;
                       
@@ -4301,6 +4302,10 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                           param |= (U64)unit_parse_ctx->addr_size << 8;
                         }
                         rdim_bytecode_push_op(arena, &dst_bytecode, rdi_eval_op, param);
+                        if(rdi_eval_op == RDI_EvalOp_Add || rdi_eval_op == RDI_EvalOp_Sub)
+                        {
+                          push_vals[0].is_addr = popped_vals[0].is_addr || popped_vals[1].is_addr;
+                        }
                       }break;
                       
                       //- rjf: currently unsupported
