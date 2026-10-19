@@ -11,14 +11,27 @@ sock_io_wake(SOCK_IO_Session *s)
   sock_os_send(s->wakeup[1], &byte, sizeof(byte));
 }
 
+internal U64
+sock_io_peer_id_alloc(void)
+{
+  U64 current = ins_atomic_u64_eval(&sock_io_last_peer_id);
+  while(current != max_U64)
+  {
+    U64 observed = ins_atomic_u64_eval_cond_assign(&sock_io_last_peer_id, current+1, current);
+    if(observed == current) { return current+1; }
+    current = observed;
+  }
+  return 0;
+}
+
 internal SOCK_IO_Packet *
-sock_io_packet_alloc(SOCK_Endpoint endpoint, String8 data)
+sock_io_packet_alloc(SOCK_Peer peer, String8 data)
 {
   SOCK_IO_Packet *p = malloc(sizeof(*p)+data.size);
   if(p != 0)
   {
     *p = (SOCK_IO_Packet){0};
-    p->endpoint = endpoint;
+    p->peer = peer;
     p->data = str8((U8 *)(p+1), data.size);
     if(data.size != 0) { MemoryCopy(p->data.str, data.str, data.size); }
   }
@@ -45,9 +58,9 @@ sock_io_recv_space(SOCK_IO_Session *s)
 }
 
 internal B32
-sock_io_receive(SOCK_IO_Session *s, SOCK_Endpoint endpoint, String8 data)
+sock_io_receive(SOCK_IO_Session *s, SOCK_Peer peer, String8 data)
 {
-  SOCK_IO_Packet *p = sock_io_packet_alloc(endpoint, data);
+  SOCK_IO_Packet *p = sock_io_packet_alloc(peer, data);
   sock_os_mutex_take(&s->mutex);
   B32 result = p != 0 && sizeof(*p)+data.size <= sock_io_queue_limit-s->recv_bytes;
   if(result)
@@ -57,7 +70,7 @@ sock_io_receive(SOCK_IO_Session *s, SOCK_Endpoint endpoint, String8 data)
   }
   else
   {
-    s->stopping = 1;
+    if(p == 0 || data.size != 0) { s->stopping = 1; }
     free(p);
   }
   sock_os_cond_broadcast(&s->cv);
@@ -68,18 +81,44 @@ sock_io_receive(SOCK_IO_Session *s, SOCK_Endpoint endpoint, String8 data)
 
 // Connections belong only to the I/O thread; callers exchange owned packets.
 internal void
-sock_io_connection_close(SOCK_IO_Session *s, SOCK_IO_Connection **first, SOCK_IO_Connection *c)
+sock_io_connection_end(SOCK_IO_Session *s, SOCK_IO_Connection *c)
 {
-  SOCK_IO_Connection **link = first;
-  while(*link != c) { link = &(*link)->next; }
-  *link = c->next;
+  if(c->ended) { return; }
+  c->ended = 1;
   sock_os_close(c->fd);
+  c->fd = SOCK_OS_SocketInvalid;
   for(SOCK_IO_Packet *p = c->first_send, *next = 0; p != 0; p = next)
   {
     next = p->next;
     sock_io_send_release(s, p);
   }
+  c->first_send = c->last_send = 0;
+}
+
+internal void
+sock_io_connection_close(SOCK_IO_Session *s, SOCK_IO_Connection **first, SOCK_IO_Connection *c)
+{
+  SOCK_IO_Connection **link = first;
+  while(*link != c) { link = &(*link)->next; }
+  *link = c->next;
+  sock_io_connection_end(s, c);
   free(c);
+}
+
+// Keep ended connections in their bounded slots until EOF has queue space.
+internal B32
+sock_io_publish_ends(SOCK_IO_Session *s, SOCK_IO_Connection **first, U64 *count)
+{
+  for(SOCK_IO_Connection *c = *first, *next = 0; c != 0; c = next)
+  {
+    next = c->next;
+    if(!c->ended) { continue; }
+    if(sock_io_recv_space(s) < sizeof(SOCK_IO_Packet)) { break; }
+    if(!sock_io_receive(s, c->peer, str8_zero())) { return 0; }
+    sock_io_connection_close(s, first, c);
+    *count -= 1;
+  }
+  return 1;
 }
 
 ////////////////////////////////
@@ -99,23 +138,43 @@ sock_io_thread(void *ptr)
     B32 stopping = s->stopping;
     SOCK_IO_Packet *sends = s->first_send;
     s->first_send = s->last_send = 0;
+    U64 abort_count = s->abort_count;
+    SOCK_Peer aborts[SOCK_IO_CONNECTION_LIMIT];
+    MemoryCopy(aborts, s->aborts, abort_count*sizeof(*aborts));
+    s->abort_count = 0;
+    sock_os_cond_broadcast(&s->cv);
     sock_os_mutex_drop(&s->mutex);
+
+    for(U64 idx = 0; idx < abort_count; idx += 1)
+    {
+      SOCK_IO_Connection *c = first;
+      while(c != 0 && !MemoryMatchStruct(&c->peer, &aborts[idx])) { c = c->next; }
+      if(c != 0)
+      {
+        sock_io_connection_end(s, c);
+      }
+    }
 
     for(SOCK_IO_Packet *p = sends, *next = 0; p != 0; p = next)
     {
       next = p->next;
       p->next = 0;
       SOCK_IO_Connection *c = first;
-      while(c != 0 && !MemoryMatchStruct(&c->endpoint, &p->endpoint)) { c = c->next; }
-      if(!stopping && c == 0 && connection_count < sock_io_connection_limit)
+      while(c != 0)
+      {
+        if(!c->ended && MemoryMatchStruct(&c->peer.endpoint, &p->peer.endpoint) &&
+           (p->peer.id != 0 ? c->peer.id == p->peer.id : c->outgoing)) { break; }
+        c = c->next;
+      }
+      if(!stopping && c == 0 && p->peer.id == 0 && connection_count < SOCK_IO_CONNECTION_LIMIT)
       {
         SOCK_OS_Socket fd = sock_os_socket();
         if(fd != SOCK_OS_SocketInvalid)
         {
           struct sockaddr_in addr = {0};
           addr.sin_family = AF_INET;
-          addr.sin_port = htons(p->endpoint.port);
-          MemoryCopy(&addr.sin_addr, p->endpoint.address_u8, sizeof(addr.sin_addr));
+          addr.sin_port = htons(p->peer.endpoint.port);
+          MemoryCopy(&addr.sin_addr, p->peer.endpoint.address_u8, sizeof(addr.sin_addr));
           if(sock_os_prepare(fd))
           {
             int code = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
@@ -124,9 +183,15 @@ sock_io_thread(void *ptr)
               c = calloc(1, sizeof(*c));
               if(c != 0)
               {
+                c->peer.id = sock_io_peer_id_alloc();
+                if(c->peer.id == 0) { free(c); c = 0; }
+              }
+              if(c != 0)
+              {
                 c->fd = fd;
-                c->endpoint = p->endpoint;
+                c->peer.endpoint = p->peer.endpoint;
                 c->connecting = code != 0;
+                c->outgoing = 1;
                 SLLStackPush(first, c);
                 connection_count += 1;
               }
@@ -138,23 +203,25 @@ sock_io_thread(void *ptr)
       if(!stopping && c != 0) { SLLQueuePush(c->first_send, c->last_send, p); }
       else
       {
-        if(!stopping) { sock_io_receive(s, p->endpoint, str8_zero()); }
+        if(!stopping && p->peer.id == 0) { sock_io_receive(s, p->peer, str8_zero()); }
         sock_io_send_release(s, p);
       }
     }
     if(stopping) { scratch_end(scratch); break; }
+    if(!sock_io_publish_ends(s, &first, &connection_count)) { scratch_end(scratch); break; }
 
     SOCK_OS_PollFD *fds = push_array(scratch.arena, SOCK_OS_PollFD, connection_count+2);
     SOCK_IO_Connection **connections = push_array(scratch.arena, SOCK_IO_Connection *, connection_count+2);
     U64 count = 1;
     U64 space = sock_io_recv_space(s);
     fds[0] = (SOCK_OS_PollFD){s->wakeup[0], POLLIN, 0};
-    if(connection_count < sock_io_connection_limit && space > sizeof(SOCK_IO_Packet))
+    if(connection_count < SOCK_IO_CONNECTION_LIMIT && space > sizeof(SOCK_IO_Packet))
     {
       fds[count++] = (SOCK_OS_PollFD){s->listener, POLLIN, 0};
     }
     for(SOCK_IO_Connection *c = first; c != 0; c = c->next)
     {
+      if(c->ended) { continue; }
       short events = 0;
       if(!c->connecting && space > sizeof(SOCK_IO_Packet)) { events |= POLLIN; }
       if(c->connecting || c->first_send != 0) { events |= POLLOUT; }
@@ -200,9 +267,14 @@ sock_io_thread(void *ptr)
             if(sock_os_prepare(fd)) { accepted = calloc(1, sizeof(*accepted)); }
             if(accepted != 0)
             {
+              accepted->peer.id = sock_io_peer_id_alloc();
+              if(accepted->peer.id == 0) { free(accepted); accepted = 0; }
+            }
+            if(accepted != 0)
+            {
               accepted->fd = fd;
-              accepted->endpoint.port = ntohs(addr.sin_port);
-              MemoryCopy(accepted->endpoint.address_u8, &addr.sin_addr, sizeof(addr.sin_addr));
+              accepted->peer.endpoint.port = ntohs(addr.sin_port);
+              MemoryCopy(accepted->peer.endpoint.address_u8, &addr.sin_addr, sizeof(addr.sin_addr));
               SLLStackPush(first, accepted);
               connection_count += 1;
             }
@@ -227,7 +299,7 @@ sock_io_thread(void *ptr)
         U8 bytes[4096];
         U64 cap = Min(sizeof(bytes), space-sizeof(SOCK_IO_Packet));
         S64 n = sock_os_recv(c->fd, bytes, cap);
-        if(n > 0) { sock_io_receive(s, c->endpoint, str8(bytes, (U64)n)); }
+        if(n > 0) { sock_io_receive(s, c->peer, str8(bytes, (U64)n)); }
         else if(n == 0 || !sock_os_would_block()) { disconnected = 1; }
       }
       if(!disconnected && !c->connecting && events & POLLOUT && c->first_send != 0)
@@ -247,12 +319,12 @@ sock_io_thread(void *ptr)
       }
       if(disconnected)
       {
-        sock_io_receive(s, c->endpoint, str8_zero());
-        sock_io_connection_close(s, &first, c);
-        connection_count -= 1;
+        sock_io_connection_end(s, c);
       }
     }
+    B32 published = sock_io_publish_ends(s, &first, &connection_count);
     scratch_end(scratch);
+    if(!published) { break; }
   }
   while(first != 0) { sock_io_connection_close(s, &first, first); }
 }
@@ -354,9 +426,10 @@ sock_session_listener_endpoint(SOCK_Session session)
 
 // Success means the whole buffer was queued, not acknowledged by the peer.
 internal B32
-sock_send(SOCK_Session session, SOCK_Protocol protocol, SOCK_Endpoint endpoint, String8 data, U64 endt_us)
+sock_io_send(SOCK_Session session, SOCK_Protocol protocol, SOCK_Peer peer, String8 data, U64 endt_us)
 {
   SOCK_IO_Session *s = (SOCK_IO_Session *)session.u64[0];
+  SOCK_Endpoint endpoint = peer.endpoint;
   if(s == 0 || protocol != SOCK_Protocol_TCP || endpoint.kind != SOCK_EndpointKind_IPv4 || endpoint.port == 0 ||
      data.size > sock_io_queue_limit-sizeof(SOCK_IO_Packet)) { return 0; }
   if(data.size == 0) { return 1; }
@@ -369,7 +442,7 @@ sock_send(SOCK_Session session, SOCK_Protocol protocol, SOCK_Endpoint endpoint, 
   }
   if(!s->stopping && size <= sock_io_queue_limit-s->send_bytes)
   {
-    SOCK_IO_Packet *p = sock_io_packet_alloc(endpoint, data);
+    SOCK_IO_Packet *p = sock_io_packet_alloc(peer, data);
     if(p != 0)
     {
       SLLQueuePush(s->first_send, s->last_send, p);
@@ -382,9 +455,50 @@ sock_send(SOCK_Session session, SOCK_Protocol protocol, SOCK_Endpoint endpoint, 
   return result;
 }
 
-// Each result is a stream chunk. A zero-length result is endpoint EOF.
 internal B32
-sock_recv(Arena *arena, SOCK_Session session, SOCK_Protocol *protocol_out, SOCK_Endpoint *endpoint_out, String8 *data_out, U64 endt_us)
+sock_send(SOCK_Session session, SOCK_Protocol protocol, SOCK_Endpoint endpoint, String8 data, U64 endt_us)
+{
+  return sock_io_send(session, protocol, (SOCK_Peer){.endpoint = endpoint}, data, endt_us);
+}
+
+internal B32
+sock_send_peer(SOCK_Session session, SOCK_Protocol protocol, SOCK_Peer peer, String8 data, U64 endt_us)
+{
+  if(peer.id == 0) { return 0; }
+  return sock_io_send(session, protocol, peer, data, endt_us);
+}
+
+internal B32
+sock_peer_abort(SOCK_Session session, SOCK_Peer peer, U64 endt_us)
+{
+  SOCK_IO_Session *s = (SOCK_IO_Session *)session.u64[0];
+  if(s == 0 || peer.id == 0) { return 0; }
+  B32 result = 0;
+  sock_os_mutex_take(&s->mutex);
+  for(;;)
+  {
+    if(s->stopping) { break; }
+    for(U64 idx = 0; idx < s->abort_count; idx += 1)
+    {
+      if(MemoryMatchStruct(&s->aborts[idx], &peer)) { result = 1; break; }
+    }
+    if(result) { break; }
+    if(s->abort_count < ArrayCount(s->aborts))
+    {
+      s->aborts[s->abort_count++] = peer;
+      result = 1;
+      break;
+    }
+    if(!sock_os_wait(&s->cv, &s->mutex, endt_us)) { break; }
+  }
+  sock_os_mutex_drop(&s->mutex);
+  if(result) { sock_io_wake(s); }
+  return result;
+}
+
+// Each result is a stream chunk. A zero-length result is peer EOF.
+internal B32
+sock_recv(Arena *arena, SOCK_Session session, SOCK_Protocol *protocol_out, SOCK_Peer *peer_out, String8 *data_out, U64 endt_us)
 {
   SOCK_IO_Session *s = (SOCK_IO_Session *)session.u64[0];
   if(s == 0) { return 0; }
@@ -402,7 +516,7 @@ sock_recv(Arena *arena, SOCK_Session session, SOCK_Protocol *protocol_out, SOCK_
   sock_os_mutex_drop(&s->mutex);
   if(p == 0) { return 0; }
   *protocol_out = SOCK_Protocol_TCP;
-  *endpoint_out = p->endpoint;
+  *peer_out = p->peer;
   *data_out = str8_copy(arena, p->data);
   free(p);
   sock_io_wake(s);
