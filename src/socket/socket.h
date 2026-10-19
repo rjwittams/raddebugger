@@ -74,6 +74,8 @@ internal void sock_async_tick(void);
 
 internal SOCK_Session sock_session_open(U16 listener_port, SOCK_WakeupFunctionType *wakeup_hook);
 internal void sock_session_close(SOCK_Session session);
+// Returns the actual listener address, including an OS-selected port.
+internal SOCK_Endpoint sock_session_listener_endpoint(SOCK_Session session);
 
 ////////////////////////////////
 //~ rjf: @per_os_impl Sends

@@ -9,6 +9,8 @@
 # include "win32/socket/win32_socket.h"
 #elif OS_LINUX
 # include "linux/socket/linux_socket.h"
+#elif OS_MAC
+# include "mac/socket/mac_socket.h"
 #else
 # include "socket_stub.h"
 #endif

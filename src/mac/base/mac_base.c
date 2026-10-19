@@ -460,7 +460,7 @@ thread_launch(ThreadEntryPointFunctionType *f, void *p)
   entity->thread.ptr = p;
   {
     int pthread_result = pthread_create(&entity->thread.handle, 0, mac_thread_entry_point, entity);
-    if(pthread_result == -1)
+    if(pthread_result != 0)
     {
       mac_entity_release(entity);
       entity = 0;
