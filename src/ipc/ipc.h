@@ -9,6 +9,7 @@ struct IPC_Endpoint
 {
   SOCK_Endpoint address;
   U128 instance_id;
+  U256 auth_key;
 };
 
 typedef struct IPC_Message IPC_Message;
@@ -20,6 +21,9 @@ struct IPC_Message
 };
 
 typedef struct IPC_Server IPC_Server;
+
+// The default registry is per-user and machine-local; this creates no registration.
+internal String8 ipc_default_directory(Arena *arena);
 
 typedef enum IPC_Status
 {
@@ -39,10 +43,14 @@ struct IPC_Response
   String8 data;
 };
 
-// The caller supplies a nonzero instance id, not an authentication secret.
-// Authentication and endpoint publication are separate activation gates.
+// Generate a fresh identity/key with native entropy; fail closed on failure.
+internal IPC_Server *ipc_server_open_random(U16 port, SOCK_WakeupFunctionType *wakeup);
+// Publish a fresh server for this PID in a private directory; close unpublishes it.
+internal IPC_Server *ipc_server_open_local(String8 directory, SOCK_WakeupFunctionType *wakeup);
+// Explicit configuration requires a nonzero instance id and secret key.
+// Private endpoint publication precedes app activation.
 // The owner serializes calls and closes only after those calls have finished.
-internal IPC_Server *ipc_server_open(U16 port, U128 instance_id, SOCK_WakeupFunctionType *wakeup);
+internal IPC_Server *ipc_server_open(U16 port, U128 instance_id, U256 auth_key, SOCK_WakeupFunctionType *wakeup);
 internal IPC_Endpoint ipc_server_endpoint(IPC_Server *server);
 internal void ipc_server_close(IPC_Server *server);
 // A false receive leaves outputs unchanged; partial frames are never commands.
@@ -51,5 +59,7 @@ internal B32 ipc_server_reply(IPC_Server *server, IPC_Message request, String8 d
 // One connection/transaction per call, with one deadline shared by send/receive.
 // Errors return no partial reply; successful bytes belong to the caller arena.
 internal IPC_Response ipc_request(Arena *arena, IPC_Endpoint endpoint, String8 data, U64 endt_us);
+// Discover an exact live PID through private local registration, without fallback.
+internal IPC_Response ipc_request_local(Arena *arena, String8 directory, U32 pid, String8 data, U64 endt_us);
 
 #endif // IPC_H

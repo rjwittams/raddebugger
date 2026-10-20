@@ -1,6 +1,52 @@
 // Copyright (c) Epic Games Tools
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
+Test(ipc_byte_strings)
+{
+  struct {String8 input; String8 expected;} cases[] =
+  {
+    {str8_lit(""), str8_lit("\"\"")},
+    {str8_lit("worker"), str8_lit("\"worker\"")},
+    {str8_lit("\xc3\xa9\xf0\x9f\x98\x80"), str8_lit("\"\xc3\xa9\xf0\x9f\x98\x80\"")},
+    {str8_lit("\0\n\"\\"), str8_lit("\"\\u0000\\u000a\\\"\\\\\"")},
+    {str8_lit("worker\xff"), str8_lit("{\"base64\":\"d29ya2Vy/w==\"}")},
+    {str8_lit("\xff"), str8_lit("{\"base64\":\"/w==\"}")},
+    {str8_lit("\xff\xfe"), str8_lit("{\"base64\":\"//4=\"}")},
+    {str8_lit("\xff\xfe\xfd"), str8_lit("{\"base64\":\"//79\"}")},
+    {str8_lit("\xc0\x80"), str8_lit("{\"base64\":\"wIA=\"}")},
+    {str8_lit("\xe0\x80\x80"), str8_lit("{\"base64\":\"4ICA\"}")},
+    {str8_lit("\xf0\x80\x80\x80"), str8_lit("{\"base64\":\"8ICAgA==\"}")},
+    {str8_lit("\xe2\x28\xa1"), str8_lit("{\"base64\":\"4iih\"}")},
+    {str8_lit("\xc3\xa9\xff"), str8_lit("{\"base64\":\"w6n/\"}")},
+    {str8_lit("\xf4\x8f\xbf\xbf"), str8_lit("\"\xf4\x8f\xbf\xbf\"")},
+    {str8_lit("\xed\xa0\x80"), str8_lit("{\"base64\":\"7aCA\"}")},
+    {str8_lit("\xf4\x90\x80\x80"), str8_lit("{\"base64\":\"9JCAgA==\"}")},
+    {str8_lit("\xe2\x82"), str8_lit("{\"base64\":\"4oI=\"}")},
+    {str8_lit("\x80"), str8_lit("{\"base64\":\"gA==\"}")},
+  };
+  for EachElement(idx, cases)
+  {
+    String8 actual = rd_snapshot_json_string(arena, cases[idx].input);
+    TestCheck(str8_match(actual, cases[idx].expected, 0));
+  }
+  // Export production-encoded bytes for the Python JSON/IPC decoder check.
+  String8List records = {0};
+  U8 bytes[256];
+  for EachElement(idx, bytes) {bytes[idx] = idx;}
+  for(U64 size = 0; size <= sizeof(bytes); size += 1)
+  {
+    str8_list_push(arena, &records, str8_lit("{\"input\":["));
+    for(U64 idx = 0; idx < size; idx += 1)
+    {
+      str8_list_pushf(arena, &records, "%s%u", idx ? "," : "", bytes[idx]);
+    }
+    str8_list_pushf(arena, &records, "],\"encoded\":%S}\n",
+                    rd_snapshot_json_string(arena, str8(bytes, size)));
+  }
+  TestCheck(write_data_to_file_path(str8f(arena, "%S/byte_strings.jsonl", ctx->artifacts_path),
+                                   str8_list_join(arena, &records, 0)));
+}
+
 Test(source_path_resolution)
 {
   CFG_Ctx *previous_cfg = cfg_ctx;
