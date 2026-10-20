@@ -6,6 +6,8 @@
 # include "win32/shell/win32_shell.c"
 #elif OS_LINUX
 # include "linux/shell/linux_shell.c"
+#elif OS_MAC
+# include "mac/shell/mac_shell.c"
 #else
 # error Shell functions not implemented for this operating system.
 #endif

@@ -130,6 +130,18 @@ wm_window_push_custom_title_bar_client_area(WM_Window handle, Rng2F32 rect)
 {
 }
 
+internal B32
+wm_window_should_draw_custom_title_bar_controls(WM_Window window)
+{
+  return 1;
+}
+
+internal F32
+wm_window_native_title_bar_left_padding(WM_Window window)
+{
+  return 0;
+}
+
 internal Rng2F32
 wm_rect_from_window(WM_Window window)
 {
@@ -148,6 +160,18 @@ internal F32
 wm_dpi_from_window(WM_Window window)
 {
   return 96.f;
+}
+
+internal F32
+wm_layout_scale_from_window(WM_Window window)
+{
+  return 1.f;
+}
+
+internal F32
+wm_backing_scale_from_window(WM_Window window)
+{
+  return 1.f;
 }
 
 ////////////////////////////////
@@ -240,6 +264,30 @@ internal Vec2F32
 wm_mouse_from_window(WM_Window window)
 {
   return v2f32(0, 0);
+}
+
+////////////////////////////////
+//~ @per_os_impl Application Menu (Implemented Per-OS)
+
+internal void
+wm_set_main_menu(WM_MenuArray menu_array)
+{
+}
+
+internal B32
+wm_application_menu_bar_is_native(void)
+{
+  return 0;
+}
+
+internal void
+wm_set_preferred_window_decorations(B32 enabled)
+{
+}
+
+internal void
+wm_set_preferred_native_menu_bar(B32 enabled)
+{
 }
 
 ////////////////////////////////

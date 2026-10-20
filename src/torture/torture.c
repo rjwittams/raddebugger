@@ -1,6 +1,10 @@
 // Copyright (c) Epic Games Tools
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
+#if OS_LINUX || OS_MAC
+# include <poll.h>
+#endif
+
 // command line
 global String8      g_stdout_file_name = str8_lit_comp("torture.out");
 global String8      g_wdir;
@@ -528,8 +532,13 @@ t_invoke_env(String8 exe_path, String8 cmdline, String8List env, U64 timeout_us)
   
   LinuxCapture captures_linux[2] = {0};
   for EachElement(i, captures_linux) {
-    if (pipe2(captures_linux[i].fds, 0) != 0) {
+    if (pipe(captures_linux[i].fds) != 0) {
       fprintf(stderr, "ERROR: failed to create pipe for output capture\n");
+      goto exit;
+    }
+    int read_flags = fcntl(captures_linux[i].fds[0], F_GETFL);
+    if (read_flags < 0 || fcntl(captures_linux[i].fds[0], F_SETFL, read_flags|O_NONBLOCK) != 0) {
+      fprintf(stderr, "ERROR: failed to make output capture pipe non-blocking\n");
       goto exit;
     }
     captures_linux[i].is_live = 1;
@@ -828,6 +837,109 @@ t_invoke_env(String8 exe_path, String8 cmdline, String8List env, U64 timeout_us)
   if (close(pidfd) < 0) {
     fprintf(stderr, "ERROR: failed to close process handle %d\n", pidfd);
   }
+#elif OS_MAC
+  // close handles so reads can observe EOF after the child exits
+  for EachElement(i, write_capture_handles) {
+    close((int)write_capture_handles[i].u64[0]);
+    MemoryZeroStruct(&write_capture_handles[i]);
+  }
+
+  pid_t pid = (pid_t)process_handle.u64[0];
+  B32 is_process_live = 1;
+  B32 timed_out = 0;
+  U64 endt_us = ENDT_US(timeout_us);
+  U64 read_buffer_default_size = MB(1);
+  U64 read_buffer_size = read_buffer_default_size;
+  U8 *read_buffer = push_array(scratch.arena, U8, read_buffer_default_size);
+  for (;;) {
+    // macOS does not provide Linux pidfds, so probe and reap without blocking.
+    if (is_process_live) {
+      int status = 0;
+      pid_t wait_result = MAC_RETRY_ON_EINTR(waitpid(pid, &status, WNOHANG));
+      if (wait_result == pid) {
+        if (WIFEXITED(status)) {
+          g_last_exit_code = WEXITSTATUS(status);
+        } else if (WIFSIGNALED(status)) {
+          g_last_exit_code = 128 + WTERMSIG(status);
+        }
+        is_process_live = 0;
+      } else if (wait_result < 0) {
+        fprintf(stderr, "ERROR: failed to reap process %d\n", pid);
+        is_process_live = 0;
+      }
+    }
+
+    struct pollfd fds[2] = {0};
+    int nfds = 0;
+    for EachElement(i, captures_linux) {
+      if (captures_linux[i].is_live) {
+        captures_linux[i].poll_fd = &fds[nfds];
+        fds[nfds++] = (struct pollfd){ .fd = captures_linux[i].fds[0], .events = POLLIN|POLLHUP };
+      }
+    }
+
+    if (!is_process_live && nfds == 0) { break; }
+
+    int wait_ms = 10;
+    if (timeout_us != max_U64) {
+      U64 now_us = now_time_us();
+      if (now_us >= endt_us) {
+        timed_out = 1;
+        break;
+      }
+      wait_ms = Min((endt_us - now_us + 999)/1000, 10);
+    }
+
+    int poll_result = MAC_RETRY_ON_EINTR(poll(fds, nfds, wait_ms));
+    if (poll_result < 0) {
+      fprintf(stderr, "ERROR: poll failed with errno %d\n", errno);
+      break;
+    }
+    if (poll_result == 0) { continue; }
+
+    for EachElement(i, captures_linux) {
+      if (captures_linux[i].is_live &&
+          (captures_linux[i].poll_fd->revents & (POLLIN|POLLHUP))) {
+        for (;;) {
+          if (read_buffer_size == 0) {
+            read_buffer_size = read_buffer_default_size;
+            read_buffer = push_array(scratch.arena, U8, read_buffer_default_size);
+          }
+          ssize_t read_size = MAC_RETRY_ON_EINTR(read(captures_linux[i].poll_fd->fd, read_buffer, read_buffer_size));
+          if (read_size > 0) {
+            str8_list_push(scratch.arena, captures_linux[i].parts, str8(read_buffer, read_size));
+            read_buffer += read_size;
+            read_buffer_size -= read_size;
+          } else if (read_size == 0) {
+            captures_linux[i].is_live = 0;
+            break;
+          } else {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+              fprintf(stderr, "ERROR: failed to read pipe, errno %d\n", errno);
+              captures_linux[i].is_live = 0;
+            } else if (captures_linux[i].poll_fd->revents & POLLHUP) {
+              captures_linux[i].is_live = 0;
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (is_process_live) {
+    if (timed_out) {
+      process_kill(process_handle);
+    }
+    int status = 0;
+    if (MAC_RETRY_ON_EINTR(waitpid(pid, &status, 0)) == pid) {
+      if (WIFEXITED(status)) {
+        g_last_exit_code = WEXITSTATUS(status);
+      } else if (WIFSIGNALED(status)) {
+        g_last_exit_code = 128 + WTERMSIG(status);
+      }
+    }
+  }
 #endif
   
   t_infof("Invoke: {\n");
@@ -858,6 +970,76 @@ internal B32
 t_invoke(String8 exe_path, String8 cmdline, U64 timeout)
 {
   return t_invoke_env(exe_path, cmdline, (String8List){0}, timeout);
+}
+
+#if OS_LINUX || OS_MAC
+Test(posix_process_executable_lookup)
+{
+  // Put different executables under the same name in PATH and the child cwd.
+  // Bare names must use PATH; explicit paths must select the named file.
+  String8 path_bin = t_make_file_path(arena, str8_lit("path bin"));
+  make_directory(path_bin);
+  T_Ok(folder_path_exists(path_bin));
+  String8 path_exe = push_str8f(arena, "%S/rad-launch-probe", path_bin);
+  String8 local_exe = t_make_file_path(arena, str8_lit("rad-launch-probe"));
+  T_Ok(t_write_file(str8_lit("launch-marker"), str8_lit("marker")));
+  T_Ok(write_data_to_file_path(path_exe, str8_lit("#!/bin/sh\n[ -f launch-marker ] || exit 99\nprintf path\nexit 37\n")));
+  T_Ok(write_data_to_file_path(local_exe, str8_lit("#!/bin/sh\n[ -f launch-marker ] || exit 99\nprintf local\nexit 38\n")));
+  T_Ok(chmod((char *)push_cstr(arena, path_exe).str, 0700) == 0);
+  T_Ok(chmod((char *)push_cstr(arena, local_exe).str, 0700) == 0);
+
+  char *old_path = getenv("PATH");
+  char *saved_path = old_path ? (char *)push_cstr(arena, str8_cstring(old_path)).str : 0;
+  struct {String8 exe; U64 exit_code; String8 output;} cases[] =
+  {
+    {str8_lit("rad-launch-probe"),          37, str8_lit("path")},
+    {str8_lit("./rad-launch-probe"),        38, str8_lit("local")},
+    {str8_lit("path bin/rad-launch-probe"), 37, str8_lit("path")},
+    {path_exe,                             37, str8_lit("path")},
+  };
+  for EachElement(idx, cases)
+  {
+    T_Ok(setenv("PATH", (char *)push_cstr(arena, path_bin).str, 1) == 0);
+    B32 launched = t_invoke(cases[idx].exe, str8_zero(), TIMEOUT_SEC(5));
+    // Restore the test process's environment before any assertion can fail.
+    int restore_code = saved_path ? setenv("PATH", saved_path, 1) : unsetenv("PATH");
+    T_Ok(restore_code == 0);
+    T_Ok(launched);
+    T_Ok(g_last_exit_code == cases[idx].exit_code);
+    T_Ok(str8_match(g_output, cases[idx].output, 0));
+    T_Ok(g_errors.size == 0);
+  }
+}
+
+Test(posix_process_capture)
+{
+  B32 launched = t_invoke(str8_lit("/bin/sh"),
+                          str8_lit("-c \"printf rad_stdout; printf rad_stderr >&2; exit 7\""),
+                          TIMEOUT_SEC(5));
+  T_Ok(launched);
+  T_Ok(g_last_exit_code == 7);
+  T_Ok(str8_match(g_output, str8_lit("rad_stdout"), 0));
+  T_Ok(str8_match(g_errors, str8_lit("rad_stderr"), 0));
+}
+#endif
+
+Test(schema_platform_filter)
+{
+  MD_Node *root = md_tree_from_string(arena,
+                                      str8_lit("@platform('mac') mac_only\n"
+                                               "@platform('windows', 'linux') non_mac\n"
+                                               "all_platforms"));
+  MD_Node *mac_only = root->first;
+  MD_Node *non_mac = mac_only->next;
+  MD_Node *all_platforms = non_mac->next;
+#if OS_MAC
+  T_Ok(rd_schema_node_matches_current_platform(mac_only));
+  T_Ok(!rd_schema_node_matches_current_platform(non_mac));
+#else
+  T_Ok(!rd_schema_node_matches_current_platform(mac_only));
+  T_Ok(rd_schema_node_matches_current_platform(non_mac));
+#endif
+  T_Ok(rd_schema_node_matches_current_platform(all_platforms));
 }
 
 internal B32
@@ -910,8 +1092,7 @@ t_kill_all(String8 pattern)
     if (str8_match_wildcard(info.name, pattern, StringMatchFlag_CaseInsensitive|StringMatchFlag_SlashInsensitive)) {
 #if OS_WINDOWS
       if (!t_invoke(str8_lit("taskkill"), str8f(scratch.arena, "/PID %u /F", info.pid), max_U64)) { fprintf(stderr, "ERROR: failed to invoke taskkill\n"); }
-#elif OS_LINUX
-      NotImplemented; // TODO: test
+#elif OS_LINUX || OS_MAC
       if (!t_invoke(str8_lit("kill"), str8f(scratch.arena, " -9 %u", info.pid), max_U64)) { fprintf(stderr, "ERROR: failed to invoke kill\n"); }
 #else
 # error NotImplemented
@@ -1468,4 +1649,3 @@ t_entry_point(CmdLine *cmdline)
   scratch_end(scratch);
   exit(exit_code);
 }
-
