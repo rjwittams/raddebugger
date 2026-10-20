@@ -103,7 +103,7 @@ entry_point(CmdLine *cmdline)
   event.delta_2f32.y = 120;
   ui_event_list_push(scratch.arena, &events, &event);
   sig = ui_signal_from_box(&box);
-  Check(sig.scroll.y == 4 && sig.scroll_px.y == 0, "Windows-style wheel delta retains four rows");
+  Check(sig.scroll.y == 3 && sig.scroll_px.y == 0, "Windows-style wheel delta follows the 40-unit row step");
   event.delta_2f32.y = 1;
   ui_event_list_push(scratch.arena, &events, &event);
   sig = ui_signal_from_box(&box);
