@@ -1586,10 +1586,12 @@ rd_watch_row_info_from_row(Arena *arena, EV_Row *row)
         rd_watch_cell_list_push_new(arena, &info.cells, RD_WatchCellKind_Eval, e_eval_wrapf(row->eval, "active"),
                                     .px = floor_f32(ui_top_font_size()*5.5f));
       }
-      if(entity->kind == D_EntityKind_Thread)
+      if(entity->kind == D_EntityKind_Process ||
+         entity->kind == D_EntityKind_Thread)
       {
         RD_CmdKind cmd_kind = RD_CmdKind_SelectEntity;
-        if(d_handle_match(entity->handle, rd_base_regs()->thread))
+        if(entity->kind == D_EntityKind_Thread &&
+           d_handle_match(entity->handle, rd_base_regs()->thread))
         {
           cmd_kind = RD_CmdKind_DeselectEntity;
         }
@@ -2081,6 +2083,22 @@ rd_info_from_watch_row_cell(Arena *arena, EV_Row *row, EV_StringFlags string_fla
           
           // rjf: generate string based on that expression & fill
           String8 string = rd_value_string_from_eval(arena, rd_view_query_input(), &string_params, font, font_size, max_size_px, cell->eval);
+          // A fallback is a display label only; retain the original address
+          // evaluation for navigation, selection and expression semantics.
+          if(row_info->callstack_thread != &d_entity_nil && cell->index == 1 && row_info->callstack_inline_depth == 0)
+          {
+            Access *access = access_open();
+            D_Entity *process = d_process_from_entity(row_info->callstack_thread);
+            D_Entity *module = d_module_from_process_vaddr(process, row_info->callstack_vaddr);
+            U64 voff = d_voff_from_vaddr(module, row_info->callstack_vaddr);
+            RDI_Parsed *rdi = di_rdi_from_key(access, d_dbgi_key_from_module(module), 0, 0);
+            D_SymbolName symbol = d_symbol_name_from_module_voff(arena, access, module->handle, rdi, voff);
+            if(symbol.kind == D_SymbolNameKind_SymbolTable)
+            {
+              string = push_str8f(arena, "%S + 0x%I64x [symbol]", symbol.name, voff-symbol.voff);
+            }
+            access_close(access);
+          }
           if(is_code)
           {
             eval_fstrs = rd_fstrs_from_code_string(arena, 1, 0, ui_color_from_name(str8_lit("text")), string);
