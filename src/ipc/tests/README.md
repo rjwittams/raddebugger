@@ -10,7 +10,7 @@ Tests cross the public server/request interface and native TCP sockets.
 Literal wire bytes check the format independently of the encoder. Cases cover
 fragmented/coalesced input, a 103-frame empty burst, malformed/wrong-instance
 peer isolation, truncated input/replies, mismatched reply ids, deadlines,
-simultaneous instances, stale instance tags after endpoint reuse and explicit
+simultaneous instances, native-random instance/key creation, stale instance tags after endpoint reuse and explicit
 client-side rejection. Wrong-key and payload-tamper cases require rejection
 without exposing a command, then a healthy peer. Forged header/payload tags
 and modified replies return no bytes. A 20 MiB request and 24 MiB reply cross the underlying
@@ -20,11 +20,18 @@ uses the socket fixture's native-only Winsock warm-up before counting.
 ## Construction contract
 
 This is a local transport, not diagnostic dispatch. `IPC_Endpoint` holds an
-IPv4 loopback address, a caller-provided 16-byte nonzero instance id and a
-32-byte nonzero authentication key. The id travels on the wire; the key does
-not. Tests use fixed public fixture keys, not production credentials. Native
-entropy, private endpoint publication/discovery and application/CLI integration
-remain separate activation gates. This authenticates messages, not encrypted
+IPv4 loopback address, a 16-byte nonzero instance id and a 32-byte nonzero
+authentication key. `ipc_server_open_random` creates both with native entropy:
+`BCryptGenRandom` on Windows, `getrandom(GRND_NONBLOCK)` on Linux and
+`getentropy` on macOS. Failure returns no server, without a weak fallback.
+Explicit `ipc_server_open` configuration remains available for callers that
+already hold an identity/key. Most tests use fixed public fixture keys; the
+random-instance case exchanges messages with two fresh identities without
+printing their keys. It checks usable, distinct identities, not RNG quality.
+Entropy-source failure is not injected by this suite.
+The id travels on the wire; the key does not. Private endpoint publication/
+discovery and application/CLI integration remain activation gates.
+This authenticates messages, not encrypted
 transport; it does not protect against a process that can read the secret.
 
 The public header prefix is 40 bytes: `RDIP`, version 2, kind 1 (request) or 2 (reply),

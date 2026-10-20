@@ -40,8 +40,10 @@ struct IPC_Response
   String8 data;
 };
 
-// The caller supplies a nonzero instance id and a per-instance secret key.
-// Random generation and private endpoint publication precede app activation.
+// Generate a fresh identity/key with native entropy; fail closed on failure.
+internal IPC_Server *ipc_server_open_random(U16 port, SOCK_WakeupFunctionType *wakeup);
+// Explicit configuration requires a nonzero instance id and secret key.
+// Private endpoint publication precedes app activation.
 // The owner serializes calls and closes only after those calls have finished.
 internal IPC_Server *ipc_server_open(U16 port, U128 instance_id, U256 auth_key, SOCK_WakeupFunctionType *wakeup);
 internal IPC_Endpoint ipc_server_endpoint(IPC_Server *server);
