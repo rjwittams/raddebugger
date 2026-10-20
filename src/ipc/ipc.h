@@ -9,6 +9,7 @@ struct IPC_Endpoint
 {
   SOCK_Endpoint address;
   U128 instance_id;
+  U256 auth_key;
 };
 
 typedef struct IPC_Message IPC_Message;
@@ -39,10 +40,10 @@ struct IPC_Response
   String8 data;
 };
 
-// The caller supplies a nonzero instance id, not an authentication secret.
-// Authentication and endpoint publication are separate activation gates.
+// The caller supplies a nonzero instance id and a per-instance secret key.
+// Random generation and private endpoint publication precede app activation.
 // The owner serializes calls and closes only after those calls have finished.
-internal IPC_Server *ipc_server_open(U16 port, U128 instance_id, SOCK_WakeupFunctionType *wakeup);
+internal IPC_Server *ipc_server_open(U16 port, U128 instance_id, U256 auth_key, SOCK_WakeupFunctionType *wakeup);
 internal IPC_Endpoint ipc_server_endpoint(IPC_Server *server);
 internal void ipc_server_close(IPC_Server *server);
 // A false receive leaves outputs unchanged; partial frames are never commands.
