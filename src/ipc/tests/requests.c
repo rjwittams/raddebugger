@@ -451,6 +451,25 @@ test_private_discovery(void)
   Check(!file_match(record, file_zero()));
   Check(file_write(record, r1u64(0, record_bytes.size), record_bytes.str) == record_bytes.size);
   file_close(record);
+  String8 alias_path = str8f(scratch.arena, "%S/record-alias", root);
+#if OS_WINDOWS
+  String16 alias16 = str16_from_8(scratch.arena, alias_path);
+  String16 record16 = str16_from_8(scratch.arena, record_path);
+  Check(CreateHardLinkW((WCHAR *)alias16.str, (WCHAR *)record16.str, 0));
+#else
+  char *alias_cstr = (char *)push_cstr(scratch.arena, alias_path).str;
+  char *record_cstr = (char *)push_cstr(scratch.arena, record_path).str;
+  Check(link(record_cstr, alias_cstr) == 0);
+#endif
+  rejected = ipc_request_local(scratch.arena, directory, get_process_info()->pid, str8_lit("linked record"), now_time_us()+Million(1));
+  Check(rejected.status == IPC_Status_Unavailable && rejected.data.size == 0);
+  unchanged.id = 42;
+  Check(!ipc_server_receive(scratch.arena, server, &unchanged, 0) && unchanged.id == 42);
+#if OS_WINDOWS
+  Check(DeleteFileW((WCHAR *)alias16.str));
+#else
+  Check(unlink(alias_cstr) == 0);
+#endif
   RequestFixture fixture = {server, str8_lit("private request"), str8_lit("authenticated reply")};
   Thread thread = thread_launch(request_server_thread, &fixture);
   Check(thread.u64[0] != 0);
