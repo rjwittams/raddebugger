@@ -489,6 +489,7 @@ internal IPC_Response
 ipc_request_local(Arena *arena, String8 directory, U32 pid, String8 data, U64 endt_us)
 {
   IPC_Response result = {IPC_Status_Unavailable};
+  if(data.size > IPC_PAYLOAD_LIMIT) { result.status = IPC_Status_TooLarge; return result; }
   if(now_time_us() >= endt_us) { result.status = IPC_Status_Timeout; return result; }
 #if OS_WINDOWS
   if(pid == 0) { return result; }

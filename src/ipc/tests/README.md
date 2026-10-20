@@ -31,7 +31,8 @@ random-instance case exchanges messages with two fresh identities without
 printing their keys. It checks usable, distinct identities, not RNG quality.
 Entropy-source failure is not injected by this suite.
 The id travels on the wire; the key does not. Private endpoint publication/
-discovery and application/CLI integration remain activation gates.
+discovery is under construction below. Application/CLI integration and
+discovery rejection/concurrency qualification remain activation gates.
 This authenticates messages, not encrypted transport; it does not protect
 against a process that can read the secret.
 
@@ -68,6 +69,40 @@ transport. A failed call never returns a partial reply. Zero deadline is an
 immediate timeout for a transaction, not an asynchronous request handle.
 Payload authentication is incremental inside the send/receive loops; the
 receiver exposes nothing until the trailing tag is complete and valid.
+
+## Private discovery (under construction)
+
+`ipc_server_open_local` creates or validates a private directory, publishes a
+fresh endpoint for the current PID and removes its own registration on close.
+A second live publication for that PID fails without disturbing the first;
+closing and reopening creates a fresh registration. `ipc_request_local` selects
+an explicit PID through that directory, verifies its native process birth and
+uses the same authenticated transaction. Oversize input is rejected before
+discovery, just as for an explicit endpoint.
+
+POSIX directories/files require current ownership and 0700/0600 modes; symlink,
+special-file, multiple-link and macOS extended-ACL objects are rejected.
+Windows requires protected, current-user-only full-access DACLs and rejects
+reparse/multiple-link objects. Existing unsafe directories are not repaired
+with chmod or ACL replacement. The private `.lock` file persists for
+cooperating publication operations and contains no credential. Test directories
+are retained for inspection.
+
+Registration is a 104-byte `RDIE` v1 record: version/OS/reserved prefix through
+byte 7, little-endian PID at 8, 32-byte native process birth at 16, little-endian
+port at 48, six reserved zeros, instance id at 56 and key at 72. Windows birth
+uses creation FILETIME; macOS uses start seconds/microseconds. Linux hashes
+the boot id and start ticks together. This is separate from the RDI format.
+Publish complete records atomically, not by rewriting live data. POSIX cleanup
+compares the retained file object's device/inode under the publication lock;
+Windows deletes through its retained file handle, not a replacement pathname.
+No credential or record content is printed by the fixture.
+
+This does not isolate mutually hostile same-user processes, privilege tokens
+or login sessions; the caller chooses an exact PID. Privileged attackers and
+same-user processes remain outside the private-file threat model. Filesystem
+ownership checks and MACs do not provide encryption. The initial public
+round-trip/lifecycle case is not full rejection or crash qualification.
 
 No graphical debugger, live target or authorization prompt runs in this suite.
 Existing snapshot/base64 schemas and command parsing remain unchanged because
