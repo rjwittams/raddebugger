@@ -29,12 +29,14 @@ class Client:
         self.trace = trace or os.environ.get('RAD_IPC_TRACE')
 
     def command(self, command):
-        args = command.split() if isinstance(command, str) else command
-        result = subprocess.run([self.sender, '--ipc', f'--pid:{self.pid}', *args],
-                                capture_output=True, text=True, timeout=20)
+        payload = command if isinstance(command, str) else ' '.join(command)
+        result = subprocess.run([self.sender, '--ipc', f'--pid:{self.pid}', '--ipc_stdin'],
+                                input=payload.encode('utf-8'), capture_output=True, timeout=20)
+        result.stdout = result.stdout.decode('utf-8')
+        result.stderr = result.stderr.decode('utf-8')
         if self.trace:
             with open(self.trace, 'a', encoding='utf-8') as stream:
-                stream.write(json.dumps(dict(time=time.time(), command=args,
+                stream.write(json.dumps(dict(time=time.time(), command=payload,
                                             stdout=result.stdout, stderr=result.stderr,
                                             returncode=result.returncode)) + '\n')
         result.check_returncode()

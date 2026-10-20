@@ -168,8 +168,10 @@ class SmokeRunnerTests(unittest.TestCase):
                 kwargs['stdout'].write(json.dumps({'ProcessId': 123, 'ExecutablePath': str(self.debugger.resolve())}))
                 return subprocess.CompletedProcess(command, 0)
             if command[0] == str(self.debugger.resolve()):
+                self.assertEqual(command[-1], '--ipc_stdin')
+                self.assertIsInstance(kwargs['input'], bytes)
                 snapshot = dict(version=1, status='ready', process_count=0, build={})
-                return subprocess.CompletedProcess(command, 0, stdout=json.dumps(snapshot), stderr='')
+                return subprocess.CompletedProcess(command, 0, stdout=json.dumps(snapshot).encode('utf-8'), stderr=b'')
             if command[:2] == ['cleat', 'inspect']:
                 kwargs['stdout'].write(json.dumps({'process': {'leader_pid': 123}}))
                 return subprocess.CompletedProcess(command, 0)
