@@ -27,8 +27,13 @@ eh_parse_frame_hdr(String8 data, U64 address_size, EH_PtrCtx *ptr_ctx)
     if (table_enc_size == 0) { goto exit; }
     cursor += table_enc_size;
     
-    cursor += eh_read_ptr(data, cursor, cursor, ptr_ctx, header.eh_frame_ptr_enc, &header.eh_frame_ptr);
-    cursor += eh_read_ptr(data, cursor, cursor, ptr_ctx, header.fde_count_enc, &header.fde_count);
+    cursor += eh_read_ptr(data, cursor, ptr_ctx->pc_vaddr + cursor, ptr_ctx, header.eh_frame_ptr_enc, &header.eh_frame_ptr);
+    // Either omitted encoding means there is no search table.
+    if(header.fde_count_enc == EH_PtrEnc_Omit || header.table_enc == EH_PtrEnc_Omit)
+    {
+      goto exit;
+    }
+    cursor += eh_read_ptr(data, cursor, ptr_ctx->pc_vaddr + cursor, ptr_ctx, header.fde_count_enc, &header.fde_count);
     
     switch (header.table_enc & EH_PtrEnc_TypeMask) {
       case EH_PtrEnc_Ptr:     { header.field_byte_size = address_size; } break;
@@ -185,7 +190,7 @@ eh_read_aug_data(String8 data, U64 off, String8 string, U64 pc, EH_PtrCtx *ptr_c
   {
     aug_out->handler_ip       = handler_ip;
     aug_out->handler_encoding = handler_encoding;
-    aug_out->lsda_encoding    = handler_encoding;
+    aug_out->lsda_encoding    = lsda_encoding;
     aug_out->addr_encoding    = addr_encoding;
     aug_out->flags            = aug_flags;
     aug_out->size             = aug_data_size;
@@ -247,7 +252,7 @@ eh_read_cie(String8 data, U64 off, DW_Format fmt, Arch arch, U64 pc, EH_PtrCtx *
   S64 data_align_factor = 0;
   U64 ret_addr_reg = 0;
   EH_Augmentation aug = {0};
-  if(version == 1)
+  if(version == 1 || version == 3)
   {
     // rjf: read aug string
     aug_string_off_first = off;
@@ -268,13 +273,25 @@ eh_read_cie(String8 data, U64 off, DW_Format fmt, Arch arch, U64 pc, EH_PtrCtx *
     off += str8_deserial_read_sleb128(data, off, &data_align_factor);
     
     // rjf: read return address register
-    off += str8_deserial_read(data, off, &ret_addr_reg, sizeof(U8), sizeof(U8));
+    if(version == 1)
+    {
+      off += str8_deserial_read(data, off, &ret_addr_reg, sizeof(U8), sizeof(U8));
+    }
+    else
+    {
+      off += str8_deserial_read_uleb128(data, off, &ret_addr_reg);
+    }
     
     // rjf: parse augmentation
     aug_data_off_first = off;
     U64 aug_data_size = eh_read_aug_data(data, off, aug_string, pc + (off - start_off), ptr_ctx, &aug);
-    aug_data_off_opl = off + aug.size;
+    // Include the encoded length, so even a zero-byte 'z' augmentation is present.
+    aug_data_off_opl = off + aug_data_size;
     off += aug_data_size;
+  }
+  else
+  {
+    version = 0;
   }
   
   // rjf: fill output
@@ -304,7 +321,7 @@ eh_read_cie(String8 data, U64 off, DW_Format fmt, Arch arch, U64 pc, EH_PtrCtx *
     cie_out->ext[EH_CIE_Ext_HandlerIp ] = aug.handler_ip;
   }
   
-  U64 bytes_read = (off - start_off);
+  U64 bytes_read = version != 0 ? (off - start_off) : 0;
   return bytes_read;
 }
 
@@ -327,7 +344,13 @@ eh_read_fde(String8 data, U64 off, DW_Format fmt, Arch arch, U64 pc, EH_PtrCtx *
   }
   
   // rjf: skip aug data
-  off += dim_1u64(cie->aug_data_range);
+  // The CIE says whether a length is present; the FDE supplies its own length.
+  if(dim_1u64(cie->aug_data_range) != 0)
+  {
+    U64 aug_size = 0;
+    off += str8_deserial_read_uleb128(data, off, &aug_size);
+    off += aug_size;
+  }
   
   // rjf: fill output
   fde_out->pc_range = r1u64(pc_begin, pc_begin + pc_delta);
@@ -365,12 +388,14 @@ eh_frame_hdr_from_call_frame_info(Arena *arena, U64 fde_count, U64 *fde_offsets,
   MemoryCopyStr8(buffer, header);
   
   // write the table
-  EH_FrameHdrEntry *table = (EH_FrameHdrEntry *)(buffer + header.size);
+  // Keep typed entries aligned; the serialized header is only twelve bytes.
+  EH_FrameHdrEntry *table = push_array(scratch.arena, EH_FrameHdrEntry, fde_count);
   for EachIndex(fde_idx, fde_count) {
     table[fde_idx].addr       = fde[fde_idx].pc_range.min;
     table[fde_idx].fde_offset = fde_offsets[fde_idx];
   }
   radsort(table, fde_count, eh_frame_hdr_entry_sort);
+  MemoryCopy(buffer + header.size, table, sizeof(EH_FrameHdrEntry) * fde_count);
   
   String8 eh_frame_hdr = str8(buffer, buffer_size);
   scratch_end(scratch);

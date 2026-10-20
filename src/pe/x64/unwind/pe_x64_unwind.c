@@ -89,11 +89,14 @@ pe_x64_uwnd_reg_code_from_pe_gpr_reg(PE_UnwindGprRegX64 gpr_reg)
 //~ rjf: Unwinding Abstraction Implementation
 
 internal UWND_StepResult
-pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64 tls_vaddr, void *regs_opaque, U64 *cfa_out)
+pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info, U64 tls_vaddr, U64 lookup_pc, void *regs_opaque, U8 *reg_valid, U64 *cfa_out)
 {
   UWND_StepResult result = {UWND_StepStatus_Error};
   PE_X64_UWND_ModuleUnwindInfo *unwind_info = (PE_X64_UWND_ModuleUnwindInfo *)module_info->unwind_info;
   X64_RegBlock *regs = (X64_RegBlock *)regs_opaque;
+  if(!uwnd_reg_is_valid(arch, reg_valid, X64_RegCode_rsp)) {return result;}
+  U8 caller_valid[sizeof(*regs)];
+  uwnd_reg_valid_from_abi(arch, OperatingSystem_Windows, reg_valid, caller_valid);
   if(unwind_info != 0)
   {
     B32 done = 0;
@@ -107,7 +110,7 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
     ////////////////////////////
     //- rjf: unpack context from rip
     //
-    U64 rip_voff = regs->rip - module_info->base_vaddr;
+    U64 rip_voff = lookup_pc - module_info->base_vaddr;
     PE_IntelPdata *first_pdata = pe_x64_uwnd_intel_pdata_from_voff(unwind_info, rip_voff);
     
     ////////////////////////////
@@ -115,9 +118,11 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
     //
     B32 has_pdata_and_in_epilog = 0;
     U64 instruction_data_size_cap = 256;
-    Rng1U64 instruction_data_vaddr_range = r1u64(regs->rip, regs->rip+instruction_data_size_cap);
+    Rng1U64 instruction_data_vaddr_range = r1u64(lookup_pc, lookup_pc+instruction_data_size_cap);
     String8 instruction_data = {0};
-    if(!done && first_pdata)
+    // A biased return-address lookup can point inside a call's operand bytes.
+    // Only an exact instruction PC is suitable for epilog decoding.
+    if(!done && first_pdata && lookup_pc == regs->rip)
     {
       // NOTE(allen): There are restrictions placed on how an epilog is allowed
       // to be formed (https://docs.microsoft.com/en-us/cpp/build/prolog-and-epilog?view=msvc-160)
@@ -361,6 +366,7 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
               Rng1U16 reg_rng = x64_reg_code_rng_table[reg_code];
               U64 *reg_ptr = (U64 *)((U8 *)regs + reg_rng.min);
               reg_ptr[0] = value;
+              uwnd_reg_set_valid(caller_valid, reg_rng, 1);
               regs->rsp = sp + 8;
             }
             
@@ -430,6 +436,7 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
             Rng1U16 reg_rng = x64_reg_code_rng_table[reg_code];
             U64 *reg_ptr = (U64 *)((U8 *)regs + reg_rng.min);
             U64 reg_value = reg_ptr[0];
+            if(!uwnd_reg_range_is_valid(caller_valid, reg_rng)) {done = 1;}
             
             // rjf: read immediate
             S32 imm = 0;
@@ -606,6 +613,7 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
         if(frame_reg_code != X64_RegCode_nil)
         {
           Rng1U16 frame_reg_rng = x64_reg_code_rng_table[frame_reg_code];
+          if(!uwnd_reg_range_is_valid(caller_valid, frame_reg_rng)) {done = 1; break;}
           U64 raw_frame_base = *(U64 *)((U8 *)regs + frame_reg_rng.min);
           U64 adjusted_frame_base = raw_frame_base - frame_off*16;
           frame_base = adjusted_frame_base;
@@ -614,7 +622,7 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
         //- rjf: apply opcodes
         PE_UnwindCode *code_ptr = unwind_codes;
         PE_UnwindCode *code_opl = unwind_codes + unwind_info.codes_num;
-        for(PE_UnwindCode *next_code_ptr = 0; code_ptr < code_opl; code_ptr = next_code_ptr)
+        for(PE_UnwindCode *next_code_ptr = 0; !done && code_ptr < code_opl; code_ptr = next_code_ptr)
         {
           // rjf: unpack opcode info
           U32 op_code = PE_UNWIND_OPCODE_FROM_FLAGS(code_ptr->flags);
@@ -660,6 +668,7 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
                   X64_RegCode reg_code = pe_x64_uwnd_reg_code_from_pe_gpr_reg(op_info);
                   Rng1U16 reg_rng = x64_reg_code_rng_table[reg_code];
                   *(U64 *)((U8 *)regs + reg_rng.min) = value;
+                  uwnd_reg_set_valid(caller_valid, reg_rng, 1);
                   regs->rsp = rsp + 8;
                 }
               }break;
@@ -719,6 +728,7 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
                   X64_RegCode reg_code = pe_x64_uwnd_reg_code_from_pe_gpr_reg(op_info);
                   Rng1U16 reg_rng = x64_reg_code_rng_table[reg_code];
                   *(U64 *)((U8 *)regs + reg_rng.min) = value;
+                  uwnd_reg_set_valid(caller_valid, reg_rng, 1);
                 }
               }break;
               
@@ -741,6 +751,7 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
                   X64_RegCode reg_code = pe_x64_uwnd_reg_code_from_pe_gpr_reg(op_info);
                   Rng1U16 reg_rng = x64_reg_code_rng_table[reg_code];
                   *(U64 *)((U8 *)regs + reg_rng.min) = value;
+                  uwnd_reg_set_valid(caller_valid, reg_rng, 1);
                 }
               }break;
               
@@ -775,6 +786,8 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
                 {
                   void *xmm_reg = (&regs->zmm0) + op_info;
                   MemoryCopy(xmm_reg, buf, sizeof(buf));
+                  U64 off = (U8 *)xmm_reg - (U8 *)regs;
+                  uwnd_reg_set_valid(caller_valid, r1u16(off, off+sizeof(buf)), 1);
                 }
               }break;
               
@@ -797,6 +810,8 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
                 {
                   void *xmm_reg = (&regs->zmm0) + op_info;
                   MemoryCopy(xmm_reg, buf, sizeof(buf));
+                  U64 off = (U8 *)xmm_reg - (U8 *)regs;
+                  uwnd_reg_set_valid(caller_valid, r1u16(off, off+sizeof(buf)), 1);
                 }
               }break;
               
@@ -863,6 +878,8 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
                   regs->ss     = ss_value;
                   regs->rflags = rflags_value;
                   regs->rsp    = sp_value;
+                  uwnd_reg_mark_valid(arch, caller_valid, X64_RegCode_ss, 0);
+                  uwnd_reg_mark_valid(arch, caller_valid, X64_RegCode_rflags, 0);
                 }
                 
                 // rjf: mark machine frame
@@ -900,7 +917,7 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
     //
     if(!done && (!first_pdata || (!has_pdata_and_in_epilog && !xdata_unwind_did_machframe)))
     {
-      result = uwnd_step_moduleless(arch, memory_map, regs);
+      result = uwnd_step_moduleless(arch, memory_map, regs, caller_valid);
       done = (result.status != UWND_StepStatus_Good);
     }
     
@@ -910,6 +927,10 @@ pe_x64_uwnd_step(Arch arch, MemoryMap *memory_map, UWND_ModuleInfo *module_info,
     if(!done)
     {
       result.status = UWND_StepStatus_Good;
+      result.is_interrupted = xdata_unwind_did_machframe;
+      uwnd_reg_mark_valid(arch, caller_valid, X64_RegCode_rip, 0);
+      uwnd_reg_mark_valid(arch, caller_valid, X64_RegCode_rsp, 0);
+      MemoryCopy(reg_valid, caller_valid, sizeof(*regs));
     }
     
     scratch_end(scratch);

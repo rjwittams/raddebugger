@@ -106,6 +106,7 @@ struct DW2_OffsetTable
   U64 entries_count;
   B32 entries_are_addrs;
   void *entries;
+  Rng1U64 list_range; // Section offsets after the list offset array, bounded by unit_length.
 };
 
 typedef struct DW2_OffsetTableNode DW2_OffsetTableNode;
@@ -161,6 +162,7 @@ struct DW2_ParseCtx
   U64 unit_base_addr;
   U64 unit_base_info_off;
   DW2_AbbrevMap *abbrev_map;
+  DW2_OffsetTableSet *offset_tables;
   DW2_OffsetTable *rnglists_table;
   DW2_OffsetTable *str_offsets_table;
   DW2_OffsetTable *addr_table;
@@ -180,6 +182,7 @@ struct DW2_FormVal
   U128 u128;
   String8 string;
   U64 addr;
+  B32 good;
 };
 
 typedef struct DW2_Attrib DW2_Attrib;
@@ -431,14 +434,15 @@ internal U64 dw2_read_line_table_header(Arena *arena, DW_Raw *raw, DW2_ParseCtx 
 ////////////////////////////////
 //~ rjf: Offset Table Parsing (.debug_str_offsets, .debug_rnglists)
 
-internal U64 dw2_read_offset_table(String8 data, U64 off, B32 offset_count_entry, DW2_OffsetTable *out);
-internal DW2_OffsetTableList dw2_offset_table_list_from_data(Arena *arena, String8 data, B32 offset_count_entry);
+internal U64 dw2_read_offset_table(String8 data, U64 off, DW_SectionKind section_kind, DW2_OffsetTable *out);
+internal DW2_OffsetTableList dw2_offset_table_list_from_data(Arena *arena, String8 data, DW_SectionKind section_kind);
 internal B32 dw2_try_offset_from_table_idx(DW2_OffsetTable *tbl, U64 idx, U64 *out);
 internal DW2_OffsetTableSet dw2_offset_table_set_from_raw(Arena *arena, DW_Raw *raw);
 
 ////////////////////////////////
 //~ rjf: Range List Parsing (.debug_rnglists)
 
+internal B32 dw2_try_read_list_uleb128(String8 data, U64 *off, U64 *out);
 internal Rng1U64List dw2_rnglist_from_form_val(Arena *arena, DW2_ParseCtx *ctx, DW_Raw *raw, DW2_FormVal form_val);
 
 ////////////////////////////////
