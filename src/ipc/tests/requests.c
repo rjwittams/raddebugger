@@ -524,6 +524,27 @@ test_private_discovery(void)
   IPC_Response response = ipc_request_local(scratch.arena, directory, get_process_info()->pid, fixture.request, now_time_us()+Million(3));
   Check(response.status == IPC_Status_Success && str8_match(response.data, fixture.reply, 0));
   Check(thread_join(thread, now_time_us()+Million(3)));
+  String8 retired_path = str8f(scratch.arena, "%S/retired-record", root);
+#if OS_WINDOWS
+  String16 retired16 = str16_from_8(scratch.arena, retired_path);
+  Check(MoveFileExW((WCHAR *)record16.str, (WCHAR *)retired16.str, 0));
+#else
+  char *retired_cstr = (char *)push_cstr(scratch.arena, retired_path).str;
+  Check(rename(record_cstr, retired_cstr) == 0);
+#endif
+  IPC_Server *replacement = ipc_server_open_local(directory, 0);
+  Check(replacement != 0);
+  ipc_server_close(server);
+#if !OS_WINDOWS
+  Check(unlink(retired_cstr) == 0);
+#endif
+  server = replacement;
+  fixture = (RequestFixture){server, str8_lit("replacement request"), str8_lit("still published")};
+  thread = thread_launch(request_server_thread, &fixture);
+  Check(thread.u64[0] != 0);
+  response = ipc_request_local(scratch.arena, directory, get_process_info()->pid, fixture.request, now_time_us()+Million(3));
+  Check(response.status == IPC_Status_Success && str8_match(response.data, fixture.reply, 0));
+  Check(thread_join(thread, now_time_us()+Million(3)));
   ipc_server_close(server);
   response = ipc_request_local(scratch.arena, directory, get_process_info()->pid, fixture.request, now_time_us()+Million(1));
   Check(response.status == IPC_Status_Unavailable && response.data.size == 0);
