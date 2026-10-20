@@ -18,7 +18,8 @@ class UnwindProbeTests(unittest.TestCase):
             nonlocal stop_count, pc
             if argv[0] == 'xcrun':
                 return subprocess.CompletedProcess(argv, 0, stdout='100 T _unwind_leaf\n0 T __mh_execute_header\n')
-            operation = argv[3]
+            self.assertEqual(argv, ['sender', '--ipc', '--pid:123', '--ipc_stdin'])
+            operation = kwargs['input'].decode('utf-8').split()[0]
             reply = ''
             if operation in ('restart', 'run', 'step_into_inst'):
                 stop_count += 1
@@ -36,7 +37,7 @@ class UnwindProbeTests(unittest.TestCase):
                                frames=[] if broken else [{'module_offset': '0x100'}])))
             elif operation != 'remove_breakpoint':
                 raise AssertionError(argv)
-            return subprocess.CompletedProcess(argv, 0, stdout=reply, stderr='')
+            return subprocess.CompletedProcess(argv, 0, stdout=reply.encode('utf-8'), stderr=b'')
 
         with tempfile.TemporaryDirectory() as temporary:
             result = Path(temporary)/'result.json'
