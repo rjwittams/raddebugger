@@ -700,11 +700,11 @@ entry_point(CmdLine *cmd_line)
           //- rjf: receive socket data, run as IPC messages
           B32 ipc_command_frame = 0;
           SOCK_Protocol ipc_protocol = SOCK_Protocol_TCP;
-          SOCK_Endpoint ipc_endpoint = {0};
+          SOCK_Peer ipc_peer = {0};
           {
             Temp scratch = scratch_begin(0, 0);
             String8 msg = {0};
-            if(sock_recv(scratch.arena, icp_sock_session, &ipc_protocol, &ipc_endpoint, &msg, 0))
+            if(sock_recv(scratch.arena, icp_sock_session, &ipc_protocol, &ipc_peer, &msg, 0))
             {
               String8List cmd_parts_of_msg = str8_split(scratch.arena, msg, (U8 *)";", 1, 0);
               RD_WindowState *dst_ws = rd_state->first_window_state;
@@ -780,7 +780,7 @@ entry_point(CmdLine *cmd_line)
             {
               msg = s("done");
             }
-            sock_send(icp_sock_session, ipc_protocol, ipc_endpoint, msg, now_time_us()+5000000);
+            sock_send_peer(icp_sock_session, ipc_protocol, ipc_peer, msg, now_time_us()+5000000);
           }
         }
       }
@@ -824,9 +824,9 @@ entry_point(CmdLine *cmd_line)
       if(sock_send(ipc_sock_session, SOCK_Protocol_TCP, endpoint, msg, now_time_us()+10000000))
       {
         SOCK_Protocol outputs_protocol = SOCK_Protocol_TCP;
-        SOCK_Endpoint outputs_endpoint = {0};
+        SOCK_Peer outputs_peer = {0};
         String8 output_data = {0};
-        if(sock_recv(scratch.arena, ipc_sock_session, &outputs_protocol, &outputs_endpoint, &output_data, now_time_us()+10000000))
+        if(sock_recv(scratch.arena, ipc_sock_session, &outputs_protocol, &outputs_peer, &output_data, now_time_us()+10000000))
         {
           U8 split_char = 0;
           outputs = str8_split(scratch.arena, output_data, &split_char, 1, 0);
