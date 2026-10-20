@@ -1443,9 +1443,18 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
     E_TypeKind type_kind = e_type_kind_from_key(type_key);
     String8 expansion_opener_symbol = str8_lit("{");
     String8 expansion_closer_symbol = str8_lit("}");
+    E_Eval value_eval = eval;
+    if(eval.irtree.mode == E_Mode_Offset && e_space_match(eval.space, e_interpret_ctx->reg_space))
+    {
+      value_eval = e_value_eval_from_eval(eval);
+    }
+    if(value_eval.code == E_InterpretationCode_BadRegRead || value_eval.code == E_InterpretationCode_BadMemRead)
+    {
+      *out_string = str8_lit("<unavailable>");
+    }
     
     //- rjf: type evaluations -> display type string
-    if(eval.irtree.mode == E_Mode_Null && !e_type_key_match(e_type_key_zero(), eval.irtree.type_key))
+    else if(eval.irtree.mode == E_Mode_Null && !e_type_key_match(e_type_key_zero(), eval.irtree.type_key))
     {
       *out_string = e_type_string_from_key(arena, type_key);
     }
@@ -1458,7 +1467,7 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
       //
       default:
       {
-        E_Eval value_eval = e_value_eval_from_eval(eval);
+        value_eval = e_value_eval_from_eval(eval);
         *out_string = ev_string_from_simple_typed_eval(arena, params, value_eval);
       }break;
       
@@ -1473,7 +1482,7 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
           case 0:
           {
             E_Type *type = e_type_from_key(type_key);
-            E_Eval value_eval = e_value_eval_from_eval(eval);
+            value_eval = e_value_eval_from_eval(eval);
             String8 constant_name = {0};
             for(U64 val_idx = 0; val_idx < type->count; val_idx += 1)
             {
@@ -1505,7 +1514,7 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
               need_pop = 1;
               need_new_task = 1;
               new_task.params = *params;
-              new_task.eval = e_value_eval_from_eval(eval);
+              new_task.eval = value_eval;
               new_task.eval.irtree.type_key = e_type_key_direct(eval.irtree.type_key);
             }
           }break;
@@ -1515,7 +1524,8 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
             need_pop = 0;
             need_new_task = 1;
             new_task.params = *params;
-            new_task.eval = e_value_eval_from_eval(eval);
+            value_eval = e_value_eval_from_eval(eval);
+            new_task.eval = value_eval;
             new_task.eval.irtree.type_key = e_type_key_direct(eval.irtree.type_key);
           }break;
           case 2:
@@ -1706,7 +1716,8 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
         need_pop = 1;
         need_new_task = 1;
         new_task.params = *params;
-        new_task.eval = e_value_eval_from_eval(eval);
+        value_eval = e_value_eval_from_eval(eval);
+        new_task.eval = value_eval;
         new_task.eval.irtree.type_key = e_type_key_direct(eval.irtree.type_key);
       }break;
       
@@ -1750,7 +1761,8 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
         if(ptr_data == 0)
         {
           ptr_data = it->top_task->user_data = push_array(arena, EV_StringPtrData, 1);
-          ptr_data->value_eval = e_value_eval_from_eval(eval);
+          value_eval = e_value_eval_from_eval(eval);
+          ptr_data->value_eval = value_eval;
           ptr_data->type = e_type_from_key(type_key);
           ptr_data->direct_type = e_type_from_key(e_type_key_unwrap(type_key, E_TypeUnwrapFlag_All));
           ptr_data->ptee_has_content = (ptr_data->value_eval.value.u64 != 0 && ptr_data->direct_type->kind != E_TypeKind_Null && ptr_data->direct_type->kind != E_TypeKind_Void);
@@ -1911,18 +1923,11 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
                 
                 // rjf: scope -> # of max possible inline depth
                 U64 inline_site_count = 0;
-                for(U64 s_idx = scope_idx, s_idx_next = 0; s_idx != 0; s_idx = s_idx_next)
+                RDI_Scope *scope = rdi_inline_scope_from_scope(rdi, rdi_element_from_name_idx(rdi, Scopes, scope_idx));
+                for(RDI_Scope *s = scope; s->inline_site_idx != 0;
+                    s = rdi_inline_scope_from_scope(rdi, rdi_parent_from_scope(rdi, s)))
                 {
-                  RDI_Scope *s = rdi_element_from_name_idx(rdi, Scopes, s_idx);
-                  s_idx_next = s->parent_scope_idx;
-                  if(s->inline_site_idx != 0)
-                  {
-                    inline_site_count += 1;
-                  }
-                  else
-                  {
-                    break;
-                  }
+                  inline_site_count += 1;
                 }
                 
                 // rjf: depth in [1, max]? -> form name from inline site
@@ -1930,10 +1935,9 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
                 {
                   RDI_InlineSite *inline_site = 0;
                   U64 s_inline_depth = inline_site_count;
-                  for(U64 s_idx = scope_idx, s_idx_next = 0; s_idx != 0; s_idx = s_idx_next)
+                  for(RDI_Scope *s = scope; s->inline_site_idx != 0;
+                      s = rdi_inline_scope_from_scope(rdi, rdi_parent_from_scope(rdi, s)))
                   {
-                    RDI_Scope *s = rdi_element_from_name_idx(rdi, Scopes, s_idx);
-                    s_idx_next = s->parent_scope_idx;
                     if(s_inline_depth == ptr_data->type->depth)
                     {
                       inline_site = rdi_element_from_name_idx(rdi, InlineSites, s->inline_site_idx);
@@ -2189,6 +2193,12 @@ ev_string_iter_next(Arena *arena, EV_StringIter *it, String8 *out_string)
           }break;
         }
       }break;
+    }
+    if(value_eval.code == E_InterpretationCode_BadRegRead || value_eval.code == E_InterpretationCode_BadMemRead)
+    {
+      *out_string = str8_lit("<unavailable>");
+      need_pop = 1;
+      need_new_task = 0;
     }
   }
   

@@ -6,6 +6,9 @@
 #if defined(X64_H)
 # include "rdi/x64/rdi_x64.c"
 #endif
+#if defined(ARM64_H)
+# include "rdi/arm64/rdi_arm64.c"
+#endif
 
 ////////////////////////////////
 //~ rjf: RDI Enum <=> Base Enum
@@ -19,6 +22,7 @@ arch_from_rdi_arch(RDI_Arch arch)
     case RDI_Arch_NULL:{}break;
     case RDI_Arch_X86:{result = Arch_x86;}break;
     case RDI_Arch_X64:{result = Arch_x64;}break;
+    case RDI_Arch_ARM64:{result = Arch_arm64;}break;
   }
   return result;
 }
@@ -33,7 +37,7 @@ rdi_arch_from_arch(Arch arch)
     case Arch_Null:{}break;
     case Arch_x86:{result = RDI_Arch_X86;}break;
     case Arch_x64:{result = RDI_Arch_X64;}break;
-    case Arch_arm64:{}break;
+    case Arch_arm64:{result = RDI_Arch_ARM64;}break;
     case Arch_arm32:{}break;
   }
   return result;
@@ -68,6 +72,40 @@ str8_from_rdi_path_node_idx(Arena *arena, RDI_Parsed *rdi, PathStyle path_style,
   String8 path = str8_path_list_join_by_style(arena, &path_parts, path_style);
   scratch_end(scratch);
   return path;
+}
+
+internal U32
+rdi_source_file_idx_from_path(RDI_Parsed *rdi, String8 path)
+{
+  Temp scratch = scratch_begin(0, 0);
+  String8 requested = str8_copy(scratch.arena, path);
+  for EachIndex(idx, requested.size)
+  {
+    requested.str[idx] = correct_slash_from_char(requested.str[idx]);
+  }
+  String8 folded = lower_from_str8(scratch.arena, requested);
+  RDI_ParsedNameMap map = {0};
+  rdi_parsed_from_name_map(rdi, rdi_element_from_name_idx(rdi, NameMaps, RDI_NameMapKind_NormalSourcePaths), &map);
+  U32 id_count = 0;
+  U32 *ids = rdi_matches_from_map_node(rdi, rdi_name_map_lookup(rdi, &map, folded.str, folded.size), &id_count);
+  U32 result = id_count != 0 ? ids[0] : 0;
+  // Prefer the requested spelling without removing the existing folded fallback.
+  if(id_count > 1)
+  {
+    PathStyle style = path_style_from_str8(requested);
+    for EachIndex(idx, id_count)
+    {
+      RDI_SourceFile *src = rdi_element_from_name_idx(rdi, SourceFiles, ids[idx]);
+      String8 candidate = str8_from_rdi_path_node_idx(scratch.arena, rdi, style, src->file_path_node_idx);
+      if(str8_match(requested, candidate, 0))
+      {
+        result = ids[idx];
+        break;
+      }
+    }
+  }
+  scratch_end(scratch);
+  return result;
 }
 
 internal String8
@@ -266,6 +304,20 @@ rdi_string_from_reg_code_x64(U64 reg_code)
 }
 
 internal String8
+rdi_string_from_reg_code_arm64(U64 reg_code)
+{
+  String8 result = {0};
+  switch(reg_code)
+  {
+    default:{}break;
+#define X(name, value) case RDI_RegCodeARM64_##name:{result = str8_lit(#name);}break;
+    RDI_RegCodeARM64_XList
+#undef X
+  }
+  return result;
+}
+
+internal String8
 rdi_string_from_reg_code(Arena *arena, RDI_Arch arch, U64 reg_code)
 {
   String8 result = {0};
@@ -273,7 +325,8 @@ rdi_string_from_reg_code(Arena *arena, RDI_Arch arch, U64 reg_code)
   {
     default:
     case RDI_Arch_NULL: {result = push_str8f(arena, "??? (%llu)", reg_code);}break;
-    case RDI_Arch_X64:  {result = rdi_string_from_reg_code_x64(reg_code);}break;
+    case RDI_Arch_X64:   {result = rdi_string_from_reg_code_x64(reg_code);}break;
+    case RDI_Arch_ARM64: {result = rdi_string_from_reg_code_arm64(reg_code);}break;
   }
   return result;
 }

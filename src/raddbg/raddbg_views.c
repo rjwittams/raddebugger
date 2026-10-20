@@ -1304,11 +1304,10 @@ rd_watch_row_info_from_row(Arena *arena, EV_Row *row)
         D_CallStack call_stack = d_call_stack_from_thread(access, entity->handle, call_stack_high_priority, call_stack_high_priority ? rd_state->frame_eval_memread_endt_us : 0);
         if(1 <= frame_num && frame_num <= call_stack.frames_count)
         {
-          ARCH_Info *arch_info = arch_info_from_arch(entity->arch);
           D_CallStackFrame *f = &call_stack.frames[frame_num-1];
           info.callstack_unwind_index = f->unwind_count;
           info.callstack_inline_depth = f->inline_depth;
-          info.callstack_vaddr = arch_ip_from_reg_block(arch_info, f->regs);
+          info.callstack_vaddr = f->lookup_vaddr;
         }
         access_close(access);
       }
@@ -2374,39 +2373,28 @@ RD_VIEW_UI_FUNCTION_DEF(text)
       for EachNode(override_n, String8Node, overrides.first)
       {
         String8 file_path = override_n->string;
-        String8 file_path_normalized = lower_from_str8(scratch.arena, path_normalized_from_string(scratch.arena, file_path));
-        B32 good_src_id = 0;
-        U32 src_id = 0;
-        RDI_NameMap *mapptr = rdi_element_from_name_idx(rdi, NameMaps, RDI_NameMapKind_NormalSourcePaths);
-        RDI_ParsedNameMap map = {0};
-        rdi_parsed_from_name_map(rdi, mapptr, &map);
-        RDI_NameMapNode *node = rdi_name_map_lookup(rdi, &map, file_path_normalized.str, file_path_normalized.size);
-        if(node != 0)
+        String8 file_path_normalized = path_normalized_from_string(scratch.arena, file_path);
+        U32 src_id = rdi_source_file_idx_from_path(rdi, file_path_normalized);
+        if(src_id != 0)
         {
-          U32 id_count = 0;
-          U32 *ids = rdi_matches_from_map_node(rdi, node, &id_count);
-          if(id_count > 0)
+          RDI_SourceFile *src = rdi_element_from_name_idx(rdi, SourceFiles, src_id);
+          RDI_SourceLineMap *src_line_map = rdi_element_from_name_idx(rdi, SourceLineMaps, src->source_line_map_idx);
+          RDI_ParsedSourceLineMap parsed_src_line_map = {0};
+          rdi_parsed_from_source_line_map(rdi, src_line_map, &parsed_src_line_map);
+          if(src_line_map->voff_count != 0)
           {
-            U32 src_id = ids[0];
-            RDI_SourceFile *src = rdi_element_from_name_idx(rdi, SourceFiles, src_id);
-            RDI_SourceLineMap *src_line_map = rdi_element_from_name_idx(rdi, SourceLineMaps, src->source_line_map_idx);
-            RDI_ParsedSourceLineMap parsed_src_line_map = {0};
-            rdi_parsed_from_source_line_map(rdi, src_line_map, &parsed_src_line_map);
-            if(src_line_map->voff_count != 0)
+            RDI_Unit *unit = rdi_unit_from_voff(rdi, parsed_src_line_map.voffs[0]);
+            switch((RDI_LanguageEnum)unit->language)
             {
-              RDI_Unit *unit = rdi_unit_from_voff(rdi, parsed_src_line_map.voffs[0]);
-              switch((RDI_LanguageEnum)unit->language)
-              {
-                case RDI_Language_NULL:
-                case RDI_Language_COUNT:
-                case RDI_Language_Masm:
-                {}break;
-                case RDI_Language_C:        {rd_regs()->lang_kind = TXT_LangKind_C;}break;
-                case RDI_Language_CPlusPlus:{rd_regs()->lang_kind = TXT_LangKind_CPlusPlus;}break;
-              }
+              case RDI_Language_NULL:
+              case RDI_Language_COUNT:
+              case RDI_Language_Masm:
+              {}break;
+              case RDI_Language_C:        {rd_regs()->lang_kind = TXT_LangKind_C;}break;
+              case RDI_Language_CPlusPlus:{rd_regs()->lang_kind = TXT_LangKind_CPlusPlus;}break;
             }
-            break;
           }
+          break;
         }
       }
     }
@@ -2521,34 +2509,22 @@ RD_VIEW_UI_FUNCTION_DEF(text)
       // rjf: unpack RDI
       RDI_Parsed *rdi = di_rdi_from_key(access, dbgi_key, 0, 0);
       
-      // rjf: file_path_normalized * rdi -> src_id
+      // rjf: file_path * rdi -> src_id
       for EachNode(override_n, String8Node, overrides.first)
       {
         String8 file_path = override_n->string;
-        String8 file_path_normalized = rdim_normalized_from_path(scratch.arena, file_path);
-        B32 good_src_id = 0;
-        U32 src_id = 0;
         if(rdi != &rdi_parsed_nil)
         {
-          RDI_NameMap *mapptr = rdi_element_from_name_idx(rdi, NameMaps, RDI_NameMapKind_NormalSourcePaths);
-          RDI_ParsedNameMap map = {0};
-          rdi_parsed_from_name_map(rdi, mapptr, &map);
-          RDI_NameMapNode *node = rdi_name_map_lookup(rdi, &map, file_path_normalized.str, file_path_normalized.size);
-          if(node != 0)
+          U32 src_id = rdi_source_file_idx_from_path(rdi, file_path);
+          if(src_id != 0)
           {
-            U32 id_count = 0;
-            U32 *ids = rdi_matches_from_map_node(rdi, node, &id_count);
-            if(id_count > 0)
-            {
-              U32 src_id = ids[0];
-              RDI_SourceFile *src = rdi_element_from_name_idx(rdi, SourceFiles, src_id);
-              checksum_kind = src->checksum_kind;
-              RDI_SectionKind checksum_section_kind = rdi_section_kind_from_checksum_kind(checksum_kind);
-              U64 checksum_size = rdi_section_element_size_table[checksum_section_kind];
-              U8 *checksum_data = (U8 *)rdi_section_raw_element_from_kind_idx(rdi, checksum_section_kind, src->checksum_idx);
-              checksum_expected = str8_copy(scratch.arena, str8(checksum_data, checksum_size));
-              break;
-            }
+            RDI_SourceFile *src = rdi_element_from_name_idx(rdi, SourceFiles, src_id);
+            checksum_kind = src->checksum_kind;
+            RDI_SectionKind checksum_section_kind = rdi_section_kind_from_checksum_kind(checksum_kind);
+            U64 checksum_size = rdi_section_element_size_table[checksum_section_kind];
+            U8 *checksum_data = (U8 *)rdi_section_raw_element_from_kind_idx(rdi, checksum_section_kind, src->checksum_idx);
+            checksum_expected = str8_copy(scratch.arena, str8(checksum_data, checksum_size));
+            break;
           }
         }
       }
@@ -3594,7 +3570,7 @@ RD_VIEW_UI_FUNCTION_DEF(memory)
     {
       ARCH_Info *arch_info = arch_info_from_arch(selected_thread->arch);
       Vec4F32 symbol_color = ui_color_from_name(str8_lit("code_symbol"));
-      U64 last_rip = arch_ip_from_reg_block(arch_info, selected_call_stack.concrete_frames[0]->regs);
+      U64 last_rip = selected_call_stack.concrete_frames[0]->lookup_vaddr;
       U64 last_stack_top = arch_sp_from_reg_block(arch_info, selected_call_stack.concrete_frames[0]->regs);
       for(U64 idx = 1; idx < selected_call_stack.concrete_frames_count; idx += 1)
       {
@@ -3607,7 +3583,7 @@ RD_VIEW_UI_FUNCTION_DEF(memory)
         {
           Access *access = access_open();
           U64 f_rip_vaddr = last_rip;
-          last_rip = arch_ip_from_reg_block(arch_info, f->regs);
+          last_rip = f->lookup_vaddr;
           D_Entity *module = d_module_from_process_vaddr(selected_process, f_rip_vaddr);
           U64 f_rip_voff = d_voff_from_vaddr(module, f_rip_vaddr);
           DI_Key dbgi_key = d_dbgi_key_from_module(module);

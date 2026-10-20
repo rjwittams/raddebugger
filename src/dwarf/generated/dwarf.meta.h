@@ -1038,6 +1038,76 @@ DW_RegCodeX64_zmm31 = 82,
 DW_RegCodeX64_LAST,
 } DW_RegCodeX64;
 
+typedef enum DW_RegCodeARM64
+{
+DW_RegCodeARM64_x0 = 0,
+DW_RegCodeARM64_x1 = 1,
+DW_RegCodeARM64_x2 = 2,
+DW_RegCodeARM64_x3 = 3,
+DW_RegCodeARM64_x4 = 4,
+DW_RegCodeARM64_x5 = 5,
+DW_RegCodeARM64_x6 = 6,
+DW_RegCodeARM64_x7 = 7,
+DW_RegCodeARM64_x8 = 8,
+DW_RegCodeARM64_x9 = 9,
+DW_RegCodeARM64_x10 = 10,
+DW_RegCodeARM64_x11 = 11,
+DW_RegCodeARM64_x12 = 12,
+DW_RegCodeARM64_x13 = 13,
+DW_RegCodeARM64_x14 = 14,
+DW_RegCodeARM64_x15 = 15,
+DW_RegCodeARM64_x16 = 16,
+DW_RegCodeARM64_x17 = 17,
+DW_RegCodeARM64_x18 = 18,
+DW_RegCodeARM64_x19 = 19,
+DW_RegCodeARM64_x20 = 20,
+DW_RegCodeARM64_x21 = 21,
+DW_RegCodeARM64_x22 = 22,
+DW_RegCodeARM64_x23 = 23,
+DW_RegCodeARM64_x24 = 24,
+DW_RegCodeARM64_x25 = 25,
+DW_RegCodeARM64_x26 = 26,
+DW_RegCodeARM64_x27 = 27,
+DW_RegCodeARM64_x28 = 28,
+DW_RegCodeARM64_fp = 29,
+DW_RegCodeARM64_lr = 30,
+DW_RegCodeARM64_sp = 31,
+DW_RegCodeARM64_pc = 32,
+DW_RegCodeARM64_q0 = 64,
+DW_RegCodeARM64_q1 = 65,
+DW_RegCodeARM64_q2 = 66,
+DW_RegCodeARM64_q3 = 67,
+DW_RegCodeARM64_q4 = 68,
+DW_RegCodeARM64_q5 = 69,
+DW_RegCodeARM64_q6 = 70,
+DW_RegCodeARM64_q7 = 71,
+DW_RegCodeARM64_q8 = 72,
+DW_RegCodeARM64_q9 = 73,
+DW_RegCodeARM64_q10 = 74,
+DW_RegCodeARM64_q11 = 75,
+DW_RegCodeARM64_q12 = 76,
+DW_RegCodeARM64_q13 = 77,
+DW_RegCodeARM64_q14 = 78,
+DW_RegCodeARM64_q15 = 79,
+DW_RegCodeARM64_q16 = 80,
+DW_RegCodeARM64_q17 = 81,
+DW_RegCodeARM64_q18 = 82,
+DW_RegCodeARM64_q19 = 83,
+DW_RegCodeARM64_q20 = 84,
+DW_RegCodeARM64_q21 = 85,
+DW_RegCodeARM64_q22 = 86,
+DW_RegCodeARM64_q23 = 87,
+DW_RegCodeARM64_q24 = 88,
+DW_RegCodeARM64_q25 = 89,
+DW_RegCodeARM64_q26 = 90,
+DW_RegCodeARM64_q27 = 91,
+DW_RegCodeARM64_q28 = 92,
+DW_RegCodeARM64_q29 = 93,
+DW_RegCodeARM64_q30 = 94,
+DW_RegCodeARM64_q31 = 95,
+DW_RegCodeARM64_LAST,
+} DW_RegCodeARM64;
+
 #define DW_Format_XList \
 X(Null, "", 0)\
 X(32Bit, "DWARF32", 4)\
@@ -1618,38 +1688,38 @@ X(Le, 0x2c, 3, 0, 2, 1, Null, Null, 1)\
 X(Lt, 0x2d, 3, 0, 2, 1, Null, Null, 1)\
 X(Ne, 0x2e, 3, 0, 2, 1, Null, Null, 1)\
 X(Skip, 0x2f, 3, 1, 0, 0, S16, Null, 1)\
-X(Lit0, 0x30, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit1, 0x31, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit2, 0x32, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit3, 0x33, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit4, 0x34, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit5, 0x35, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit6, 0x36, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit7, 0x37, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit8, 0x38, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit9, 0x39, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit10, 0x3a, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit11, 0x3b, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit12, 0x3c, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit13, 0x3d, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit14, 0x3e, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit15, 0x3f, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit16, 0x40, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit17, 0x41, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit18, 0x42, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit19, 0x43, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit20, 0x44, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit21, 0x45, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit22, 0x46, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit23, 0x47, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit24, 0x48, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit25, 0x49, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit26, 0x4a, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit27, 0x4b, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit28, 0x4c, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit29, 0x4d, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit30, 0x4e, 3, 0, 0, 0, Null, Null, 1)\
-X(Lit31, 0x4f, 3, 0, 0, 0, Null, Null, 1)\
+X(Lit0, 0x30, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit1, 0x31, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit2, 0x32, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit3, 0x33, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit4, 0x34, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit5, 0x35, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit6, 0x36, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit7, 0x37, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit8, 0x38, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit9, 0x39, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit10, 0x3a, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit11, 0x3b, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit12, 0x3c, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit13, 0x3d, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit14, 0x3e, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit15, 0x3f, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit16, 0x40, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit17, 0x41, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit18, 0x42, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit19, 0x43, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit20, 0x44, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit21, 0x45, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit22, 0x46, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit23, 0x47, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit24, 0x48, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit25, 0x49, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit26, 0x4a, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit27, 0x4b, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit28, 0x4c, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit29, 0x4d, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit30, 0x4e, 3, 0, 0, 1, Null, Null, 1)\
+X(Lit31, 0x4f, 3, 0, 0, 1, Null, Null, 1)\
 X(Reg0, 0x50, 3, 0, 0, 1, Null, Null, 1)\
 X(Reg1, 0x51, 3, 0, 0, 1, Null, Null, 1)\
 X(Reg2, 0x52, 3, 0, 0, 1, Null, Null, 1)\

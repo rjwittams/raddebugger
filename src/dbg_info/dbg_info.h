@@ -45,6 +45,8 @@ struct DI_KeyPathNode
   DI_KeyPathNode *prev;
   String8 path;
   U64 min_timestamp;
+  Arch macho_arch;
+  Guid macho_guid;
   DI_Key key;
 };
 
@@ -57,6 +59,14 @@ struct DI_KeySlot
 
 ////////////////////////////////
 //~ rjf: Debug Info Cache Types
+
+typedef enum DI_LoadStatus
+{
+  DI_LoadStatus_None,
+  DI_LoadStatus_Pending,
+  DI_LoadStatus_Ready,
+  DI_LoadStatus_Unavailable,
+} DI_LoadStatus;
 
 typedef struct DI_Node DI_Node;
 struct DI_Node
@@ -139,9 +149,12 @@ struct DI_LoadTask
   
   B32 og_analyzed;
   B32 og_is_rdi;
+  B32 og_matches_identity;
   B32 og_folder_analyzed;
   B32 og_folder_is_writable;
   U64 og_size;
+  Arch og_macho_arch;
+  Guid og_macho_guid;
   
   B32 rdi_analyzed;
   B32 rdi_is_stale;
@@ -205,6 +218,7 @@ struct DI_Match
   RDI_SectionKind section_kind;
   U32 idx;
   U32 count;
+  B32 stale;
 };
 
 ////////////////////////////////
@@ -315,6 +329,9 @@ internal DI_Key di_key_zero(void);
 internal B32 di_key_match(DI_Key a, DI_Key b);
 internal void di_key_list_push(Arena *arena, DI_KeyList *list, DI_Key key);
 internal DI_KeyArray di_key_array_from_list(Arena *arena, DI_KeyList *list);
+internal String8 di_rdi_path_from_original_path(Arena *arena, String8 path);
+internal B32 di_rdi_file_matches_identity(File file, Arch arch, Guid guid);
+internal String8 di_rdi_path_from_identity(Arena *arena, String8 original_path, String8 cache_folder, Arch arch, Guid guid);
 
 ////////////////////////////////
 //~ rjf: Main Layer Initialization
@@ -330,6 +347,7 @@ internal void di_set_auto_downloads(B32 auto_downloads);
 //~ rjf: Path * Timestamp Cache Submission & Lookup
 
 internal DI_Key di_key_from_path_timestamp(String8 path, U64 min_timestamp);
+internal DI_Key di_key_from_path_timestamp_identity(String8 path, U64 min_timestamp, Arch macho_arch, Guid macho_guid);
 
 ////////////////////////////////
 //~ rjf: Debug Info Opening / Closing
@@ -342,6 +360,7 @@ internal void di_close(DI_Key key, B32 force_closed);
 
 internal U64 di_load_gen(void);
 internal U64 di_load_count(void);
+internal DI_LoadStatus di_load_status_from_key(DI_Key key);
 internal DI_KeyArray di_push_all_loaded_keys(Arena *arena);
 internal RDI_Parsed *di_rdi_from_key(Access *access, DI_Key key, B32 high_priority, U64 endt_us);
 
@@ -375,6 +394,6 @@ internal DI_SearchItemArray di_search_item_array_from_target_query(Access *acces
 //~ rjf: Match Artifact Cache Hooks / Lookups
 
 internal AC_Artifact di_match_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_out, U64 *gen_out);
-internal DI_Match di_match_from_string(String8 string, U32 match_index, U32 unit_idx, B32 allow_other_dbgis, DI_Key preferred_dbgi_key, U64 endt_us);
+internal DI_Match di_match_from_string(String8 string, U32 match_index, U32 unit_idx, B32 allow_other_dbgis, DI_Key preferred_dbgi_key, U64 endt_us, DI_KeyArray *scope);
 
 #endif // DBG_INFO_H
