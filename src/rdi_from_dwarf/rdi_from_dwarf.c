@@ -18,6 +18,264 @@ d2r_unique_tag_node_is_less_than(D2R_UniqueTagNode **l, D2R_UniqueTagNode **r)
   return is_less_than;
 }
 
+internal RDIM_Rng1U64
+d2r_voff_range_from_vaddr_range(U64 base_vaddr, Rng1U64 range)
+{
+  RDIM_Rng1U64 result = {range.min, range.max};
+  if(range.min >= base_vaddr && range.max >= base_vaddr)
+  {
+    result.min -= base_vaddr;
+    result.max -= base_vaddr;
+  }
+  return result;
+}
+
+internal B32
+d2r_code_range_is_mapped(U64 base_vaddr, RDIM_BinarySectionList *sections, Rng1U64 range)
+{
+  B32 result = range.min >= base_vaddr && range.min < range.max;
+  if(result && sections->first != 0)
+  {
+    // Require coverage by executable sections, including adjacent sections.
+    // A linker tombstone can be zero, but zero can also be a real code offset.
+    U64 cursor = range.min-base_vaddr;
+    U64 opl = range.max-base_vaddr;
+    while(cursor < opl)
+    {
+      U64 covered_opl = cursor;
+      for EachNode(n, RDIM_BinarySectionNode, sections->first)
+      {
+        if((n->v.flags & RDI_BinarySectionFlag_Execute) &&
+           n->v.voff_first <= cursor && cursor < n->v.voff_opl)
+        {
+          covered_opl = Max(covered_opl, n->v.voff_opl);
+        }
+      }
+      if(covered_opl == cursor) {result = 0; break;}
+      cursor = covered_opl;
+    }
+  }
+  return result;
+}
+
+internal U64
+d2r_voff_opl_from_high_pc(DW2_ParseCtx *unit_parse_ctx, U64 base_vaddr, U64 voff_base, DW2_FormVal *hipc_val)
+{
+  U64 result = 0;
+  if(dw_attrib_class_from_form_kind(unit_parse_ctx->version, unit_parse_ctx->exts, hipc_val->kind) & DW_AttribClass_Address)
+  {
+    result = hipc_val->addr - base_vaddr;
+  }
+  else
+  {
+    result = voff_base + hipc_val->u128.u64[0];
+  }
+  return result;
+}
+
+// DWARF supplies innermost-body lines in the CU table and caller coordinates
+// on each inline DIE. RDI has a separate line table for each logical frame.
+typedef struct D2R_FrameLine D2R_FrameLine;
+struct D2R_FrameLine
+{
+  D2R_FrameLine *next;
+  RDIM_SrcFile *file;
+  U64 min, max;
+  U32 line;
+  U16 col_first, col_opl;
+};
+
+typedef struct D2R_FrameLines D2R_FrameLines;
+struct D2R_FrameLines
+{
+  D2R_FrameLine *first, *last;
+};
+
+typedef struct D2R_InlineLines D2R_InlineLines;
+struct D2R_InlineLines
+{
+  D2R_InlineLines *next, *active_next;
+  RDIM_Scope *scope;
+  RDIM_SrcFile *call_file;
+  U32 call_line;
+  U16 call_column;
+  U64 depth;
+  D2R_FrameLines lines;
+};
+
+typedef struct D2R_LineEvent D2R_LineEvent;
+struct D2R_LineEvent
+{
+  RDIM_LineSequence *seq;
+  U64 line_idx;
+  D2R_InlineLines *inl;
+  B32 end;
+};
+
+internal void
+d2r_frame_lines_push(Arena *arena, D2R_FrameLines *dst, U64 min, U64 max,
+                    RDIM_SrcFile *file, U32 line, U16 col_first, U16 col_opl)
+{
+  if(file != 0 && min < max)
+  {
+    D2R_FrameLine *last = dst->last;
+    if(last != 0 && last->max == min && last->file == file && last->line == line &&
+       last->col_first == col_first && last->col_opl == col_opl)
+    {
+      last->max = max;
+    }
+    else
+    {
+      D2R_FrameLine *n = push_array(arena, D2R_FrameLine, 1);
+      n->file = file;
+      n->min = min;
+      n->max = max;
+      n->line = line;
+      n->col_first = col_first;
+      n->col_opl = col_opl;
+      SLLQueuePush(dst->first, dst->last, n);
+    }
+  }
+}
+
+internal void
+d2r_frame_lines_finish(Arena *arena, RDIM_LineTableChunkList *tables,
+                      RDIM_LineTable *table, D2R_FrameLines *lines)
+{
+  for(D2R_FrameLine *first = lines->first; first != 0;)
+  {
+    U64 count = 1;
+    D2R_FrameLine *last = first;
+    for(; last->next != 0 && last->next->file == first->file && last->max == last->next->min;
+        last = last->next, count += 1) {}
+    U64 *voffs = push_array(arena, U64, count+1);
+    U32 *nums = push_array(arena, U32, count);
+    U16 *cols = push_array(arena, U16, count*2);
+    D2R_FrameLine *n = first;
+    for EachIndex(idx, count)
+    {
+      voffs[idx] = n->min;
+      nums[idx] = n->line;
+      cols[2*idx] = n->col_first;
+      cols[2*idx+1] = n->col_opl;
+      n = n->next;
+    }
+    voffs[count] = last->max;
+    rdim_line_table_push_sequence(arena, tables, table, first->file, voffs, nums, cols, count);
+    first = n;
+  }
+}
+
+internal void
+d2r_inline_line_tables(Arena *arena, RDIM_LineTableChunkList *tables,
+                      RDIM_LineTable *unit_table, D2R_InlineLines *inlines)
+{
+  Temp scratch = scratch_begin(&arena, 1);
+  U64 event_count = unit_table->line_count + unit_table->seq_count;
+  for EachNode(n, D2R_InlineLines, inlines) {event_count += 2*n->scope->voff_ranges.count;}
+  D2R_LineEvent *events = push_array(scratch.arena, D2R_LineEvent, event_count);
+  RDIM_SortKey *keys = push_array(scratch.arena, RDIM_SortKey, event_count);
+  U64 event_idx = 0;
+  for EachNode(n, RDIM_LineSequenceNode, unit_table->first_seq)
+  {
+    for(U64 idx = 0; idx <= n->v.line_count; idx += 1)
+    {
+      // Empty rows must not reopen a sequence at its end address.
+      if(idx < n->v.line_count && n->v.voffs[idx] == n->v.voffs[idx+1]) {continue;}
+      events[event_idx].seq = &n->v;
+      events[event_idx].line_idx = idx;
+      events[event_idx].end = (idx == n->v.line_count);
+      keys[event_idx].key = n->v.voffs[idx];
+      keys[event_idx].val = &events[event_idx];
+      event_idx += 1;
+    }
+  }
+  for EachNode(n, D2R_InlineLines, inlines)
+  {
+    for EachNode(r, RDIM_Rng1U64Node, n->scope->voff_ranges.first)
+    {
+      if(r->v.min >= r->v.max) {continue;}
+      for EachIndex(end, 2)
+      {
+        events[event_idx].inl = n;
+        events[event_idx].end = end;
+        keys[event_idx].key = end ? r->v.max : r->v.min;
+        keys[event_idx].val = &events[event_idx];
+        event_idx += 1;
+      }
+    }
+  }
+  keys = rdim_sort_key_array(scratch.arena, keys, event_idx);
+  D2R_FrameLines unit_lines = {0};
+  D2R_InlineLines *active = 0;
+  RDIM_LineSequence *seq = 0;
+  U64 line_idx = 0;
+  for(U64 idx = 0; idx < event_idx;)
+  {
+    U64 opl = idx+1;
+    for(; opl < event_idx && keys[opl].key == keys[idx].key; opl += 1) {}
+    // Half-open ranges: close old sequences/scopes before opening new ones.
+    for(B32 end = 1; end >= 0; end -= 1)
+    {
+      for(U64 i = idx; i < opl; i += 1)
+      {
+        D2R_LineEvent *e = keys[i].val;
+        if(e->end != end) {continue;}
+        if(e->inl != 0)
+        {
+          D2R_InlineLines **link = &active;
+          for(; *link != 0 && *link != e->inl && (*link)->depth < e->inl->depth; link = &(*link)->active_next) {}
+          if(end)
+          {
+            for(; *link != 0 && *link != e->inl; link = &(*link)->active_next) {}
+            if(*link != 0) {*link = e->inl->active_next;}
+          }
+          else if(*link != e->inl)
+          {
+            e->inl->active_next = *link;
+            *link = e->inl;
+          }
+        }
+        else if(!end)
+        {
+          seq = e->seq;
+          line_idx = e->line_idx;
+        }
+        else if(seq == e->seq) {seq = 0;}
+      }
+    }
+    if(opl < event_idx)
+    {
+      U64 min = keys[idx].key, max = keys[opl].key;
+      D2R_FrameLines *dst = &unit_lines;
+      for(D2R_InlineLines *n = active; n != 0; n = n->active_next)
+      {
+        d2r_frame_lines_push(scratch.arena, dst, min, max, n->call_file, n->call_line, n->call_column, 0);
+        dst = &n->lines;
+      }
+      if(seq != 0)
+      {
+        d2r_frame_lines_push(scratch.arena, dst, min, max, seq->src_file, seq->line_nums[line_idx],
+                            seq->col_nums ? seq->col_nums[2*line_idx] : 0,
+                            seq->col_nums ? seq->col_nums[2*line_idx+1] : 0);
+      }
+    }
+    idx = opl;
+  }
+  // Keep the original sequences alive for source-line breakpoint lookup, but
+  // replace the unit's forward table with the concrete frame's coordinates.
+  unit_table->first_seq = unit_table->last_seq = 0;
+  unit_table->seq_count = unit_table->line_count = unit_table->col_count = 0;
+  d2r_frame_lines_finish(arena, tables, unit_table, &unit_lines);
+  for EachNode(n, D2R_InlineLines, inlines)
+  {
+    RDIM_LineTable *table = rdim_line_table_chunk_list_push(arena, tables, 256);
+    n->scope->inline_site->line_table = table;
+    d2r_frame_lines_finish(arena, tables, table, &n->lines);
+  }
+  scratch_end(scratch);
+}
+
 ////////////////////////////////
 //~ rjf: Main Conversion Entry Point (New)
 
@@ -51,6 +309,19 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
     }
   }
   
+  U64 first_code_vaddr = max_U64;
+  for EachNode(n, RDIM_BinarySectionNode, binary_sections.first)
+  {
+    if((n->v.flags & RDI_BinarySectionFlag_Execute) && n->v.voff_first < n->v.voff_opl)
+    {
+      first_code_vaddr = Min(first_code_vaddr, base_vaddr + n->v.voff_first);
+    }
+  }
+  if(first_code_vaddr == max_U64)
+  {
+    first_code_vaddr = 0;
+  }
+
   ////////////////////////////
   //- rjf: compute exe hash
   //
@@ -76,7 +347,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
     top_level_info.voff_max = acceptable_vaddr_range.max - base_vaddr;
     if(!params->deterministic)
     {
-      // TODO(rjf): top_level_info.guid = ...;
+      MemoryCopy(&top_level_info.guid, &params->guid, sizeof(top_level_info.guid));
       top_level_info.producer_name = str8_lit(BUILD_TITLE_STRING_LITERAL);
     }
   }
@@ -121,6 +392,17 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       Rng1U64 unit_info_range = unit_info_ranges->v[idx];
       U64 bytes_read = dw2_read_unit_header(str8_substr(data, unit_info_range), 0, &unit_headers[idx]);
       unit_info_tag_ranges[idx] = r1u64(unit_info_range.min + bytes_read, unit_info_range.max);
+      DW2_UnitHeader *hdr = &unit_headers[idx];
+      B32 supported_kind = hdr->version != DW_Version_5 ||
+                           hdr->kind == DW_CompUnitKind_Compile || hdr->kind == DW_CompUnitKind_Partial ||
+                           hdr->kind == DW_CompUnitKind_Skeleton || hdr->kind == DW_CompUnitKind_SplitCompile;
+      if(bytes_read == 0 || bytes_read > dim_1u64(unit_info_range) ||
+         hdr->version < DW_Version_2 || hdr->version > DW_Version_5 || !supported_kind)
+      {
+        // Type-unit header layouts and signature references are not supported.
+        // Resume at the next length-delimited unit, not at a guessed DIE offset.
+        unit_info_tag_ranges[idx].min = unit_info_range.max;
+      }
     }
   }
   lane_sync();
@@ -324,6 +606,9 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
     {
       DW2_UnitHeader *hdr = &unit_headers[unit_idx];
       DW2_ParseCtx *ctx = &unit_parse_ctxs[unit_idx];
+      Rng1U64 tag_range = unit_info_tag_ranges[unit_idx];
+      if(tag_range.min == tag_range.max) {continue;}
+      String8 unit_data = str8_prefix(raw->sec[DW_SectionKind_Info].data, tag_range.max);
       
       // rjf: equip initial info - just enough to do a bootstrapping parse of the root tag
       dw2_parse_ctx_equip_unit_header(ctx, hdr, unit_info_ranges->v[unit_idx].min);
@@ -344,16 +629,33 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       // (all of the above is also true for RngListsBase)
       //
       DW2_Tag root_tag_bootstrap = {0};
-      dw2_read_tag(scratch.arena, raw, ctx, raw->sec[DW_SectionKind_Info].data, unit_info_tag_ranges[unit_idx].min, &root_tag_bootstrap);
+      B32 good_unit = dw2_read_tag(scratch.arena, raw, ctx, unit_data, tag_range.min, &root_tag_bootstrap) != 0;
       
       // rjf: equip info extracted from bootstrapping parse
       dw2_parse_ctx_equip_unit_root_tag(ctx, &root_tag_bootstrap, offset_tables);
       
       // rjf: do non-bootstrapping parse
-      dw2_read_tag(scratch.arena, raw, ctx, raw->sec[DW_SectionKind_Info].data, unit_info_tag_ranges[unit_idx].min, &unit_root_tags[unit_idx]);
+      good_unit &= dw2_read_tag(scratch.arena, raw, ctx, unit_data, tag_range.min, &unit_root_tags[unit_idx]) != 0;
       
       // rjf: equip info extracted from non-bootstrapping parse
       dw2_parse_ctx_equip_unit_root_tag(ctx, &unit_root_tags[unit_idx], offset_tables);
+
+      // Validate every DIE before any conversion pass publishes this unit.
+      // Sibling links must not skip unreadable children during validation.
+      for(U64 off = tag_range.min; good_unit && off < tag_range.max;)
+      {
+        Temp scratch2 = scratch_begin(&scratch.arena, 1);
+        DW2_Tag tag = {0};
+        U64 bytes_read = dw2_read_tag(scratch2.arena, raw, ctx, unit_data, off, &tag);
+        good_unit = bytes_read != 0 && bytes_read <= tag_range.max-off;
+        off += bytes_read;
+        scratch_end(scratch2);
+      }
+      if(!good_unit)
+      {
+        unit_info_tag_ranges[unit_idx].min = tag_range.max;
+        MemoryZeroStruct(&unit_root_tags[unit_idx]);
+      }
     }
   }
   lane_sync();
@@ -382,9 +684,12 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       DW2_ParseCtx *ctx = &unit_parse_ctxs[unit_idx];
       DW2_Tag *unit_root_tag = &unit_root_tags[unit_idx];
       DW2_Attrib *stmt_list = dw2_attrib_from_kind(unit_root_tag, DW_AttribKind_StmtList);
-      U64 line_info_off = stmt_list->val.u128.u64[0];
-      String8 line_info_data = raw->sec[DW_SectionKind_Line].data;
-      dw2_read_line_table_header(scratch.arena, raw, ctx, line_info_data, line_info_off, &unit_line_table_headers[unit_idx]);
+      if(stmt_list != &dw2_attrib_nil)
+      {
+        U64 line_info_off = stmt_list->val.u128.u64[0];
+        String8 line_info_data = raw->sec[DW_SectionKind_Line].data;
+        dw2_read_line_table_header(scratch.arena, raw, ctx, line_info_data, line_info_off, &unit_line_table_headers[unit_idx]);
+      }
     }
     lane_sync();
   }
@@ -439,16 +744,19 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
         DW2_LineTableFile *f = &hdr->files.v[file_idx];
         if(f->file_name.size != 0)
         {
-          DW2_LineTableFile *dir = &hdr->dirs.v[f->dir_idx];
-          String8 root_dir = {0};
-          if(path_style_from_str8(dir->file_name) == PathStyle_Relative)
+          PathStyle file_name_style = path_style_from_str8(f->file_name);
+          String8 full_file_path = f->file_name;
+          if(file_name_style == PathStyle_Relative && f->dir_idx < hdr->dirs.count)
           {
-            root_dir = ctx->unit_dir;
+            DW2_LineTableFile *dir = &hdr->dirs.v[f->dir_idx];
+            String8 dir_path = dir->file_name;
+            PathStyle dir_path_style = path_style_from_str8(dir_path);
+            if(dir_path_style == PathStyle_Relative)
+            {
+              dir_path = path_absolute_dst_from_relative_dst_src(scratch2.arena, dir_path, ctx->unit_dir);
+            }
+            full_file_path = path_absolute_dst_from_relative_dst_src(scratch2.arena, f->file_name, dir_path);
           }
-          String8 full_file_path = str8f(scratch2.arena, "%S%s%S%s%S",
-                                         root_dir, root_dir.size != 0 ? "/" : "",
-                                         dir->file_name, dir->file_name.size != 0 ? "/" : "",
-                                         f->file_name);
           full_file_path = path_normalized_from_string(scratch2.arena, full_file_path);
           U64 hash = u64_hash_from_str8(full_file_path);
           U64 slot_idx = hash%slots_count;
@@ -561,6 +869,13 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       //- rjf: set up per-unit file sequence map
       unit_file_seq_maps[unit_idx].slots_count = line_table_header->files.count + 1;
       unit_file_seq_maps[unit_idx].slots = push_array(scratch.arena, FileSeqNode *, unit_file_seq_maps[unit_idx].slots_count);
+
+      // Missing or invalid line headers cannot supply the VM's divisors.
+      if(line_table_header->line_range == 0 || line_table_header->max_ops_per_inst == 0)
+      {
+        scratch_end(scratch2);
+        continue;
+      }
       
       //- rjf: set up vm registers
       DW2_LineVMRegs vm_regs = {0};
@@ -571,13 +886,17 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       }
       
       //- rjf: run the line opcode program
-      B32 emit_line = 0;
       RDIM_SrcFile *line_seq_src_file = 0;
       LineSeqChunk *first_line_seq_chunk = 0;
       LineSeqChunk *last_line_seq_chunk = 0;
       U64 total_line_seq_count = 0;
+      B32 tombstoned_address = 0;
+      B32 sequence_has_row = 0;
+      B32 sequence_is_code = 0;
       for(U64 off = 0, next_off = 0; off <= unit_line_table_data.size; off = next_off)
       {
+        // Emission belongs to this opcode, including after end_sequence resets.
+        B32 emit_line = 0;
         next_off = unit_line_table_data.size;
         
         //- rjf: read next opcode
@@ -592,7 +911,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           U32 adjusted_opcode = (U32)(opcode - line_table_header->opcode_base);
           U32 op_advance = adjusted_opcode / line_table_header->line_range;
           S64 line_advance = (S64)line_table_header->line_base + (S64)adjusted_opcode%(S64)line_table_header->line_range;
-          U64 addr_advance = line_table_header->min_inst_length * (vm_regs.vliw_op_index + op_advance) / line_table_header->max_ops_per_inst;
+          U64 addr_advance = line_table_header->min_inst_length * ((vm_regs.vliw_op_index + op_advance) / line_table_header->max_ops_per_inst);
           vm_regs.address += addr_advance;
           vm_regs.vliw_op_index = (vm_regs.vliw_op_index + op_advance) % line_table_header->max_ops_per_inst;
           vm_regs.line += line_advance;
@@ -698,14 +1017,22 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
             {
               // rjf: read extended opcode size
               U64 ext_opcode_size = 0;
-              op_read_off += str8_deserial_read_uleb128(unit_line_table_data, op_read_off, &ext_opcode_size);
+              U64 size_read = str8_deserial_read_uleb128(unit_line_table_data, op_read_off, &ext_opcode_size);
+              op_read_off += size_read;
+              if(size_read == 0 || ext_opcode_size == 0 || ext_opcode_size > unit_line_table_data.size - op_read_off)
+              {
+                op_read_off = unit_line_table_data.size + 1;
+                break;
+              }
+              // The declared extent includes the opcode byte, but not its length.
+              U64 ext_opcode_opl = op_read_off + ext_opcode_size;
               
               // rjf: read extended opcode
               U8 ext_opcode = 0;
               op_read_off += str8_deserial_read_struct(unit_line_table_data, op_read_off, &ext_opcode);
               
               // rjf: grab truncated data for just this extended opcode
-              String8 ext_op_data = str8_prefix(unit_line_table_data, op_read_off + ext_opcode_size);
+              String8 ext_op_data = str8_prefix(unit_line_table_data, ext_opcode_opl);
               
               // rjf: do extended opcode
               switch(ext_opcode)
@@ -726,6 +1053,12 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                   op_read_off += str8_deserial_read(ext_op_data, op_read_off, &addr, line_table_header->addr_size, line_table_header->addr_size);
                   vm_regs.address = addr;
                   vm_regs.vliw_op_index = 0;
+                  U64 tombstone = max_U64;
+                  if(line_table_header->addr_size > 0 && line_table_header->addr_size < sizeof(U64))
+                  {
+                    tombstone >>= 8*(sizeof(U64) - line_table_header->addr_size);
+                  }
+                  tombstoned_address = (addr == tombstone);
                 }break;
                 case DW_ExtOpcode_DefineFile:
                 {
@@ -749,6 +1082,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                   op_read_off += str8_deserial_read_uleb128(ext_op_data, op_read_off, &vm_regs.discriminator);
                 }break;
               }
+              op_read_off = ext_opcode_opl;
             }break;
           }
         }
@@ -766,8 +1100,16 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           src_file = unit_src_file_maps[unit_idx].v[vm_regs.file_index];
         }
         
+        // Qualify the whole DWARF sequence, not individual rows or file fragments.
+        if(emit_line && !vm_regs.end_sequence && !sequence_has_row)
+        {
+          sequence_has_row = 1;
+          sequence_is_code = (vm_regs.address >= first_code_vaddr);
+        }
+
         //- rjf: sequence ended explicitly, or file change, or end of stream? -> push to line table
-        if(line_seq_src_file != 0 && (vm_regs.end_sequence || (src_file != line_seq_src_file && first_line_seq_chunk != 0) || off >= unit_line_table_data.size))
+        B32 flush_line_seq = total_line_seq_count != 0 && (vm_regs.end_sequence || (emit_line && src_file != line_seq_src_file) || off >= unit_line_table_data.size);
+        if(flush_line_seq)
         {
           // rjf: combine voffs/lines/cols
           U64 seq_line_count = total_line_seq_count;
@@ -795,6 +1137,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           
           // rjf: map src file -> file seq node
           FileSeqNode *file_seq_n = 0;
+          if(line_seq_src_file != 0)
           {
             U64 hash = u64_hash_from_str8(str8_struct(&line_seq_src_file));
             U64 slot_idx = hash%unit_file_seq_maps[unit_idx].slots_count;
@@ -815,18 +1158,26 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           }
           
           // rjf: record sequence in file seq node
+          if(file_seq_n != 0)
           {
             RDIM_SrcFileLineMapFragment *f = push_array(scratch.arena, RDIM_SrcFileLineMapFragment, 1);
             SLLQueuePush(file_seq_n->first_line_map_fragment, file_seq_n->last_line_map_fragment, f);
             f->seq = seq;
           }
-          
+        }
+
+        // End-of-sequence resets the VM even when there were no rows to flush.
+        if(flush_line_seq || vm_regs.end_sequence)
+        {
           // rjf: reset
           first_line_seq_chunk = last_line_seq_chunk = 0;
           total_line_seq_count = 0;
           line_seq_src_file = 0;
           if(vm_regs.end_sequence)
           {
+            emit_line = 0;
+            sequence_has_row = 0;
+            sequence_is_code = 0;
             MemoryZeroStruct(&vm_regs);
             vm_regs.file_index = 1;
             vm_regs.line = 1;
@@ -835,7 +1186,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
         }
         
         //- rjf: emit lines
-        if(emit_line && vm_regs.address != 0 && vm_regs.line != 0)
+        if(emit_line && sequence_is_code && !tombstoned_address)
         {
           emit_line = 0;
           
@@ -845,7 +1196,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           if(last_line_seq_chunk != 0 && last_line_seq_chunk->line_count > 0)
           {
             last_line = last_line_seq_chunk->line_nums[last_line_seq_chunk->line_count-1];
-            last_col = last_line_seq_chunk->col_nums[last_line_seq_chunk->line_count-1];
+            last_col = last_line_seq_chunk->col_nums[2*(last_line_seq_chunk->line_count-1)];
           }
           
           // rjf: determine if we need a new line
@@ -874,7 +1225,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
             U64 chunk_line_idx = chunk->line_count;
             chunk->voffs[chunk_line_idx] = vm_regs.address - base_vaddr;
             chunk->line_nums[chunk_line_idx] = (U32)vm_regs.line;
-            chunk->col_nums[chunk_line_idx] = (U16)vm_regs.column;
+            chunk->col_nums[2*chunk_line_idx] = (U16)vm_regs.column;
             chunk->line_count += 1;
             total_line_seq_count += 1;
             line_seq_src_file = src_file;
@@ -1101,6 +1452,10 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       for EachIndex(unit_idx, unit_count)
       {
         U64 root_tags_in_this_unit = unit_info_root_tag_offs[unit_idx].count;
+        if(root_tags_in_this_unit == 0)
+        {
+          continue;
+        }
         U64 root_tags_per_work = (root_tags_in_this_unit + lane_count()-1) / lane_count();
         U64 works_per_this_unit = root_tags_per_work ? ((root_tags_in_this_unit+root_tags_per_work-1) / root_tags_per_work) : 0;
         if(build)
@@ -1233,7 +1588,8 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                                tag.kind == DW_TagKind_ImmutableType ||
                                tag.kind == DW_TagKind_Member ||
                                tag.kind == DW_TagKind_FormalParameter ||
-                               tag.kind == DW_TagKind_Namespace);
+                               tag.kind == DW_TagKind_Namespace ||
+                               tag.kind == DW_TagKind_Module);
           
           // rjf: get top hash seed
           U64 hash_seed = top_parent ? top_parent->hash_seed : 0;
@@ -1313,7 +1669,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
             
             // rjf: determine hash seed - only add new hash seeds for namespaces
             U64 n_hash_seed = hash_seed;
-            if(tag.kind == DW_TagKind_Namespace ||
+            if(tag.kind == DW_TagKind_Namespace || tag.kind == DW_TagKind_Module ||
                tag.kind == DW_TagKind_StructureType ||
                tag.kind == DW_TagKind_ClassType ||
                tag.kind == DW_TagKind_UnionType)
@@ -1480,7 +1836,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
             //      thus, we need to visit namespace children as if they're top-level.
             //
             B32 children_should_be_deduped = 0;
-            if(tag.kind == DW_TagKind_Namespace ||
+            if(tag.kind == DW_TagKind_Namespace || tag.kind == DW_TagKind_Module ||
                tag.kind == DW_TagKind_ClassType ||
                tag.kind == DW_TagKind_StructureType ||
                tag.kind == DW_TagKind_UnionType ||
@@ -1518,7 +1874,8 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                 tag.kind == DW_TagKind_DynamicType ||
                 tag.kind == DW_TagKind_AtomicType ||
                 tag.kind == DW_TagKind_ImmutableType ||
-                tag.kind == DW_TagKind_Namespace))
+                tag.kind == DW_TagKind_Namespace ||
+                tag.kind == DW_TagKind_Module))
             {
               D2R_TagNode *n = push_array(work_scratch.arena, D2R_TagNode, 1);
               n->info_off = start_off;
@@ -1703,7 +2060,8 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                 }
                 
                 // rjf: determine if we want to descend to children
-                B32 descend = (top_task->root_tag_kind != DW_TagKind_Namespace);
+                B32 descend = (top_task->root_tag_kind != DW_TagKind_Namespace &&
+                               top_task->root_tag_kind != DW_TagKind_Module);
                 
                 // rjf: tree navigations
                 if(descend)
@@ -1818,7 +2176,9 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
               }
             }
             hash = start_task.hash;
-            unique_tag_kind = (start_task.root_tag_kind == DW_TagKind_Namespace ? D2R_UniqueTagKind_Namespace : D2R_UniqueTagKind_Type);
+            // Module declarations use the existing named-scope representation.
+            unique_tag_kind = ((start_task.root_tag_kind == DW_TagKind_Namespace ||
+                                start_task.root_tag_kind == DW_TagKind_Module) ? D2R_UniqueTagKind_Namespace : D2R_UniqueTagKind_Type);
             container_ancestor_info_off = start_task.container_ancestor_info_off;
             dependency_count = start_task.dependency_count;
           }
@@ -2762,7 +3122,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           
           // rjf: unpack basic attributes
           String8 name = name_attrib->val.string;
-          U64 off = off_attrib->val.u128.u64[0];
+          U64 member_off = off_attrib->val.u128.u64[0];
           U64 val = val_attrib->val.u128.u64[0];
           
           // rjf: unpack type
@@ -2822,11 +3182,31 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
             default:{}break;
             case DW_TagKind_Member:
             {
-              RDIM_UDTMember *member = rdim_udt_push_member(arena, &lane_udts, udt);
-              member->kind = RDI_MemberKind_DataField;
-              member->name = name;
-              member->type = type;
-              member->off = (RDI_U32)off; // TODO(rjf): @u64_to_u32
+              // RDI represents fixed byte offsets, not member-location expressions.
+              B32 good_member_off = (off_attrib == &dw2_attrib_nil);
+              switch(off_attrib->val.kind)
+              {
+                default:{}break;
+                case DW_FormKind_Data1:
+                case DW_FormKind_Data2:
+                case DW_FormKind_Data4:
+                case DW_FormKind_Data8:
+                case DW_FormKind_Data16:
+                case DW_FormKind_UData:
+                case DW_FormKind_SData:
+                case DW_FormKind_ImplicitConst:
+                {
+                  good_member_off = member_off <= max_U32 && off_attrib->val.u128.u64[1] == 0;
+                }break;
+              }
+              if(good_member_off)
+              {
+                RDIM_UDTMember *member = rdim_udt_push_member(arena, &lane_udts, udt);
+                member->kind = RDI_MemberKind_DataField;
+                member->name = name;
+                member->type = type;
+                member->off = (RDI_U32)member_off;
+              }
             }break;
             case DW_TagKind_Enumerator:
             {
@@ -2889,7 +3269,10 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       unit_from_idx_map = push_array(scratch.arena, RDIM_Unit *, unit_count);
       for EachIndex(unit_idx, unit_count)
       {
-        unit_from_idx_map[unit_idx] = rdim_unit_chunk_list_push(arena, all_units, unit_count);
+        if(unit_info_tag_ranges[unit_idx].min < unit_info_tag_ranges[unit_idx].max)
+        {
+          unit_from_idx_map[unit_idx] = rdim_unit_chunk_list_push(arena, all_units, unit_count);
+        }
       }
     }
     lane_sync_u64(&all_units, 0);
@@ -2909,6 +3292,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
       DW2_ParseCtx *unit_parse_ctx = &unit_parse_ctxs[unit_idx];
       Rng1U64 unit_info_tag_range = unit_info_tag_ranges[unit_idx];
       RDIM_Unit *dst_unit = unit_from_idx_map[unit_idx];
+      if(dst_unit == 0) {continue;}
       
       //- rjf: unpack unit's root tag
       DW2_Tag *unit_root_tag = &unit_root_tags[unit_idx];
@@ -2990,7 +3374,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           Rng1U64List ranges = dw2_rnglist_from_form_val(scratch.arena, unit_parse_ctx, raw, ranges_attrib->val);
           for EachNode(n, Rng1U64Node, ranges.first)
           {
-            rdim_rng1u64_chunk_list_push(arena, &unit_voff_ranges, 256, (RDIM_Rng1U64){n->v.min - base_vaddr, n->v.max - base_vaddr});
+            rdim_rng1u64_chunk_list_push(arena, &unit_voff_ranges, 256, d2r_voff_range_from_vaddr_range(base_vaddr, n->v));
           }
         }
         
@@ -2998,15 +3382,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
         if(lopc_attrib != &dw2_attrib_nil && hipc_attrib != &dw2_attrib_nil)
         {
           U64 voff_base = lopc_attrib->val.addr - base_vaddr;
-          U64 voff_opl = 0;
-          if(dw_attrib_class_from_form_kind(unit_parse_ctx->version, unit_parse_ctx->exts, hipc_attrib->val.kind) & DW_AttribClass_Address)
-          {
-            voff_opl = voff_base + hipc_attrib->val.u128.u64[0];
-          }
-          else
-          {
-            voff_opl = hipc_attrib->val.addr;
-          }
+          U64 voff_opl = d2r_voff_opl_from_high_pc(unit_parse_ctx, base_vaddr, voff_base, &hipc_attrib->val);
           rdim_rng1u64_chunk_list_push(arena, &unit_voff_ranges, 256, (RDIM_Rng1U64){voff_base, voff_opl});
         }
       }
@@ -3052,6 +3428,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
     RDIM_SymbolChunkList procedures;
     RDIM_ScopeChunkList scopes;
     RDIM_InlineSiteChunkList inline_sites;
+    D2R_InlineLines *first_inline_lines, *last_inline_lines;
   };
   D2R_ScopeContainerMap *scope_container_map = 0;
   D2R_SubUnitWorkArtifacts *sub_unit_work_artifacts = 0;
@@ -3131,6 +3508,9 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           DW2_Attrib *framebase_attrib = &dw2_attrib_nil;
           DW2_Attrib *external_attrib = &dw2_attrib_nil;
           DW2_Attrib *decl_attrib = &dw2_attrib_nil;
+          DW2_Attrib *callfile_attrib = &dw2_attrib_nil;
+          DW2_Attrib *callline_attrib = &dw2_attrib_nil;
+          DW2_Attrib *callcolumn_attrib = &dw2_attrib_nil;
           for EachNode(n, DW2_AttribNode, tag.attribs.first)
           {
             switch(n->v.attrib_kind)
@@ -3149,10 +3529,59 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
               Case(framebase, FrameBase);
               Case(external,  External);
               Case(decl,      Declaration);
+              Case(callfile,  CallFile);
+              Case(callline,  CallLine);
+              Case(callcolumn, CallColumn);
 #undef Case
             }
           }
           
+          // Resolve identity through abstract origins/specifications, without
+          // inheriting concrete-instance ranges, locations, or declaration flags.
+          DW2_ParseCtx *type_attrib_ctx = unit_parse_ctx;
+          U64 function_info_off = start_off;
+          U64 function_unit_idx = unit_idx;
+          DW2_Tag identity_tag = tag;
+          DW2_ParseCtx *identity_ctx = unit_parse_ctx;
+          // Bound malformed or cyclic reference chains.
+          for(U64 hop = 0; hop < 32; hop += 1)
+          {
+            DW2_Attrib *reference = &dw2_attrib_nil;
+            for EachNode(n, DW2_AttribNode, identity_tag.attribs.first)
+            {
+              if(n->v.attrib_kind == DW_AttribKind_AbstractOrigin ||
+                 (n->v.attrib_kind == DW_AttribKind_Specification && reference == &dw2_attrib_nil))
+              {
+                reference = &n->v;
+              }
+            }
+            if(reference == &dw2_attrib_nil) {break;}
+            U64 identity_off = dw2_reference_info_off_from_form_val(identity_ctx, &reference->val);
+            U64 identity_unit_num = rng1u64_array_num_from_value__binary_search(&unit_info_tag_ranges_array, identity_off);
+            if(identity_unit_num == 0) {break;}
+            identity_ctx = &unit_parse_ctxs[identity_unit_num-1];
+            MemoryZeroStruct(&identity_tag);
+            if(dw2_read_tag(scratch2.arena, raw, identity_ctx, raw->sec[DW_SectionKind_Info].data, identity_off, &identity_tag) == 0) {break;}
+            if(identity_tag.kind == DW_TagKind_SubProgram)
+            {
+              function_info_off = identity_off;
+              function_unit_idx = identity_unit_num-1;
+            }
+            for EachNode(n, DW2_AttribNode, identity_tag.attribs.first)
+            {
+              switch(n->v.attrib_kind)
+              {
+                case DW_AttribKind_Name: {if(name_attrib == &dw2_attrib_nil) {name_attrib = &n->v;}}break;
+                case DW_AttribKind_LinkageName: {if(linkname_attrib == &dw2_attrib_nil) {linkname_attrib = &n->v;}}break;
+                case DW_AttribKind_Type:
+                {
+                  if(type_attrib == &dw2_attrib_nil) {type_attrib = &n->v; type_attrib_ctx = identity_ctx;}
+                }break;
+                default: {}break;
+              }
+            }
+          }
+
           ////////////////////////
           //- rjf: unpack basic attributes
           //
@@ -3173,23 +3602,22 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
               Rng1U64List tag_ranges = dw2_rnglist_from_form_val(temp.arena, unit_parse_ctx, raw, ranges_attrib->val);
               for EachNode(n, Rng1U64Node, tag_ranges.first)
               {
-                rdim_rng1u64_list_push(arena, &ranges, (RDIM_Rng1U64){.min = n->v.min, .max = n->v.max});
+                if(d2r_code_range_is_mapped(base_vaddr, &binary_sections, n->v))
+                {
+                  rdim_rng1u64_list_push(arena, &ranges, d2r_voff_range_from_vaddr_range(base_vaddr, n->v));
+                }
               }
               temp_end(temp);
             }
             if(lopc_attrib != &dw2_attrib_nil && hipc_attrib != &dw2_attrib_nil)
             {
-              U64 voff_base = lopc_attrib->val.addr - base_vaddr;
-              U64 voff_opl = 0;
-              if(dw_attrib_class_from_form_kind(unit_parse_ctx->version, unit_parse_ctx->exts, hipc_attrib->val.kind) & DW_AttribClass_Address)
+              U64 low_pc = lopc_attrib->val.addr;
+              U64 high_pc = d2r_voff_opl_from_high_pc(unit_parse_ctx, 0, low_pc, &hipc_attrib->val);
+              Rng1U64 range = r1u64(low_pc, high_pc);
+              if(d2r_code_range_is_mapped(base_vaddr, &binary_sections, range))
               {
-                voff_opl = hipc_attrib->val.addr;
+                rdim_rng1u64_list_push(arena, &ranges, d2r_voff_range_from_vaddr_range(base_vaddr, range));
               }
-              else
-              {
-                voff_opl = voff_base + hipc_attrib->val.u128.u64[0];
-              }
-              rdim_rng1u64_list_push(arena, &ranges, (RDIM_Rng1U64){voff_base, voff_opl});
             }
           }
           
@@ -3197,18 +3625,18 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           //- rjf: unpack type
           //
           RDIM_Type *type = 0;
-          if(type_attrib != &dw2_attrib_nil || tag.kind == DW_TagKind_SubProgram)
+          if(type_attrib != &dw2_attrib_nil || tag.kind == DW_TagKind_SubProgram || tag.kind == DW_TagKind_InlinedSubroutine)
           {
             // rjf: functions need to get their type info from themselves; the type attrib
             // only references the return type. so, in that case, we'll use the procedure's
             // own info offset / unit index, rather than the type attribute's.
-            U64 type_info_off = start_off;
-            U64 type_unit_idx = unit_idx;
+            U64 type_info_off = function_info_off;
+            U64 type_unit_idx = function_unit_idx;
             
             // rjf: attrib -> (info_off, unit_idx)
-            if(tag.kind != DW_TagKind_SubProgram)
+            if(tag.kind != DW_TagKind_SubProgram && tag.kind != DW_TagKind_InlinedSubroutine)
             {
-              type_info_off = dw2_reference_info_off_from_form_val(unit_parse_ctx, &type_attrib->val);
+              type_info_off = dw2_reference_info_off_from_form_val(type_attrib_ctx, &type_attrib->val);
               type_unit_idx = unit_idx;
               if(!contains_1u64(unit_info_tag_range, type_info_off))
               {
@@ -3283,11 +3711,27 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
               switch(attrib->val.kind)
               {
                 default:{}break;
+                case DW_FormKind_Block:
+                case DW_FormKind_Block1:
+                case DW_FormKind_Block2:
+                case DW_FormKind_Block4:
                 case DW_FormKind_ExprLoc:
                 {
-                  U64 expr_info_off  = attrib->val.u128.u64[0];
-                  U64 expr_info_size = attrib->val.u128.u64[1];
-                  String8 expr = str8_substr(raw->sec[DW_SectionKind_Info].data, r1u64(expr_info_off, expr_info_off+expr_info_size));
+                  // Older DWARF encodes location expressions as blocks. Fixed
+                  // block forms store the size and the length-prefix offset.
+                  String8 expr = attrib->val.string;
+                  if(attrib->val.kind != DW_FormKind_Block)
+                  {
+                    U64 expr_info_off  = attrib->val.u128.u64[0];
+                    U64 expr_info_size = attrib->val.u128.u64[1];
+                    if(attrib->val.kind != DW_FormKind_ExprLoc)
+                    {
+                      U64 prefix_size = attrib->val.kind == DW_FormKind_Block1 ? 1 : attrib->val.kind == DW_FormKind_Block2 ? 2 : 4;
+                      expr_info_off  = attrib->val.u128.u64[1] + prefix_size;
+                      expr_info_size = attrib->val.u128.u64[0];
+                    }
+                    expr = str8_substr(raw->sec[DW_SectionKind_Info].data, r1u64(expr_info_off, expr_info_off+expr_info_size));
+                  }
                   DW2_LocNode *n = push_array(scratch2.arena, DW2_LocNode, 1);
                   n->v.expr = expr;
                   n->v.range = r1u64(0, max_U64);
@@ -3311,7 +3755,6 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
               // if we find that a location doesn't rely on the frame base at all, we just
               // skip the rest.
               //
-              B32 is_tls_dependent = 0;
               for EachNode(n, DW2_LocNode, locs.first)
               {
                 //- rjf: unpack location
@@ -3321,7 +3764,12 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                 //- rjf: iterate each frame base location case, or once if there are none,
                 // and convert the location in that context
                 RDIM_LocationCase nil_framebase_loc_case = {0, {0}, {0, max_U64}};
-                for(RDIM_LocationCase *framebase_loc_n = top_parent ? top_parent->framebase_location_cases.first : &nil_framebase_loc_case;
+                RDIM_LocationCase *first_framebase_loc_case = &nil_framebase_loc_case;
+                if(top_parent != 0 && top_parent->framebase_location_cases.first != 0)
+                {
+                  first_framebase_loc_case = top_parent->framebase_location_cases.first;
+                }
+                for(RDIM_LocationCase *framebase_loc_n = first_framebase_loc_case;
                     framebase_loc_n != 0;
                     framebase_loc_n = framebase_loc_n->next)
                 {
@@ -3358,7 +3806,9 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                   RDIM_EvalBytecode dst_bytecode = {0};
                   B32 dst_bytecode_is_good = 1;
                   B32 bytecode_is_framebase_dependent = 0;
-                  for(U64 expr_off = 0; expr_off < expr.size;)
+                  B32 bytecode_is_stack_value = 0;
+                  B32 is_tls_dependent = 0;
+                  for(U64 expr_off = 0; dst_bytecode_is_good && expr_off < expr.size;)
                   {
                     U64 start_expr_off = expr_off;
                     
@@ -3379,6 +3829,29 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                     String8 operand_str8s[2] = {0};
                     for EachIndex(operand_idx, operands_count)
                     {
+                      U64 operand_start = expr_off;
+                      DW_ExprOperandKind operand_kind = operands_kinds[operand_idx];
+                      if(operand_kind == DW_ExprOperandKind_ULEB128 ||
+                         operand_kind == DW_ExprOperandKind_SLEB128 ||
+                         operand_kind == DW_ExprOperandKind_Block)
+                      {
+                        // Bound LEB decoding before the deserializer can shift beyond 64 bits.
+                        U64 leb_size = 0;
+                        U8 last_byte = 0x80;
+                        for(; leb_size < 10 && leb_size < expr.size-expr_off;)
+                        {
+                          last_byte = expr.str[expr_off+leb_size];
+                          leb_size += 1;
+                          if(!(last_byte & 0x80)) {break;}
+                        }
+                        if(last_byte & 0x80 ||
+                           (leb_size == 10 && (operand_kind == DW_ExprOperandKind_SLEB128 ?
+                                              (last_byte != 0 && last_byte != 0x7f) : last_byte > 1)))
+                        {
+                          dst_bytecode_is_good = 0;
+                          break;
+                        }
+                      }
                       switch(operands_kinds[operand_idx])
                       {
                         case DW_ExprOperandKind_Null:
@@ -3397,13 +3870,26 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                         case DW_ExprOperandKind_DwarfUInt: {expr_off += dw2_read_fmt_u64(expr, expr_off, unit_parse_ctx->format, &operand_u64s[operand_idx]);}break;
                         case DW_ExprOperandKind_Block:
                         {
-                          U8 block_size = 0;
-                          expr_off += str8_deserial_read_struct(expr, expr_off, &block_size);
-                          operand_str8s[operand_idx] = str8_substr(expr, r1u64(expr_off, expr_off+block_size));
-                          expr_off += block_size;
+                          U64 block_size = 0;
+                          expr_off += str8_deserial_read_uleb128(expr, expr_off, &block_size);
+                          if(block_size <= expr.size-expr_off)
+                          {
+                            operand_str8s[operand_idx] = str8_substr(expr, r1u64(expr_off, expr_off+block_size));
+                            expr_off += block_size;
+                          }
+                          else
+                          {
+                            dst_bytecode_is_good = 0;
+                          }
                         }break;
                       }
+                      if(operand_kind != DW_ExprOperandKind_Null && expr_off == operand_start)
+                      {
+                        dst_bytecode_is_good = 0;
+                      }
+                      if(!dst_bytecode_is_good) {break;}
                     }
+                    if(!dst_bytecode_is_good) {break;}
                     
                     //- rjf: pop stack values
                     D2R_ExprVal popped_vals[2] = {0};
@@ -3428,10 +3914,26 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                     B32 regread_is_addr = 0;
                     U64 target_pick_val_idx = 0;
                     RDI_EvalOp rdi_eval_op = 0;
+                    RDI_EvalTypeGroup rdi_eval_type_group = RDI_EvalTypeGroup_U;
                     U64 memread_size = 0;
                     switch(opcode)
                     {
-                      default:{}break;
+                      default:{dst_bytecode_is_good = 0;}break;
+                      case DW_ExprOp_Nop:{}break;
+                      case DW_ExprOp_StackValue:
+                      {
+                        // This terminates a value expression, not a memory location.
+                        // Composite locations still require separate evaluator support.
+                        if(val_stack_top != 0 && expr_off == expr.size)
+                        {
+                          bytecode_is_stack_value = 1;
+                          val_stack_top->v.is_addr = 0;
+                        }
+                        else
+                        {
+                          dst_bytecode_is_good = 0;
+                        }
+                      }break;
                       
                       //- rjf: small opcode-embedded unsigned literals
                       case DW_ExprOp_Lit0:  case DW_ExprOp_Lit1:  case DW_ExprOp_Lit2:
@@ -3481,16 +3983,20 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                         push_vals[0].is_addr = 1;
                       }break;
                       case DW_ExprOp_Addrx:
-                      if(unit_parse_ctx->addr_table != 0)
                       {
                         U64 addr_idx = operand_u64s[0];
                         U64 addr = 0;
-                        if(dw2_try_offset_from_table_idx(unit_parse_ctx->addr_table, addr_idx, &addr))
+                        if(unit_parse_ctx->addr_table != 0 &&
+                           dw2_try_offset_from_table_idx(unit_parse_ctx->addr_table, addr_idx, &addr))
                         {
                           U64 voff = (addr > base_vaddr) ? (addr - base_vaddr) : 0;
                           rdim_bytecode_push_op(arena, &dst_bytecode, RDI_EvalOp_ModuleOff, voff);
                           push_vals[0].type_kind = RDI_TypeKind_U64;
                           push_vals[0].is_addr = 1;
+                        }
+                        else
+                        {
+                          dst_bytecode_is_good = 0;
                         }
                       }break;
                       
@@ -3623,6 +4129,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                         }
                         else
                         {
+                          dst_bytecode_is_good = 0;
                           log_infof("[.debug_info@0x%I64x] Implicit value DWARF expression operation (DW_ExprOp_ImplicitValue) with block size >8 (%I64u) found. This is not currently supported.\n", start_off, operand_str8s[0].size);
                         }
                       }break;
@@ -3657,6 +4164,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                               picked_val = n->v;
                               break;
                             }
+                            idx += 1;
                           }
                         }
                         
@@ -3668,8 +4176,8 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       }break;
                       case DW_ExprOp_Swap:
                       {
-                        push_vals[0] = popped_vals[1];
-                        push_vals[1] = popped_vals[0];
+                        push_vals[0] = popped_vals[0];
+                        push_vals[1] = popped_vals[1];
                         rdim_bytecode_push_op(arena, &dst_bytecode, RDI_EvalOp_Swap, 0);
                       }break;
                       case DW_ExprOp_Drop:
@@ -3682,6 +4190,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       case DW_ExprOp_Bra:  rdi_eval_op = RDI_EvalOp_Cond; goto jumps;
                       jumps:;
                       {
+                        dst_bytecode_is_good = 0;
                         // rjf: jump delta in bytes (how the instruction is encoded) -> jump delta in instructions
                         S64 jump_delta_bytes = operand_s64s[0];
                         S64 jump_delta_insts = 0;
@@ -3703,6 +4212,10 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       case DW_ExprOp_FBReg:
                       {
                         bytecode_is_framebase_dependent = 1;
+                        if(framebase_loc.kind == RDI_LocationKind_NULL)
+                        {
+                          dst_bytecode_is_good = 0;
+                        }
                         for EachNode(n, RDIM_EvalBytecodeOp, framebase_loc.bytecode.first_op)
                         {
                           rdim_bytecode_push_op(arena, &dst_bytecode, n->op, n->p);
@@ -3717,6 +4230,8 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       case DW_ExprOp_CallFrameCfa:
                       {
                         rdim_bytecode_push_op(arena, &dst_bytecode, RDI_EvalOp_PushCfa, 0);
+                        push_vals[0].type_kind = RDI_TypeKind_U64;
+                        push_vals[0].is_addr = 1;
                       }break;
                       
                       //- rjf: memory reads
@@ -3744,6 +4259,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       case DW_ExprOp_EntryValue:
                       case DW_GNU_ExprOp_EntryValue:
                       {
+                        dst_bytecode_is_good = 0;
                         // TODO(rjf): expr op entry value ops
                       }break;
                       
@@ -3752,6 +4268,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       {
                         rdim_bytecode_push_uconst(arena, &dst_bytecode, operand_u64s[0]);
                         rdim_bytecode_push_op(arena, &dst_bytecode, RDI_EvalOp_Add, RDI_EvalTypeGroup_U);
+                        push_vals[0].is_addr = popped_vals[0].is_addr;
                         push_vals[0].type_kind = RDI_TypeKind_U64; // TODO(rjf): do we need to adjust this based on popped value at all, even?
                       }break;
                       
@@ -3761,7 +4278,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       case DW_ExprOp_Gt:     {rdi_eval_op = RDI_EvalOp_Grtr;}goto arithmetic_op;
                       case DW_ExprOp_Le:     {rdi_eval_op = RDI_EvalOp_LsEq;}goto arithmetic_op;
                       case DW_ExprOp_Lt:     {rdi_eval_op = RDI_EvalOp_Less;}goto arithmetic_op;
-                      case DW_ExprOp_Ne:     {rdi_eval_op = RDI_EvalOp_Neg;}goto arithmetic_op;
+                      case DW_ExprOp_Ne:     {rdi_eval_op = RDI_EvalOp_NtEq;}goto arithmetic_op;
                       case DW_ExprOp_Div:    {rdi_eval_op = RDI_EvalOp_Div;}goto arithmetic_op;
                       case DW_ExprOp_Minus:  {rdi_eval_op = RDI_EvalOp_Sub;}goto arithmetic_op;
                       case DW_ExprOp_Mul:    {rdi_eval_op = RDI_EvalOp_Mul;}goto arithmetic_op;
@@ -3771,15 +4288,24 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                       case DW_ExprOp_Or:     {rdi_eval_op = RDI_EvalOp_BitOr;}goto arithmetic_op;
                       case DW_ExprOp_Shl:    {rdi_eval_op = RDI_EvalOp_LShift;}goto arithmetic_op;
                       case DW_ExprOp_Shr:    {rdi_eval_op = RDI_EvalOp_RShift;}goto arithmetic_op;
-                      case DW_ExprOp_Shra:   {rdi_eval_op = RDI_EvalOp_RShift;}goto arithmetic_op;
+                      case DW_ExprOp_Shra:   {rdi_eval_op = RDI_EvalOp_RShift; rdi_eval_type_group = RDI_EvalTypeGroup_S;}goto arithmetic_op;
                       case DW_ExprOp_Mod:    {rdi_eval_op = RDI_EvalOp_Mod;}goto arithmetic_op;
                       case DW_ExprOp_Abs:    {rdi_eval_op = RDI_EvalOp_Abs;}goto arithmetic_op;
                       case DW_ExprOp_Neg:    {rdi_eval_op = RDI_EvalOp_Neg;}goto arithmetic_op;
-                      case DW_ExprOp_Not:    {rdi_eval_op = RDI_EvalOp_LogNot;}goto arithmetic_op;
+                      case DW_ExprOp_Not:    {rdi_eval_op = RDI_EvalOp_BitNot;}goto arithmetic_op;
                       arithmetic_op:;
                       {
                         // TODO(rjf): eval arithmetic conversions etc.
-                        rdim_bytecode_push_op(arena, &dst_bytecode, rdi_eval_op, RDI_EvalTypeGroup_U);
+                        U64 param = rdi_eval_type_group;
+                        if(rdi_eval_op == RDI_EvalOp_LShift || rdi_eval_op == RDI_EvalOp_RShift)
+                        {
+                          param |= (U64)unit_parse_ctx->addr_size << 8;
+                        }
+                        rdim_bytecode_push_op(arena, &dst_bytecode, rdi_eval_op, param);
+                        if(rdi_eval_op == RDI_EvalOp_Add || rdi_eval_op == RDI_EvalOp_Sub)
+                        {
+                          push_vals[0].is_addr = popped_vals[0].is_addr || popped_vals[1].is_addr;
+                        }
                       }break;
                       
                       //- rjf: currently unsupported
@@ -3943,13 +4469,13 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                     }
                     
                     // rjf: match simple module offsets
-                    if(beginning_ops[0] == RDI_EvalOp_ModuleOff && beginning_ops[1] == RDI_EvalOp_Stop)
+                    if(!bytecode_is_stack_value && beginning_ops[0] == RDI_EvalOp_ModuleOff && beginning_ops[1] == RDI_EvalOp_Stop)
                     {
                       U64 voff = beginning_nodes[0]->p;
                       loc.kind = RDI_LocationKind_ModuleOff;
                       loc.offset = voff;
                     }
-                    else if(((beginning_ops[0] == RDI_EvalOp_ModuleOff &&
+                    else if(!bytecode_is_stack_value && ((beginning_ops[0] == RDI_EvalOp_ModuleOff &&
                               (beginning_ops[1] == RDI_EvalOp_ConstU8 ||
                                beginning_ops[1] == RDI_EvalOp_ConstU16 ||
                                beginning_ops[1] == RDI_EvalOp_ConstU32 ||
@@ -3968,13 +4494,13 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                     }
                     
                     // rjf: match simple TLS offsets
-                    if(beginning_ops[0] == RDI_EvalOp_TLSOff && beginning_ops[1] == RDI_EvalOp_Stop)
+                    if(!bytecode_is_stack_value && beginning_ops[0] == RDI_EvalOp_TLSOff && beginning_ops[1] == RDI_EvalOp_Stop)
                     {
                       U64 toff = beginning_nodes[0]->p;
                       loc.kind = RDI_LocationKind_TLSOff;
                       loc.offset = toff;
                     }
-                    else if(((beginning_ops[0] == RDI_EvalOp_TLSOff &&
+                    else if(!bytecode_is_stack_value && ((beginning_ops[0] == RDI_EvalOp_TLSOff &&
                               (beginning_ops[1] == RDI_EvalOp_ConstU8 ||
                                beginning_ops[1] == RDI_EvalOp_ConstU16 ||
                                beginning_ops[1] == RDI_EvalOp_ConstU32 ||
@@ -3994,15 +4520,16 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
                   }
                   
                   //- rjf: collect
+                  if(dst_bytecode_is_good && dst_bytecode.first_op != 0)
                   {
-                    RDIM_Rng1U64 voff_range = {range.min - base_vaddr, range.max - base_vaddr};
+                    RDIM_Rng1U64 voff_range = d2r_voff_range_from_vaddr_range(base_vaddr, range);
                     if(bytecode_is_framebase_dependent)
                     {
                       voff_range.min = Max(voff_range.min, framebase_voff_range.min);
                       voff_range.max = Min(voff_range.max, framebase_voff_range.max);
                     }
                     rdim_location_case_list_push(arena, dst_locations, loc, voff_range);
-                    dst_is_tls_dependent[0] = is_tls_dependent;
+                    dst_is_tls_dependent[0] |= is_tls_dependent;
                   }
                   
                   //- rjf: not frame-base dependent? -> break - don't do this per-framebase case
@@ -4027,6 +4554,7 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
             
             //- rjf: determine if parent tag is a container to deduplicated tags
             case DW_TagKind_Namespace:
+            case DW_TagKind_Module:
             case DW_TagKind_StructureType:
             case DW_TagKind_UnionType:
             case DW_TagKind_ClassType:
@@ -4057,7 +4585,28 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
             //- rjf: inline site
             case DW_TagKind_InlinedSubroutine:
             {
-              // TODO(rjf)
+              RDIM_Scope *scope = rdim_scope_chunk_list_push(arena, &dst_artifacts->scopes, chunk_count);
+              RDIM_InlineSite *site = rdim_inline_site_chunk_list_push(arena, &dst_artifacts->inline_sites, chunk_count);
+              site->name = name;
+              site->type = type;
+              scope->inline_site = site;
+              scope->voff_ranges = ranges;
+              dst_artifacts->scopes.scope_voff_count += 2*ranges.count;
+              new_scope_open = scope;
+              D2R_InlineLines *lines = push_array(scratch.arena, D2R_InlineLines, 1);
+              lines->scope = scope;
+              lines->call_line = callline_attrib->val.u128.u64[0];
+              lines->call_column = callcolumn_attrib->val.u128.u64[0];
+              U64 file_idx = callfile_attrib->val.u128.u64[0];
+              if(callfile_attrib != &dw2_attrib_nil && file_idx < unit_line_table_headers[unit_idx].files.count)
+              {
+                lines->call_file = unit_src_file_maps[unit_idx].v[file_idx];
+              }
+              for(RDIM_Scope *s = top_parent ? top_parent->scope : 0; s != 0; s = s->parent_scope)
+              {
+                lines->depth += (s->inline_site != 0);
+              }
+              SLLQueuePush(dst_artifacts->first_inline_lines, dst_artifacts->last_inline_lines, lines);
             }break;
             
             //- rjf: variables
@@ -4293,6 +4842,8 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
         break;
       }
       RDIM_Unit *dst_unit = unit_from_idx_map[unit_idx];
+      if(dst_unit == 0) {continue;}
+      D2R_InlineLines *first_inline = 0, *last_inline = 0;
       for EachIndex(work_idx, sub_unit_works_count)
       {
         if(sub_unit_works[work_idx].unit_idx == unit_idx)
@@ -4303,6 +4854,38 @@ d2r_convert(Arena *arena, D2R_ConvertParams *params)
           rdim_symbol_chunk_list_concat_in_place(&dst_unit->procedures, &sub_unit_work_artifacts[work_idx].procedures);
           rdim_scope_chunk_list_concat_in_place(&dst_unit->scopes, &sub_unit_work_artifacts[work_idx].scopes);
           rdim_inline_site_chunk_list_concat_in_place(&dst_unit->inline_sites, &sub_unit_work_artifacts[work_idx].inline_sites);
+          D2R_SubUnitWorkArtifacts *work = &sub_unit_work_artifacts[work_idx];
+          if(work->first_inline_lines != 0)
+          {
+            if(last_inline != 0) {last_inline->next = work->first_inline_lines;}
+            else {first_inline = work->first_inline_lines;}
+            last_inline = work->last_inline_lines;
+          }
+        }
+      }
+      if(first_inline != 0)
+      {
+        RDIM_LineTableChunkList *tables = &unit_line_table_chunk_lists[unit_idx];
+        d2r_inline_line_tables(arena, tables, dst_unit->line_table, first_inline);
+      }
+    }
+    lane_sync();
+    if(lane_idx() == 0)
+    {
+      for EachIndex(unit_idx, unit_count)
+      {
+        rdim_line_table_chunk_list_concat_in_place(all_line_tables, &unit_line_table_chunk_lists[unit_idx]);
+      }
+      // Unit tables were replaced in place; recount their rows as well as the
+      // newly joined inline tables before baking the shared arrays.
+      all_line_tables->total_seq_count = all_line_tables->total_line_count = all_line_tables->total_col_count = 0;
+      for EachNode(n, RDIM_LineTableChunkNode, all_line_tables->first)
+      {
+        for EachIndex(idx, n->count)
+        {
+          all_line_tables->total_seq_count += n->v[idx].seq_count;
+          all_line_tables->total_line_count += n->v[idx].line_count;
+          all_line_tables->total_col_count += n->v[idx].col_count;
         }
       }
     }

@@ -247,7 +247,7 @@ arch_reg_code_from_dw(Arch arch, DW_RegCode code)
   {
     ARCH_Info *arch_info = arch_info_from_arch(arch);
     U8 *dw_from_reg_code_table = arch_dw_from_reg_code_table_from_arch(arch);
-    for EachIndex(c, arch_info->reg_code_count)
+    for(U64 c = 1; c < arch_info->reg_code_count; c += 1)
     {
       if(dw_from_reg_code_table[c] == code)
       {
