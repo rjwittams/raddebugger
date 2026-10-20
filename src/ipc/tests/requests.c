@@ -986,6 +986,33 @@ internal void
 entry_point(CmdLine *cmdline)
 {
   sock_init();
+  String8 serve_directory = cmd_line_string(cmdline, str8_lit("serve_private"));
+  if(serve_directory.size != 0)
+  {
+    U64 count = 1;
+    String8 count_string = cmd_line_string(cmdline, str8_lit("serve_count"));
+    if(count_string.size != 0) { Check(try_u64_from_str8_c_rules(count_string, &count)); }
+    Check(count > 0 && count <= 16);
+    IPC_Server *server = ipc_server_open_local(serve_directory, 0);
+    Check(server != 0);
+    String8 tag = cmd_line_string(cmdline, str8_lit("serve_tag"));
+    for(U64 idx = 0; idx < count; idx += 1)
+    {
+      Temp scratch = scratch_begin(0, 0);
+      IPC_Message request = {0};
+      Check(ipc_server_receive(scratch.arena, server, &request, now_time_us()+Million(30)));
+      String8List parts = {0};
+      str8_list_push(scratch.arena, &parts, tag);
+      str8_list_push(scratch.arena, &parts, request.data);
+      String8 reply = str8_list_join(scratch.arena, &parts, 0);
+      Check(ipc_server_reply(server, request, reply, now_time_us()+Million(10)));
+      scratch_end(scratch);
+      // The driver acknowledges receipt before allowing fixture shutdown.
+      if(getchar() == EOF) { break; }
+    }
+    ipc_server_close(server);
+    return;
+  }
 #if OS_WINDOWS
   warm_native_socket_runtime();
   // Native BCrypt controls also retain process-wide initialization handles.

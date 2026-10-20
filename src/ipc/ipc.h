@@ -22,6 +22,9 @@ struct IPC_Message
 
 typedef struct IPC_Server IPC_Server;
 
+// The default registry is per-user and machine-local; this creates no registration.
+internal String8 ipc_default_directory(Arena *arena);
+
 typedef enum IPC_Status
 {
   IPC_Status_None,
