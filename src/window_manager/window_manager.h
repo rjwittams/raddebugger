@@ -94,9 +94,44 @@ typedef enum WM_EventKind
   WM_EventKind_WindowClose,
   WM_EventKind_FileDrop,
   WM_EventKind_Wakeup,
+  WM_EventKind_MenuCommand,
+  WM_EventKind_MenuOpen,
   WM_EventKind_COUNT
 }
 WM_EventKind;
+
+typedef enum WM_MenuItemKind
+{
+  WM_MenuItemKind_Null,
+  WM_MenuItemKind_Command,
+  WM_MenuItemKind_Separator,
+}
+WM_MenuItemKind;
+
+typedef struct WM_MenuItem WM_MenuItem;
+struct WM_MenuItem
+{
+  WM_MenuItemKind kind;
+  String8 label;
+  String8 command_name;
+  WM_Key shortcut_key;
+  U32 shortcut_modifiers;
+};
+
+typedef struct WM_Menu WM_Menu;
+struct WM_Menu
+{
+  String8 label;
+  U64 item_count;
+  WM_MenuItem *items;
+};
+
+typedef struct WM_MenuArray WM_MenuArray;
+struct WM_MenuArray
+{
+  U64 count;
+  WM_Menu *menus;
+};
 
 typedef U32 WM_Modifiers;
 enum
@@ -104,6 +139,7 @@ enum
   WM_Modifier_Ctrl  = (1<<0),
   WM_Modifier_Shift = (1<<1),
   WM_Modifier_Alt   = (1<<2),
+  WM_Modifier_Cmd   = (1<<3),
 };
 
 typedef struct WM_Event WM_Event;
@@ -121,6 +157,7 @@ struct WM_Event
   B32 right_sided;
   U32 character;
   U32 repeat_count;
+  String8 string;
   Vec2F32 pos;
   Vec2F32 delta;
   B32 scroll_is_precise;
@@ -199,9 +236,13 @@ internal void           wm_window_clear_custom_border_data(WM_Window handle);
 internal void           wm_window_push_custom_title_bar(WM_Window handle, F32 thickness);
 internal void           wm_window_push_custom_edges(WM_Window handle, F32 thickness);
 internal void           wm_window_push_custom_title_bar_client_area(WM_Window handle, Rng2F32 rect);
+internal B32            wm_window_should_draw_custom_title_bar_controls(WM_Window window);
+internal F32            wm_window_native_title_bar_left_padding(WM_Window window);
 internal Rng2F32        wm_rect_from_window(WM_Window window);
 internal Rng2F32        wm_client_rect_from_window(WM_Window window);
 internal F32            wm_dpi_from_window(WM_Window window);
+internal F32            wm_layout_scale_from_window(WM_Window window);
+internal F32            wm_backing_scale_from_window(WM_Window window);
 
 ////////////////////////////////
 //~ rjf: @per_os_impl External Windows (Implemented Per-OS)
@@ -227,6 +268,14 @@ internal WM_EventList   wm_get_events(Arena *arena, B32 wait);
 internal WM_Modifiers   wm_get_modifiers(void);
 internal B32            wm_key_is_down(WM_Key key);
 internal Vec2F32        wm_mouse_from_window(WM_Window window);
+
+////////////////////////////////
+//~ @per_os_impl Application Menu (Implemented Per-OS)
+
+internal void           wm_set_main_menu(WM_MenuArray menu_array);
+internal B32            wm_application_menu_bar_is_native(void);
+internal void           wm_set_preferred_window_decorations(B32 enabled);
+internal void           wm_set_preferred_native_menu_bar(B32 enabled);
 
 ////////////////////////////////
 //~ rjf: @per_os_impl Cursors (Implemented Per-OS)

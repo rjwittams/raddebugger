@@ -5644,7 +5644,8 @@ rd_window_state_from_cfg(CFG_Node *cfg)
     ws->query_arena = arena_alloc();
     ws->hover_eval_arena = arena_alloc();
     ws->autocomp_arena = arena_alloc();
-    ws->last_dpi = wm_dpi_from_window(ws->os);
+    ws->last_layout_scale = wm_layout_scale_from_window(ws->os);
+    ws->last_backing_scale = wm_backing_scale_from_window(ws->os);
     WM_Monitor zero_monitor = {0};
     if(!wm_monitor_match(zero_monitor, preferred_monitor))
     {
@@ -5939,17 +5940,26 @@ rd_window_frame(void)
       cfg_node_release(rd_state->cfg, cfg_node_child_from_string(window, str8_lit("maximized")));
     }
     
-    //- rjf: DPI changes -> xform font size / window size
-    F32 dpi = wm_dpi_from_window(ws->os);
-    if(dpi != ws->last_dpi)
+    //- Scale changes -> xform layout font size and refresh raster caches
+    F32 layout_scale = wm_layout_scale_from_window(ws->os);
+    F32 backing_scale = wm_backing_scale_from_window(ws->os);
+    if(layout_scale != ws->last_layout_scale)
     {
       fnt_reset();
-      F32 current_font_size = rd_font_size();
-      F32 new_font_size = current_font_size * (dpi / ws->last_dpi);
-      new_font_size = Clamp(6.f, new_font_size, 72.f);
-      CFG_Node *font_size_cfg = cfg_node_child_from_string_or_alloc(rd_state->cfg, window, str8_lit("font_size"));
-      cfg_node_new_replacef(rd_state->cfg, font_size_cfg, "%I64u", (U64)new_font_size);
-      ws->last_dpi = dpi;
+      if(ws->last_layout_scale != 0)
+      {
+        F32 current_font_size = rd_font_size();
+        F32 new_font_size = current_font_size * (layout_scale / ws->last_layout_scale);
+        new_font_size = Clamp(6.f, new_font_size, 72.f);
+        CFG_Node *font_size_cfg = cfg_node_child_from_string_or_alloc(rd_state->cfg, window, str8_lit("font_size"));
+        cfg_node_new_replacef(rd_state->cfg, font_size_cfg, "%I64u", (U64)new_font_size);
+      }
+      ws->last_layout_scale = layout_scale;
+    }
+    if(backing_scale != ws->last_backing_scale)
+    {
+      fnt_reset();
+      ws->last_backing_scale = backing_scale;
     }
     
     //- rjf: commit position
@@ -7429,6 +7439,9 @@ rd_window_frame(void)
     //
     ProfScope("build top bar")
     {
+      B32 draw_custom_title_bar_controls = wm_window_should_draw_custom_title_bar_controls(ws->os);
+      F32 native_title_bar_left_padding = wm_window_native_title_bar_left_padding(ws->os);
+      B32 draw_self_menu_bar = !wm_application_menu_bar_is_native();
       wm_window_clear_custom_border_data(ws->os);
       wm_window_push_custom_edges(ws->os, window_edge_px);
       wm_window_push_custom_title_bar(ws->os, dim_2f32(top_bar_rect).y);
@@ -7445,10 +7458,15 @@ rd_window_frame(void)
         //- rjf: left column
         {
           ui_set_next_flags(UI_BoxFlag_Clip|UI_BoxFlag_ViewScrollX|UI_BoxFlag_ViewClamp);
+          ui_set_next_min_width(native_title_bar_left_padding);
           UI_WidthFill UI_NamedRow(str8_lit("###menu_bar"))
           {
             //- rjf: icon
-            UI_Padding(ui_em(0.5f, 1.f))
+            if(native_title_bar_left_padding > 0)
+            {
+              ui_spacer(ui_px(native_title_bar_left_padding, 1));
+            }
+            else UI_Padding(ui_em(0.5f, 1.f))
             {
               UI_PrefWidth(ui_px(dim_2f32(top_bar_rect).y - ui_top_font_size()*0.8f, 1.f))
                 UI_Column
@@ -7460,9 +7478,9 @@ rd_window_frame(void)
                 ui_image(texture, R_Tex2DSampleKind_Linear, r2f32p(0, 0, texture_dim.x, texture_dim.y), v4f32(1, 1, 1, 1), 0, str8_lit(""));
               }
             }
-            
+
             //- rjf: menu items
-            if(dim_2f32(top_bar_rect).x > ui_top_font_size()*60)
+            if(draw_self_menu_bar && dim_2f32(top_bar_rect).x > ui_top_font_size()*60)
             {
               ui_set_next_flags(UI_BoxFlag_DrawBackground);
               UI_PrefWidth(ui_children_sum(1)) UI_Row UI_PrefWidth(ui_text_dim(20, 1)) UI_GroupKey(menu_bar_group_key)
@@ -7993,9 +8011,10 @@ rd_window_frame(void)
               rd_cmd(RD_CmdKind_Exit);
             }
           }
-          
+
           // rjf: min/max/close buttons
-          UI_TagF("implicit")
+          if(draw_custom_title_bar_controls)
+            UI_TagF("implicit")
             UI_TagF("weak")
             UI_VisualMargin(ui_top_font_size()*0.5f)
             UI_CornerRadius(ui_top_font_size()*0.9f)
@@ -11285,6 +11304,184 @@ rd_next_view_cmd(RD_Cmd **cmd)
   return result;
 }
 
+internal void
+rd_wm_set_main_menu(void)
+{
+  Temp scratch = scratch_begin(0, 0);
+  local_persist B32 initialized = 0;
+  local_persist B32 last_native = 0;
+  local_persist CFG_Binding last_bindings[RD_CmdKind_COUNT] = {0};
+  B32 native = wm_application_menu_bar_is_native();
+  B32 changed = !initialized || native != last_native;
+  typedef struct RD_AppMenuItemSpec RD_AppMenuItemSpec;
+  struct RD_AppMenuItemSpec
+  {
+    B32 separator;
+    RD_CmdKind kind;
+  };
+  typedef struct RD_AppMenuSpec RD_AppMenuSpec;
+  struct RD_AppMenuSpec
+  {
+    String8 label;
+    U64 item_count;
+    RD_AppMenuItemSpec *items;
+  };
+
+#define RD_MenuCmd(k) {0, k}
+#define RD_MenuSep()  {1, RD_CmdKind_Null}
+  RD_AppMenuItemSpec file_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_Open),
+    RD_MenuCmd(RD_CmdKind_OpenSourceFileFromDebugInfo),
+    RD_MenuCmd(RD_CmdKind_OpenCrashDump),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_NewProject),
+    RD_MenuCmd(RD_CmdKind_OpenProject),
+    RD_MenuCmd(RD_CmdKind_OpenRecentProject),
+    RD_MenuCmd(RD_CmdKind_SaveProject),
+    RD_MenuCmd(RD_CmdKind_ProjectSettings),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_NewUser),
+    RD_MenuCmd(RD_CmdKind_OpenUser),
+    RD_MenuCmd(RD_CmdKind_SaveUser),
+    RD_MenuCmd(RD_CmdKind_UserSettings),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_Exit),
+  };
+  RD_AppMenuItemSpec window_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_OpenWindow),
+    RD_MenuCmd(RD_CmdKind_CloseWindow),
+    RD_MenuCmd(RD_CmdKind_MinimizeWindow),
+    RD_MenuCmd(RD_CmdKind_ToggleFullscreen),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_WindowSettings),
+  };
+  RD_AppMenuItemSpec panel_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_NewPanelUp),
+    RD_MenuCmd(RD_CmdKind_NewPanelDown),
+    RD_MenuCmd(RD_CmdKind_NewPanelRight),
+    RD_MenuCmd(RD_CmdKind_NewPanelLeft),
+    RD_MenuCmd(RD_CmdKind_ClosePanel),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_NextPanel),
+    RD_MenuCmd(RD_CmdKind_PrevPanel),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_TabBarTop),
+    RD_MenuCmd(RD_CmdKind_TabBarBottom),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_ResetToDefaultPanels),
+  };
+  RD_AppMenuItemSpec tab_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_OpenTab),
+    RD_MenuCmd(RD_CmdKind_CloseTab),
+    RD_MenuCmd(RD_CmdKind_DuplicateTab),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_MoveTabLeft),
+    RD_MenuCmd(RD_CmdKind_MoveTabRight),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_NextTab),
+    RD_MenuCmd(RD_CmdKind_PrevTab),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_TabSettings),
+  };
+  RD_AppMenuItemSpec targets_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_AddTarget),
+    RD_MenuCmd(RD_CmdKind_LaunchAndRun),
+    RD_MenuCmd(RD_CmdKind_LaunchAndStepInto),
+  };
+  RD_AppMenuItemSpec control_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_Run),
+    RD_MenuCmd(RD_CmdKind_KillAll),
+    RD_MenuCmd(RD_CmdKind_Restart),
+    RD_MenuCmd(RD_CmdKind_Halt),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_StepInto),
+    RD_MenuCmd(RD_CmdKind_StepOver),
+    RD_MenuCmd(RD_CmdKind_StepOut),
+    RD_MenuSep(),
+    RD_MenuCmd(RD_CmdKind_Attach),
+    RD_MenuCmd(RD_CmdKind_Detach),
+  };
+  RD_AppMenuItemSpec help_items[] =
+  {
+    RD_MenuCmd(RD_CmdKind_OpenPalette),
+  };
+  RD_AppMenuSpec specs[] =
+  {
+    {str8_lit_comp("File"),    ArrayCount(file_items),    file_items},
+    {str8_lit_comp("Window"),  ArrayCount(window_items),  window_items},
+    {str8_lit_comp("Panel"),   ArrayCount(panel_items),   panel_items},
+    {str8_lit_comp("Tab"),     ArrayCount(tab_items),     tab_items},
+    {str8_lit_comp("Targets"), ArrayCount(targets_items), targets_items},
+    {str8_lit_comp("Control"), ArrayCount(control_items), control_items},
+    {str8_lit_comp("Help"),    ArrayCount(help_items),    help_items},
+  };
+#undef RD_MenuSep
+#undef RD_MenuCmd
+
+  WM_MenuArray menu_array = {0};
+  menu_array.count = ArrayCount(specs);
+  menu_array.menus = push_array(scratch.arena, WM_Menu, menu_array.count);
+  for(U64 menu_idx = 0; menu_idx < menu_array.count; menu_idx += 1)
+  {
+    RD_AppMenuSpec *spec = &specs[menu_idx];
+    WM_Menu *menu = &menu_array.menus[menu_idx];
+    menu->label = spec->label;
+    menu->item_count = spec->item_count;
+    menu->items = push_array(scratch.arena, WM_MenuItem, menu->item_count);
+    for(U64 item_idx = 0; item_idx < menu->item_count; item_idx += 1)
+    {
+      RD_AppMenuItemSpec *item_spec = &spec->items[item_idx];
+      WM_MenuItem *item = &menu->items[item_idx];
+      if(item_spec->separator)
+      {
+        item->kind = WM_MenuItemKind_Separator;
+      }
+      else
+      {
+        RD_CmdKindInfo *info = &rd_cmd_kind_info_table[item_spec->kind];
+        item->kind = WM_MenuItemKind_Command;
+        item->command_name = info->string;
+        CFG_Binding binding = {0};
+        if(rd_state->key_map != 0)
+        {
+          CFG_KeyMapNodePtrList bindings = cfg_key_map_node_ptr_list_from_name(scratch.arena, rd_state->key_map, info->string);
+          if(bindings.first != 0)
+          {
+            binding = bindings.first->v->binding;
+            CFG_KeyMapNodePtrList owners = cfg_key_map_node_ptr_list_from_binding(scratch.arena, rd_state->key_map, binding);
+            if(owners.first != 0 && !str8_match(owners.first->v->name, info->string, 0))
+            {
+              MemoryZeroStruct(&binding);
+            }
+          }
+        }
+        changed |= !MemoryMatchStruct(&binding, &last_bindings[item_spec->kind]);
+        last_bindings[item_spec->kind] = binding;
+        item->shortcut_key = binding.key;
+        item->shortcut_modifiers = binding.modifiers;
+        item->label = rd_display_from_code_name(info->string);
+        if(item->label.size == 0)
+        {
+          item->label = info->string;
+        }
+      }
+    }
+  }
+  if(changed)
+  {
+    wm_set_main_menu(menu_array);
+    last_native = native;
+    initialized = 1;
+  }
+  scratch_end(scratch);
+}
+
 ////////////////////////////////
 //~ rjf: Main Layer Top-Level Calls
 
@@ -11306,6 +11503,7 @@ rd_init(CmdLine *cmdln)
   rd_state->quit_after_success = (cmd_line_has_flag(cmdln, str8_lit("quit_after_success")) ||
                                   cmd_line_has_flag(cmdln, str8_lit("q")));
   rd_state->override_focus_on_stop = (cmd_line_has_flag(cmdln, s("no_focus_on_stop")));
+  rd_state->mac_window_decorations = 1;
   rd_state->user_path_arena = arena_alloc();
   rd_state->project_path_arena = arena_alloc();
   rd_state->theme_path_arena = arena_alloc();
@@ -11355,6 +11553,20 @@ rd_init(CmdLine *cmdln)
     for EachElement(idx, rd_name_schema_info_table)
     {
       MD_Node *schema = md_tree_from_string(rd_state->arena, rd_name_schema_info_table[idx].schema)->first;
+      // Resolve platform defaults in the schema so settings UI and commands agree.
+#if OS_MAC
+      {
+        for(MD_Node *setting = schema->first; !md_node_is_nil(setting); setting = setting->next)
+        {
+          MD_Node *default_tag = md_tag_from_string(setting, str8_lit("default"), 0);
+          MD_Node *mac_default_tag = md_tag_from_string(setting, str8_lit("default_mac"), 0);
+          if(!md_node_is_nil(default_tag->first) && !md_node_is_nil(mac_default_tag->first))
+          {
+            default_tag->first->string = mac_default_tag->first->string;
+          }
+        }
+      }
+#endif
       cfg_schema_table_insert(rd_state->arena, rd_state->cfg_schema_table, rd_name_schema_info_table[idx].name, schema);
     }
   }
@@ -11391,7 +11603,9 @@ rd_init(CmdLine *cmdln)
       }
     }
   }
-  
+
+  rd_wm_set_main_menu();
+
   // rjf: set up top-level config entity trees & tables
   {
     rd_state->cfg = cfg_state_alloc();
@@ -12123,6 +12337,13 @@ rd_frame(void)
   //////////////////////////////
   //- rjf: bind change
   //
+  for(WM_Event *event = events.first; event != 0; event = event->next)
+  {
+    if(event->kind == WM_EventKind_MenuOpen)
+    {
+      rd_state->bind_change_active = 0;
+    }
+  }
   if(!rd_state->popup_active && rd_state->bind_change_active)
   {
     if(wm_key_press(&events, wm_window_zero(), 0, WM_Key_Esc))
@@ -12148,6 +12369,7 @@ rd_frame(void)
          event->key != WM_Key_RightMouseButton &&
          event->key != WM_Key_MiddleMouseButton &&
          event->key != WM_Key_Ctrl &&
+         event->key != WM_Key_Cmd &&
          event->key != WM_Key_Alt &&
          event->key != WM_Key_Shift)
       {
@@ -12163,6 +12385,7 @@ rd_frame(void)
         cfg_node_new(rd_state->cfg, binding, rd_state->bind_change_cmd_name);
         cfg_node_new(rd_state->cfg, binding, wm_key_cfg_name_table[event->key]);
         if(event->modifiers & WM_Modifier_Ctrl)  { cfg_node_new(rd_state->cfg, binding, str8_lit("ctrl")); }
+        if(event->modifiers & WM_Modifier_Cmd)   { cfg_node_new(rd_state->cfg, binding, str8_lit("cmd")); }
         if(event->modifiers & WM_Modifier_Shift) { cfg_node_new(rd_state->cfg, binding, str8_lit("shift")); }
         if(event->modifiers & WM_Modifier_Alt)   { cfg_node_new(rd_state->cfg, binding, str8_lit("alt")); }
         U32 codepoint = wm_codepoint_from_modifiers_and_key(event->modifiers, event->key);
@@ -12182,6 +12405,32 @@ rd_frame(void)
     rd_state->key_map = cfg_key_map_from_cfg(rd_frame_arena());
   }
   
+  //////////////////////////////
+  //////////////////////////////
+  //- apply window manager preferences from config
+  //
+  {
+    local_persist B32 initialized = 0;
+    local_persist B32 last_mac_window_decorations = 0;
+    local_persist B32 last_mac_native_menu_bar = 0;
+    B32 mac_window_decorations = rd_state->mac_window_decorations;
+    B32 mac_native_menu_bar = rd_state->mac_native_menu_bar;
+    if(!initialized || last_mac_window_decorations != mac_window_decorations)
+    {
+      wm_set_preferred_window_decorations(mac_window_decorations);
+      last_mac_window_decorations = mac_window_decorations;
+    }
+    if(!initialized || last_mac_native_menu_bar != mac_native_menu_bar)
+    {
+      wm_set_preferred_native_menu_bar(mac_native_menu_bar);
+      last_mac_native_menu_bar = mac_native_menu_bar;
+    }
+    initialized = 1;
+  }
+#if OS_MAC
+  rd_wm_set_main_menu();
+#endif
+
   //////////////////////////////
   //- rjf: consume events
   //
@@ -12219,8 +12468,26 @@ rd_frame(void)
         rd_cmd(RD_CmdKind_Exit);
       }
       
+      if(!take && event->kind == WM_EventKind_MenuCommand && event->string.size != 0)
+      {
+        take = 1;
+        if(ws != &rd_nil_window_state && str8_match(event->string, str8_lit("window_close_menu"), 0))
+        {
+          UI_State *last_ui = ui_get_selected_state();
+          ui_select_state(ws->ui);
+          UI_Key close_ctx_menu_key = ui_key_from_stringf(ui_key_zero(), "###close_ctx_menu");
+          ui_ctx_menu_open(close_ctx_menu_key, ui_key_zero(), event->pos);
+          ui_select_state(last_ui);
+        }
+        else
+        {
+          rd_cmd(RD_CmdKind_RunCommand, .cmd_name = event->string);
+        }
+        rd_request_frame();
+      }
+
       //- rjf: try menu bar operations
-      if(rd_state->alt_menu_bar_enabled && wm_window_is_focused(ws->os))
+      if(rd_state->alt_menu_bar_enabled && wm_window_is_focused(ws->os) && !wm_application_menu_bar_is_native())
       {
         if(!take && event->kind == WM_EventKind_Press && event->key == WM_Key_Alt && event->modifiers == 0 && event->is_repeat == 0)
         {
@@ -13409,6 +13676,8 @@ rd_frame(void)
     // but cannot evaluate before this point, so we need to prep for next frame
     //
     rd_state->alt_menu_bar_enabled = rd_setting_b32_from_name(s("focus_menu_bar_with_alt"));
+    rd_state->mac_window_decorations = rd_setting_b32_from_name(s("mac_window_decorations"));
+    rd_state->mac_native_menu_bar = rd_setting_b32_from_name(s("mac_native_menu_bar"));
     rd_state->use_default_stl_type_views = rd_setting_b32_from_name(s("use_default_stl_type_views"));
     rd_state->use_default_ue_type_views = rd_setting_b32_from_name(s("use_default_ue_type_views"));
     rd_state->auto_download_debug_info = rd_setting_b32_from_name(s("auto_download_debug_info"));
@@ -13425,13 +13694,17 @@ rd_frame(void)
     ////////////////////////////
     //- rjf: do installation/uninstallation of app
     //
-    B32 installed = rd_setting_b32_from_name(s("install_to_system"));
-    B32 last_installed = rd_state->installed;
-    if(installed != last_installed)
+#if !OS_MAC
     {
-      sh_install_or_uninstall_self(1, installed);
-      rd_state->installed = installed;
+      B32 installed = rd_setting_b32_from_name(s("install_to_system"));
+      B32 last_installed = rd_state->installed;
+      if(installed != last_installed)
+      {
+        sh_install_or_uninstall_self(1, installed);
+        rd_state->installed = installed;
+      }
     }
+#endif
     
     ////////////////////////////
     //- rjf: send update check if needed
@@ -14142,14 +14415,26 @@ rd_frame(void)
               cfg_node_release(rd_state->cfg, n->v);
             }
             CFG_Node *keybindings = cfg_node_new(rd_state->cfg, user, str8_lit("keybindings"));
-            for EachElement(idx, rd_default_binding_table)
+            for(U64 idx = 0; idx < ArrayCount(rd_default_binding_table) + OS_MAC*ArrayCount(rd_mac_extra_binding_table); idx += 1)
             {
-              String8 name = rd_default_binding_table[idx].string;
-              CFG_Binding binding = rd_default_binding_table[idx].binding;
+              String8 name;
+              CFG_Binding binding;
+              if(idx < ArrayCount(rd_default_binding_table))
+              {
+                name = rd_default_binding_table[idx].string;
+                binding = rd_binding_from_default(name, rd_default_binding_table[idx].binding, OS_MAC);
+              }
+              else
+              {
+                U64 mac_idx = idx - ArrayCount(rd_default_binding_table);
+                name = rd_mac_extra_binding_table[mac_idx].string;
+                binding = rd_mac_extra_binding_table[mac_idx].binding;
+              }
               CFG_Node *binding_root = cfg_node_new(rd_state->cfg, keybindings, str8_zero());
               cfg_node_new(rd_state->cfg, binding_root, name);
               cfg_node_new(rd_state->cfg, binding_root, wm_key_cfg_name_table[binding.key]);
               if(binding.modifiers & WM_Modifier_Ctrl)  {cfg_node_newf(rd_state->cfg, binding_root, "ctrl");}
+              if(binding.modifiers & WM_Modifier_Cmd)   {cfg_node_newf(rd_state->cfg, binding_root, "cmd");}
               if(binding.modifiers & WM_Modifier_Shift) {cfg_node_newf(rd_state->cfg, binding_root, "shift");}
               if(binding.modifiers & WM_Modifier_Alt)   {cfg_node_newf(rd_state->cfg, binding_root, "alt");}
             }

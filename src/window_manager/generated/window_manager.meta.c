@@ -4,7 +4,7 @@
 //- GENERATED CODE
 
 C_LINKAGE_BEGIN
-String8 wm_key_display_name_table[143] =
+String8 wm_key_display_name_table[144] =
 {
 str8_lit_comp("Invalid Key"),
 str8_lit_comp("Escape"),
@@ -149,9 +149,10 @@ str8_lit_comp("Numpad 9"),
 str8_lit_comp("Left Mouse Button"),
 str8_lit_comp("Middle Mouse Button"),
 str8_lit_comp("Right Mouse Button"),
+str8_lit_comp("Cmd"),
 };
 
-String8 wm_key_cfg_name_table[143] =
+String8 wm_key_cfg_name_table[144] =
 {
 str8_lit_comp("null"),
 str8_lit_comp("esc"),
@@ -296,6 +297,7 @@ str8_lit_comp("numpad_9"),
 str8_lit_comp("left_mouse"),
 str8_lit_comp("middle_mouse"),
 str8_lit_comp("right_mouse"),
+str8_lit_comp("cmd"),
 };
 
 C_LINKAGE_END

@@ -179,6 +179,14 @@ update_tick_idx(void)
 internal B32
 update(void)
 {
+#if OS_MAC && defined(__OBJC__)
+  // The custom AppKit loop does not run NSApplication's per-event pool.
+  // Drain autoreleased Cocoa/Metal objects after every update, including
+  // updates entered from native resize callbacks. GPU work retains its own
+  // dependencies; explicit cross-frame renderer ownership remains unchanged.
+  @autoreleasepool
+  {
+#endif
   ProfTick(0);
   ins_atomic_u64_inc_eval(&global_update_tick_idx);
 #if defined(FONT_CACHE_H)
@@ -190,6 +198,9 @@ update(void)
   B32 result = 0;
 #endif
   return result;
+#if OS_MAC && defined(__OBJC__)
+  }
+#endif
 }
 
 internal void
