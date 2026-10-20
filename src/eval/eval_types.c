@@ -3093,7 +3093,7 @@ E_TYPE_EXPAND_INFO_FUNCTION_DEF(folder)
         local_filter = str8_skip(local_filter, folder_pos_in_filter+folder_path.size);
         local_filter = str8_skip_chop_slashes(local_filter);
       }
-      else
+      else if(!str8_match(folder_path, str8_lit("/"), 0))
       {
         MemoryZeroStruct(&local_filter);
       }
@@ -3151,6 +3151,8 @@ E_TYPE_EXPAND_INFO_FUNCTION_DEF(folder)
 E_TYPE_EXPAND_RANGE_FUNCTION_DEF(folder)
 {
   E_FolderAccel *accel = (E_FolderAccel *)user_data;
+  B32 need_separator = (accel->folder_path.size != 0 &&
+                       !char_is_slash(accel->folder_path.str[accel->folder_path.size-1]));
   U64 out_idx = 0;
   for(U64 idx = idx_range.min; idx < idx_range.max; idx += 1, out_idx += 1)
   {
@@ -3159,13 +3161,13 @@ E_TYPE_EXPAND_RANGE_FUNCTION_DEF(folder)
     if(0 <= idx && idx < accel->folders.count)
     {
       String8 folder_name = accel->folders.v[idx - 0];
-      String8 folder_path = push_str8f(scratch.arena, "%S%s%S", accel->folder_path, accel->folder_path.size != 0 ? "/" : "", folder_name);
+      String8 folder_path = push_str8f(scratch.arena, "%S%s%S", accel->folder_path, need_separator ? "/" : "", folder_name);
       path_expr_string = push_str8f(arena, "folder:\"%S/\"", escaped_from_raw_str8(scratch.arena, folder_path));
     }
     else if(accel->folders.count <= idx && idx < accel->folders.count + accel->files.count)
     {
       String8 file_name = accel->files.v[idx - accel->folders.count];
-      String8 file_path = push_str8f(scratch.arena, "%S%s%S", accel->folder_path, accel->folder_path.size != 0 ? "/" : "", file_name);
+      String8 file_path = push_str8f(scratch.arena, "%S%s%S", accel->folder_path, need_separator ? "/" : "", file_name);
       path_expr_string = push_str8f(arena, "file:\"%S\"", escaped_from_raw_str8(scratch.arena, file_path));
     }
     evals_out[out_idx] = e_eval_from_string(path_expr_string);
