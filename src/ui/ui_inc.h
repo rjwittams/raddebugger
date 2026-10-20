@@ -6,5 +6,6 @@
 
 #include "ui_core.h"
 #include "ui_basic_widgets.h"
+#include "ui_scroll_region.h"
 
 #endif // UI_INC_H

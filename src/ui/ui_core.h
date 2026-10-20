@@ -151,6 +151,7 @@ struct UI_Event
   String8List paths;
   Vec2F32 pos;
   Vec2F32 delta_2f32;
+  B32 scroll_is_precise;
   Vec2S32 delta_2s32;
   U64 timestamp_us;
 };
@@ -246,6 +247,15 @@ struct UI_AnimationInfo
 };
 
 ////////////////////////////////
+//~ Scrollbar Style
+
+typedef enum UI_ScrollBarStyle
+{
+  UI_ScrollBarStyle_Classic,
+  UI_ScrollBarStyle_Overlay,
+} UI_ScrollBarStyle;
+
+////////////////////////////////
 //~ rjf: Scroll Positions
 
 typedef struct UI_ScrollPt UI_ScrollPt;
@@ -253,6 +263,8 @@ struct UI_ScrollPt
 {
   S64 idx;
   F32 off;
+  F32 target_off; // persistent fraction; off remains the animation displacement
+  F32 remainder;  // unapplied input when snapping precise movement to rows
 };
 
 typedef union UI_ScrollPt2 UI_ScrollPt2;
@@ -346,6 +358,7 @@ typedef U64 UI_BoxFlags;
 # define UI_BoxFlag_HasFuzzyMatchRanges       (UI_BoxFlags)(1ull<<54)
 # define UI_BoxFlag_RoundChildrenByParent     (UI_BoxFlags)(1ull<<55)
 # define UI_BoxFlag_SquishAnchored            (UI_BoxFlags)(1ull<<56)
+# define UI_BoxFlag_ScrollPrecise             (UI_BoxFlags)(1ull<<57)
 
 //- rjf: debug
 # define UI_BoxFlag_Debug                     (UI_BoxFlags)(1ull<<63)
@@ -526,6 +539,7 @@ struct UI_Signal
   UI_Box *box;
   WM_Modifiers event_flags;
   Vec2S16 scroll;
+  Vec2F32 scroll_px; // precise movement, only for ScrollPrecise consumers
   UI_SignalFlags f;
 };
 
@@ -705,6 +719,7 @@ struct UI_State
   UI_IconInfo icon_info;
   UI_Theme *theme;
   UI_AnimationInfo animation_info;
+  UI_ScrollBarStyle scroll_bar_style;
   WM_Window window;
   UI_EventList *events;
   Vec2F32 mouse;
@@ -791,6 +806,8 @@ internal UI_Size ui_size(UI_SizeKind kind, F32 value, F32 strictness);
 internal UI_ScrollPt ui_scroll_pt(S64 idx, F32 off);
 internal void ui_scroll_pt_target_idx(UI_ScrollPt *v, S64 idx);
 internal void ui_scroll_pt_clamp_idx(UI_ScrollPt *v, Rng1S64 range);
+internal F32 ui_scroll_pt_offset(UI_ScrollPt v);
+internal void ui_scroll_pt_scroll(UI_ScrollPt *v, F32 delta, Rng1S64 range, B32 snap);
 
 ////////////////////////////////
 //~ rjf: Box Type Functions
@@ -825,6 +842,10 @@ internal UI_State *ui_get_selected_state(void);
 //~ rjf: Implicit State Accessors/Mutators
 
 //- rjf: per-frame info
+// Scrollbar style belongs to the selected UI state; new states use classic.
+internal void ui_set_active_scroll_bar_style(UI_ScrollBarStyle style);
+internal UI_ScrollBarStyle ui_active_scroll_bar_style(void);
+
 internal Arena *           ui_build_arena(void);
 internal WM_Window         ui_window(void);
 internal Vec2F32           ui_mouse(void);

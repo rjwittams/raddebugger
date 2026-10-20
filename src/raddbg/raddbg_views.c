@@ -43,8 +43,14 @@ rd_code_view_build(Arena *arena, RD_CodeViewState *cv, RD_CodeViewBuildFlags fla
   F32 code_line_height = ceil_f32(fnt_line_height_from_metrics(&code_font_metrics) * 1.5f);
   F32 big_glyph_advance = fnt_dim_from_tag_size_string(code_font, code_font_size, 0, 0, str8_lit("H")).x;
   Vec2F32 panel_box_dim = dim_2f32(rect);
-  F32 scroll_bar_dim = floor_f32(main_font_size*1.5f);
-  Vec2F32 code_area_dim = v2f32(panel_box_dim.x - scroll_bar_dim, panel_box_dim.y - scroll_bar_dim);
+  UI_ScrollRegionParams scroll_region_params = {0};
+  UI_FontSize(main_font_size)
+  {
+    scroll_region_params = ui_scroll_region_params(r2f32p(0, 0, panel_box_dim.x, panel_box_dim.y),
+                                                   UI_ScrollAxisPolicy_Always, UI_ScrollAxisPolicy_Always);
+  }
+  UI_ScrollRegion scroll_region = ui_scroll_region_layout(scroll_region_params);
+  Vec2F32 code_area_dim = dim_2f32(scroll_region.viewport);
   S64 num_possible_visible_lines = (S64)(code_area_dim.y/code_line_height)+1;
   D_Entity *thread = d_entity_from_handle(rd_regs()->thread);
   D_Entity *process = d_entity_ancestor_from_kind(thread, D_EntityKind_Process);
@@ -347,10 +353,37 @@ rd_code_view_build(Arena *arena, RD_CodeViewState *cv, RD_CodeViewBuildFlags fla
   }
   
   //////////////////////////////
+  //- rjf: calculate scroll bounds
+  //
+  S64 line_size_x = 0;
+  Rng1S64 scroll_idx_rng[Axis2_COUNT] = {0};
+  {
+    line_size_x = (text_info->lines_max_size*big_glyph_advance*3)/2;
+    line_size_x = ClampBot(line_size_x, (S64)big_glyph_advance*120);
+    line_size_x = ClampBot(line_size_x, (S64)code_area_dim.x);
+    scroll_idx_rng[Axis2_X] = r1s64(0, line_size_x-(S64)code_area_dim.x);
+    scroll_idx_rng[Axis2_Y] = r1s64(0, (S64)text_patched.line_map.total_line_count-1);
+  }
+
+  // Build both bars before the content, then use their requested positions
+  // for this frame's virtualized lines. The view still owns wheel/navigation.
+  UI_ScrollRegionAxis scroll_axes[Axis2_COUNT] = {0};
+  scroll_axes[Axis2_X] = (UI_ScrollRegionAxis){scroll_pos.x, scroll_idx_rng[Axis2_X], (S64)code_area_dim.x};
+  scroll_axes[Axis2_Y] = (UI_ScrollRegionAxis){scroll_pos.y, scroll_idx_rng[Axis2_Y], num_possible_visible_lines};
+  UI_Key code_area_key = ui_key_from_string(ui_active_seed_key(), str8_lit("###code_area"));
+  UI_ScrollRegionSignal scroll_region_sig = ui_scroll_region_build(ui_top_parent(), code_area_key, &scroll_region, scroll_axes,
+                                                                  UI_BoxFlag_Scroll|UI_BoxFlag_ScrollPrecise|
+                                                                  UI_BoxFlag_AllowOverflowX|UI_BoxFlag_AllowOverflowY);
+  UI_Box *container_box = scroll_region_sig.content_box;
+  container_box->child_layout_axis = Axis2_Y;
+  scroll_pos = scroll_region_sig.position;
+
+  //////////////////////////////
   //- rjf: determine visible line range / count
   //
-  Rng1S64 visible_line_num_range = r1s64(scroll_pos.y.idx + (S64)(scroll_pos.y.off) + 1 - !!(scroll_pos.y.off < 0),
-                                         scroll_pos.y.idx + (S64)(scroll_pos.y.off) + 1 + num_possible_visible_lines);
+  F32 visible_scroll_y = ui_scroll_pt_offset(scroll_pos.y);
+  Rng1S64 visible_line_num_range = r1s64(scroll_pos.y.idx + (S64)floor_f32(visible_scroll_y) + 1,
+                                        scroll_pos.y.idx + (S64)floor_f32(visible_scroll_y) + 2 + num_possible_visible_lines);
   Rng1S64 target_visible_line_num_range = r1s64(scroll_pos.y.idx + 1,
                                                 scroll_pos.y.idx + 1 + num_possible_visible_lines);
   U64 visible_line_count = 0;
@@ -364,19 +397,6 @@ rd_code_view_build(Arena *arena, RD_CodeViewState *cv, RD_CodeViewBuildFlags fla
     target_visible_line_num_range.min = Max(1, target_visible_line_num_range.min);
     target_visible_line_num_range.max = Max(1, target_visible_line_num_range.max);
     visible_line_count = (U64)dim_1s64(visible_line_num_range)+1;
-  }
-  
-  //////////////////////////////
-  //- rjf: calculate scroll bounds
-  //
-  S64 line_size_x = 0;
-  Rng1S64 scroll_idx_rng[Axis2_COUNT] = {0};
-  {
-    line_size_x = (text_info->lines_max_size*big_glyph_advance*3)/2;
-    line_size_x = ClampBot(line_size_x, (S64)big_glyph_advance*120);
-    line_size_x = ClampBot(line_size_x, (S64)code_area_dim.x);
-    scroll_idx_rng[Axis2_X] = r1s64(0, line_size_x-(S64)code_area_dim.x);
-    scroll_idx_rng[Axis2_Y] = r1s64(0, (S64)text_patched.line_map.total_line_count-1);
   }
   
   //////////////////////////////
@@ -475,7 +495,7 @@ rd_code_view_build(Arena *arena, RD_CodeViewState *cv, RD_CodeViewBuildFlags fla
     code_slice_params.catchall_margin_width_px  = catchall_margin_width_px;
     code_slice_params.line_num_width_px         = line_num_width_px;
     code_slice_params.line_text_max_width_px    = (F32)line_size_x;
-    code_slice_params.margin_float_off_px       = scroll_pos.x.idx + floor_f32(scroll_pos.x.off);
+    code_slice_params.margin_float_off_px       = scroll_pos.x.idx + floor_f32(ui_scroll_pt_offset(scroll_pos.x));
     
     // rjf: fill line text / ranges
     {
@@ -767,21 +787,6 @@ rd_code_view_build(Arena *arena, RD_CodeViewState *cv, RD_CodeViewBuildFlags fla
   }
   
   //////////////////////////////
-  //- rjf: build container
-  //
-  UI_Box *container_box = &ui_nil_box;
-  {
-    ui_set_next_pref_width(ui_px(code_area_dim.x, 1));
-    ui_set_next_pref_height(ui_px(code_area_dim.y, 1));
-    ui_set_next_child_layout_axis(Axis2_Y);
-    container_box = ui_build_box_from_stringf(UI_BoxFlag_Clip|
-                                              UI_BoxFlag_Scroll|
-                                              UI_BoxFlag_AllowOverflowX|
-                                              UI_BoxFlag_AllowOverflowY,
-                                              "###code_area");
-  }
-  
-  //////////////////////////////
   //- rjf: cancelled search query -> center cursor
   //
   if(!search_query_is_active && cv->drifted_for_search)
@@ -914,8 +919,8 @@ rd_code_view_build(Arena *arena, RD_CodeViewState *cv, RD_CodeViewBuildFlags fla
   UI_Parent(container_box)
   {
     //- rjf: build fractional space
-    container_box->view_off.x = container_box->view_off_target.x = scroll_pos.x.idx + scroll_pos.x.off;
-    container_box->view_off.y = container_box->view_off_target.y = code_line_height*mod_f32(scroll_pos.y.off, 1.f) + code_line_height*(scroll_pos.y.off < 0) - code_line_height*(scroll_pos.y.off == -1.f && scroll_pos.y.idx == 1);
+    container_box->view_off.x = container_box->view_off_target.x = scroll_pos.x.idx + ui_scroll_pt_offset(scroll_pos.x);
+    container_box->view_off.y = container_box->view_off_target.y = code_line_height*(visible_scroll_y - floor_f32(visible_scroll_y));
     
     //- rjf: build code slice
     RD_CodeSliceSignal sig = {0};
@@ -1050,45 +1055,13 @@ rd_code_view_build(Arena *arena, RD_CodeViewState *cv, RD_CodeViewBuildFlags fla
   }
   
   //////////////////////////////
-  //- rjf: build horizontal scroll bar
-  //
-  {
-    ui_set_next_fixed_x(0);
-    ui_set_next_fixed_y(code_area_dim.y);
-    ui_set_next_fixed_width(panel_box_dim.x - scroll_bar_dim);
-    ui_set_next_fixed_height(scroll_bar_dim);
-    {
-      scroll_pos.x = ui_scroll_bar(Axis2_X,
-                                   ui_px(scroll_bar_dim, 1.f),
-                                   scroll_pos.x,
-                                   scroll_idx_rng[Axis2_X],
-                                   (S64)code_area_dim.x);
-    }
-  }
-  
-  //////////////////////////////
-  //- rjf: build vertical scroll bar
-  //
-  {
-    ui_set_next_fixed_x(code_area_dim.x);
-    ui_set_next_fixed_y(0);
-    ui_set_next_fixed_width(scroll_bar_dim);
-    ui_set_next_fixed_height(panel_box_dim.y - scroll_bar_dim);
-    {
-      scroll_pos.y = ui_scroll_bar(Axis2_Y,
-                                   ui_px(scroll_bar_dim, 1.f),
-                                   scroll_pos.y,
-                                   scroll_idx_rng[Axis2_Y],
-                                   num_possible_visible_lines);
-    }
-  }
-  
-  //////////////////////////////
   //- rjf: top-level container interaction (scrolling)
   //
   if(text_is_ready)
   {
     UI_Signal sig = ui_signal_from_box(container_box);
+    ui_scroll_pt_scroll(&scroll_pos.x, sig.scroll_px.x, scroll_idx_rng[Axis2_X], 0);
+    ui_scroll_pt_scroll(&scroll_pos.y, sig.scroll_px.y/code_line_height, scroll_idx_rng[Axis2_Y], 0);
     if(sig.scroll.x != 0)
     {
       S64 new_idx = scroll_pos.x.idx+sig.scroll.x*big_glyph_advance;
@@ -3043,14 +3016,20 @@ RD_VIEW_UI_FUNCTION_DEF(memory)
   //////////////////////////////
   //- rjf: calculate rectangles
   //
-  F32 scroll_bar_dim = floor_f32(ui_bottom_font_size()*1.5f);
   Vec2F32 panel_dim = dim_2f32(rect);
   F32 footer_dim = floor_f32(tab_font_size*3.f);
   Rng2F32 addrbar_rect = r2f32p(0, 0, panel_dim.x, tab_font_size*3.f);
   Rng2F32 peekbar_rect = r2f32p(0, addrbar_rect.y1, panel_dim.x, addrbar_rect.y1 + tab_font_size*3.f);
   Rng2F32 header_rect = r2f32p(0, peekbar_rect.y1, panel_dim.x, peekbar_rect.y1 + row_height_px);
-  Rng2F32 footer_rect = r2f32p(0, panel_dim.y-footer_dim, panel_dim.x-scroll_bar_dim, panel_dim.y);
-  Rng2F32 content_rect = r2f32p(0, header_rect.y1, panel_dim.x-scroll_bar_dim, panel_dim.y);
+  UI_ScrollRegionParams memory_region_params = {0};
+  UI_FontSize(ui_bottom_font_size())
+  {
+    memory_region_params = ui_scroll_region_params(r2f32p(0, header_rect.y1, panel_dim.x, Max(header_rect.y1, panel_dim.y-footer_dim)),
+                                                   UI_ScrollAxisPolicy_Off, UI_ScrollAxisPolicy_Always);
+  }
+  UI_ScrollRegion memory_region = ui_scroll_region_layout(memory_region_params);
+  Rng2F32 footer_rect = r2f32p(0, panel_dim.y-footer_dim, memory_region.viewport.x1, panel_dim.y);
+  Rng2F32 content_rect = r2f32p(0, header_rect.y1, memory_region.viewport.x1, panel_dim.y);
   
   //////////////////////////////
   //- rjf: determine visible range of rows (occluded & non-occluded)
@@ -3404,6 +3383,32 @@ RD_VIEW_UI_FUNCTION_DEF(memory)
   Rng1U64 selection = union_1u64(r1u64(cursor_base_vaddr, cursor_base_vaddr+cursor_size-1),
                                  r1u64(mark_base_vaddr, mark_base_vaddr+cursor_size-1));
   
+  //////////////////////////////
+  //- rjf: build main container
+  //
+  UI_Box *container_box = &ui_nil_box;
+  {
+    Vec2F32 dim = dim_2f32(rect);
+    ui_set_next_fixed_width(dim.x);
+    ui_set_next_fixed_height(dim.y);
+    ui_set_next_child_layout_axis(Axis2_Y);
+    container_box = ui_build_box_from_stringf(0, "memory_view_container");
+  }
+
+  // Keep fixed controls outside the region. Build bars before the memory
+  // rows so overlays win hits, and apply dragging before fetching bytes.
+  UI_ScrollRegionAxis scroll_axes[Axis2_COUNT] = {0};
+  scroll_axes[Axis2_Y] = (UI_ScrollRegionAxis){scroll_pos.y, scroll_idx_rng, num_possible_visible_rows};
+  UI_Key scroll_key = ui_key_from_string(container_box->key, str8_lit("scrollable_box"));
+  UI_ScrollRegionSignal scroll_sig = {0};
+  UI_FontSize(ui_bottom_font_size())
+  {
+    scroll_sig = ui_scroll_region_build(container_box, scroll_key, &memory_region, scroll_axes,
+                                        UI_BoxFlag_Scroll|UI_BoxFlag_AllowOverflowY);
+  }
+  scroll_pos.y = scroll_sig.position.y;
+  UI_Box *scrollable_box = scroll_sig.content_box;
+
   ////////////////////////////
   //- rjf: determine visible range of rows (including occluded)
   //
@@ -3895,35 +3900,6 @@ RD_VIEW_UI_FUNCTION_DEF(memory)
     access_close(access);
   }
   
-  //////////////////////////////
-  //- rjf: build main container
-  //
-  UI_Box *container_box = &ui_nil_box;
-  {
-    Vec2F32 dim = dim_2f32(rect);
-    ui_set_next_fixed_width(dim.x);
-    ui_set_next_fixed_height(dim.y);
-    ui_set_next_child_layout_axis(Axis2_Y);
-    container_box = ui_build_box_from_stringf(0, "memory_view_container");
-  }
-  
-  //////////////////////////////
-  //- rjf: build scroll bar
-  //
-  UI_Parent(container_box) UI_FontSize(ui_bottom_font_size())
-  {
-    ui_set_next_fixed_x(content_rect.x1);
-    ui_set_next_fixed_y(header_rect.y0);
-    ui_set_next_fixed_width(scroll_bar_dim);
-    ui_set_next_fixed_height(dim_2f32(rect).y - dim_2f32(addrbar_rect).y - dim_2f32(peekbar_rect).y);
-    {
-      scroll_pos.y = ui_scroll_bar(Axis2_Y,
-                                   ui_px(scroll_bar_dim, 1.f),
-                                   scroll_pos.y,
-                                   scroll_idx_rng,
-                                   num_possible_visible_rows);
-    }
-  }
   
   //////////////////////////////
   //- rjf: build address bar
@@ -4054,7 +4030,7 @@ RD_VIEW_UI_FUNCTION_DEF(memory)
       ui_set_next_pref_width(ui_children_sum(1));
       ui_row_begin();
       F32 x_off_px = 0;
-      F32 x_max_px = dim_2f32(rect).x - scroll_bar_dim;
+      F32 x_max_px = memory_region.viewport.x1;
       for EachNode(n, String8Node, peek_type_list.first)
       {
         String8 type_string = n->string;
@@ -4282,30 +4258,20 @@ RD_VIEW_UI_FUNCTION_DEF(memory)
     }
   }
   
-  //////////////////////////////
-  //- rjf: build scrollable box
-  //
-  UI_Box *scrollable_box = &ui_nil_box;
-  UI_Parent(container_box)
-  {
-    ui_set_next_fixed_x(content_rect.x0);
-    ui_set_next_fixed_y(content_rect.y0);
-    ui_set_next_fixed_width(dim_2f32(content_rect).x);
-    ui_set_next_fixed_height(dim_2f32(content_rect).y);
-    scrollable_box = ui_build_box_from_stringf(UI_BoxFlag_Clip|
-                                               UI_BoxFlag_Scroll|
-                                               UI_BoxFlag_AllowOverflowY,
-                                               "scrollable_box");
-    container_box->view_off.x = container_box->view_off_target.x = scroll_pos.x.idx + scroll_pos.x.off;
-    scrollable_box->view_off.y = scrollable_box->view_off_target.y = floor_f32(row_height_px*mod_f32(scroll_pos.y.off, 1.f) + row_height_px*(scroll_pos.y.off < 0));
-  }
+  // The overscan row keeps its original screen position while the region
+  // clips it beneath the fixed header, rather than moving the clip rectangle.
+  container_box->view_off.x = container_box->view_off_target.x = scroll_pos.x.idx + scroll_pos.x.off;
+  scrollable_box->view_off.y = scrollable_box->view_off_target.y =
+    header_rect.y1 - content_rect.y0 +
+    floor_f32(row_height_px*mod_f32(scroll_pos.y.off, 1.f) + row_height_px*(scroll_pos.y.off < 0));
   
   //////////////////////////////
   //- rjf: build row container/overlay
   //
   UI_Box *row_container_box = &ui_nil_box;
   UI_Box *row_overlay_box = &ui_nil_box;
-  UI_Parent(scrollable_box) UI_WidthFill UI_HeightFill
+  UI_Parent(scrollable_box) UI_WidthFill
+    UI_PrefHeight(ui_px(dim_2f32(memory_region.viewport).y + scrollable_box->view_off.y, 1.f))
   {
     ui_set_next_child_layout_axis(Axis2_Y);
     row_container_box = ui_build_box_from_stringf(UI_BoxFlag_Clickable, "row_container");
