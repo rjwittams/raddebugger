@@ -17,6 +17,11 @@ if [[ "${asan:-0}" == "1" ]]; then
   auto_compile_flags="$auto_compile_flags -fsanitize=address"
 fi
 
+if [[ "${division_checks:-0}" == "1" ]]; then
+  echo "[integer division checks enabled]"
+  auto_compile_flags="$auto_compile_flags -fsanitize=integer-divide-by-zero -fno-sanitize-recover=integer-divide-by-zero"
+fi
+
 # --- Mix Git Commit ID -------------------------------------------------------
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   auto_compile_flags="$auto_compile_flags -DBUILD_GIT_HASH=\"$(git describe --always --dirty)\" -DBUILD_GIT_HASH_FULL=\"$(git rev-parse HEAD)\""
