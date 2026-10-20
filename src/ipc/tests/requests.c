@@ -416,6 +416,21 @@ test_private_discovery(void)
   IPC_Server *server = ipc_server_open_local(directory, 0);
   Check(server != 0);
   Check(ipc_server_open_local(directory, 0) == 0);
+#if OS_WINDOWS
+  AlignType(8) U8 public_sid[SECURITY_MAX_SID_SIZE];
+  DWORD public_sid_size = sizeof(public_sid);
+  Check(CreateWellKnownSid(WinWorldSid, 0, public_sid, &public_sid_size));
+  AlignType(8) U8 public_acl[sizeof(ACL)+sizeof(ACCESS_ALLOWED_ACE)+SECURITY_MAX_SID_SIZE];
+  Check(InitializeAcl((PACL)public_acl, sizeof(public_acl), ACL_REVISION));
+  Check(AddAccessAllowedAce((PACL)public_acl, ACL_REVISION, FILE_ALL_ACCESS, public_sid));
+  Check(SetNamedSecurityInfoW(temp_file, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION,
+                             0, 0, (PACL)public_acl, 0) == ERROR_SUCCESS);
+#else
+  Check(chmod((char *)push_cstr(scratch.arena, root).str, 0755) == 0);
+#endif
+  Check(ipc_server_open_local(root, 0) == 0);
+  IPC_Response rejected = ipc_request_local(scratch.arena, root, get_process_info()->pid, str8_lit("not private"), now_time_us()+Million(1));
+  Check(rejected.status == IPC_Status_Unavailable && rejected.data.size == 0);
   RequestFixture fixture = {server, str8_lit("private request"), str8_lit("authenticated reply")};
   Thread thread = thread_launch(request_server_thread, &fixture);
   Check(thread.u64[0] != 0);
