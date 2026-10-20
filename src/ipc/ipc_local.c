@@ -29,6 +29,25 @@ struct IPC_Registration
 #endif
 };
 
+internal String8
+ipc_default_directory(Arena *arena)
+{
+#if OS_WINDOWS
+  WCHAR path[MAX_PATH];
+  if(FAILED(SHGetFolderPathW(0, CSIDL_LOCAL_APPDATA, 0, SHGFP_TYPE_CURRENT, path))) { return str8_zero(); }
+  return str8f(arena, "%S/raddbg-ipc", str8_from_16(arena, str16_cstring((U16 *)path)));
+#elif OS_LINUX
+  char *runtime = getenv("XDG_RUNTIME_DIR");
+  if(runtime != 0 && runtime[0] == '/') { return str8f(arena, "%s/raddbg-ipc", runtime); }
+  return str8f(arena, "/tmp/raddbg-ipc-%u", (unsigned)geteuid());
+#elif OS_MAC
+  String8 cache = get_process_info()->user_program_cache_data_path;
+  return cache.size != 0 ? str8f(arena, "%S/raddbg-ipc", cache) : str8_zero();
+#else
+  return str8_zero();
+#endif
+}
+
 internal B32
 ipc_process_birth(U32 pid, U256 *out)
 {
