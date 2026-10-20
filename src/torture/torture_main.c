@@ -213,6 +213,7 @@
 #include "rdi_from_pdb/tests/rdi_from_pdb_tests.c"
 #include "raddbg/tests/raddbg_tests.c"
 #include "eval2/tests/eval2_tests.c"
+#include "torture_text.c"
 #include "torture_filesystem.c"
 #include "torture_config.c"
 
