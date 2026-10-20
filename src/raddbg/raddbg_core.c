@@ -1474,6 +1474,43 @@ rd_file_path_from_eval_string(Arena *arena, String8 string)
   return result;
 }
 
+internal E_TLSVAddrResolution
+rd_tls_vaddr_from_platform_vaddr(E_Space space, U64 platform_tls_vaddr)
+{
+  E_TLSVAddrResolution result = {0};
+  D_Entity *process = rd_ctrl_entity_from_eval_space(space);
+  D_Entity *thread = rd_ctrl_entity_from_eval_space(e_base_ctx->thread_reg_space);
+  if(process != &d_entity_nil &&
+     process->kind == D_EntityKind_Process &&
+     process->os == OperatingSystem_Mac &&
+     thread != &d_entity_nil &&
+     thread->kind == D_EntityKind_Thread)
+  {
+    D_PlatformTLSResolution resolution = d_query_cached_platform_tls_vaddr_from_thread_vaddr(thread, platform_tls_vaddr);
+    switch(resolution.status)
+    {
+      case D_PlatformTLSResolutionStatus_Pending:
+      {
+        result.status = E_TLSVAddrResolutionStatus_Pending;
+      }break;
+      case D_PlatformTLSResolutionStatus_Resolved:
+      {
+        result.status = E_TLSVAddrResolutionStatus_Resolved;
+        result.vaddr = resolution.vaddr;
+      }break;
+      case D_PlatformTLSResolutionStatus_Failed:
+      {
+        result.status = E_TLSVAddrResolutionStatus_Failed;
+      }break;
+      default:
+      {
+        result.status = E_TLSVAddrResolutionStatus_Failed;
+      }break;
+    }
+  }
+  return result;
+}
+
 internal String8
 rd_eval_string_from_file_path(Arena *arena, String8 string)
 {
@@ -12806,6 +12843,7 @@ rd_frame(void)
       ctx->space_gen   = rd_eval_space_gen;
       ctx->space_read  = rd_eval_space_read;
       ctx->space_write = rd_eval_space_write;
+      ctx->tls_vaddr_from_platform_vaddr = rd_tls_vaddr_from_platform_vaddr;
     }
     e_select_base_ctx(eval_base_ctx);
     
