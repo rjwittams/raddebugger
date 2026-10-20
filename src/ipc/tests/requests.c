@@ -415,6 +415,7 @@ test_private_discovery(void)
   String8 directory = str8f(scratch.arena, "%S/endpoint", root);
   IPC_Server *server = ipc_server_open_local(directory, 0);
   Check(server != 0);
+  Check(ipc_server_open_local(directory, 0) == 0);
   RequestFixture fixture = {server, str8_lit("private request"), str8_lit("authenticated reply")};
   Thread thread = thread_launch(request_server_thread, &fixture);
   Check(thread.u64[0] != 0);
@@ -424,6 +425,15 @@ test_private_discovery(void)
   ipc_server_close(server);
   response = ipc_request_local(scratch.arena, directory, get_process_info()->pid, fixture.request, now_time_us()+Million(1));
   Check(response.status == IPC_Status_Unavailable && response.data.size == 0);
+  server = ipc_server_open_local(directory, 0);
+  Check(server != 0);
+  fixture = (RequestFixture){server, str8_lit("fresh request"), str8_lit("fresh reply")};
+  thread = thread_launch(request_server_thread, &fixture);
+  Check(thread.u64[0] != 0);
+  response = ipc_request_local(scratch.arena, directory, get_process_info()->pid, fixture.request, now_time_us()+Million(3));
+  Check(response.status == IPC_Status_Success && str8_match(response.data, fixture.reply, 0));
+  Check(thread_join(thread, now_time_us()+Million(3)));
+  ipc_server_close(server);
   scratch_end(scratch);
 }
 
@@ -565,6 +575,8 @@ test_client_rejections(void)
   IPC_Endpoint endpoint = ipc_server_endpoint(server);
   U8 byte = 0;
   IPC_Response response = ipc_request(scratch.arena, endpoint, str8(&byte, MB(64)+1), now_time_us()+Million(3));
+  Check(response.status == IPC_Status_TooLarge && response.data.size == 0);
+  response = ipc_request_local(scratch.arena, str8_zero(), get_process_info()->pid, str8(&byte, MB(64)+1), now_time_us()+Million(3));
   Check(response.status == IPC_Status_TooLarge && response.data.size == 0);
   response = ipc_request(scratch.arena, endpoint, str8_lit("not sent"), 0);
   Check(response.status == IPC_Status_Timeout && response.data.size == 0);
