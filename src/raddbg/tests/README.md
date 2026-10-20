@@ -454,6 +454,8 @@ On macOS, run `python3 src/raddbg/tests/stop_navigation.py --debugger build/radd
 This requires the graphical debugger, clang, dsymutil and cleat. It creates an
 isolated three-file target and configuration, then checks breakpoint and assert
 stops across five restarts. IPC verifies the stop's function/file/line;
+the compiler-generated assert may stop as a trap or exception (x64 Clang emits
+`ud2`). Breakpoint stops must still report a breakpoint.
 `write_user_data` verifies that the exported selected source tab names the
 stopped file without an explicit Find Thread command. Caller-frame selection
 and local evaluation are checked before restarting. Artifacts remain in the

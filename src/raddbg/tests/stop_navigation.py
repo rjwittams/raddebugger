@@ -68,15 +68,16 @@ def main():
                 raise AssertionError('Debugger did not become ready')
             time.sleep(.05)
         for cycle in range(args.cycles):
-            for command, name, function, cause in (
-                    ('restart', 'main.c', 'main', 'breakpoint'),
-                    ('run', 'caller.c', 'caller', 'breakpoint'),
-                    ('run', 'check.c', 'check_value', 'trap')):
+            for command, name, function, causes in (
+                    ('restart', 'main.c', 'main', ('breakpoint',)),
+                    ('run', 'caller.c', 'caller', ('breakpoint',)),
+                    ('run', 'check.c', 'check_value', ('trap', 'exception'))):
                 state = client.stopped(command)
                 frame = state['stack']['frames'][0]
                 assert frame['function'] == function and frame['source']['line'] == 5, state
                 assert Path(frame['source']['path']) == output/name, state
-                assert state['stop']['cause'] == cause, state
+                cause = state['stop']['cause']
+                assert cause in causes, state
                 deadline = time.monotonic()+3
                 selected = []
                 while time.monotonic() < deadline:
