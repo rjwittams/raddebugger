@@ -468,7 +468,13 @@ test_private_discovery(void)
 #if OS_WINDOWS
   Check(DeleteFileW((WCHAR *)alias16.str));
 #else
-  Check(unlink(alias_cstr) == 0);
+  Check(unlink(record_cstr) == 0);
+  Check(symlink("../record-alias", record_cstr) == 0);
+  rejected = ipc_request_local(scratch.arena, directory, get_process_info()->pid, str8_lit("symlink record"), now_time_us()+Million(1));
+  Check(rejected.status == IPC_Status_Unavailable && rejected.data.size == 0);
+  unchanged.id = 42;
+  Check(!ipc_server_receive(scratch.arena, server, &unchanged, 0) && unchanged.id == 42);
+  Check(unlink(record_cstr) == 0 && rename(alias_cstr, record_cstr) == 0);
 #endif
   RequestFixture fixture = {server, str8_lit("private request"), str8_lit("authenticated reply")};
   Thread thread = thread_launch(request_server_thread, &fixture);
