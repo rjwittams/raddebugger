@@ -21,7 +21,14 @@ optional `.eh_frame_hdr` count/table encodings in the generated executable,
 leaving its unwind records intact, then run the same C assertions. These
 check ELF unwind-index synthesis for both executable types.
 A headless build can be supplied as `--sender build/raddbg_non_graphical`.
-The sender and debugger must use compatible IPC transports.
+The sender and debugger must use the same authenticated framed transport.
+The common client calls the native binary with `--ipc --pid:PID --ipc_stdin`
+and sends UTF-8 command bytes on binary stdin, without argv quoting or newline
+conversion. It strictly decodes the reply as UTF-8; exceptional debug-info
+bytes retain the explicit base64 representation described below. The native
+sender discovers that exact live PID through a private registration and owns
+authentication/framing. Python never reads its secret or implements the wire
+protocol. Old fixed-port/address and shared-memory senders are incompatible.
 
 `c-gcc-unwind` is an optional macOS check using GNU `gcc-16` or `gcc` from
 PATH (not Apple's Clang alias). It requires version-3 EH-frame CIEs and no
