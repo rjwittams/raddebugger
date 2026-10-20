@@ -394,6 +394,36 @@ test_instances(void)
 }
 
 internal void
+test_random_instances(void)
+{
+  Temp scratch = scratch_begin(0, 0);
+  IPC_Server *servers[2] = {ipc_server_open_random(0, 0), ipc_server_open_random(0, 0)};
+  Check(servers[0] != 0 && servers[1] != 0);
+  IPC_Endpoint endpoints[2] = {ipc_server_endpoint(servers[0]), ipc_server_endpoint(servers[1])};
+  for(U64 idx = 0; idx < 2; idx += 1)
+  {
+    U128 id = endpoints[idx].instance_id;
+    U256 key = endpoints[idx].auth_key;
+    Check((id.u64[0] | id.u64[1]) != 0);
+    Check((key.u64[0] | key.u64[1] | key.u64[2] | key.u64[3]) != 0);
+  }
+  Check(!MemoryMatch(endpoints[0].instance_id.u8, endpoints[1].instance_id.u8, sizeof(U128)));
+  Check(!MemoryMatch(endpoints[0].auth_key.u8, endpoints[1].auth_key.u8, sizeof(U256)));
+  RequestFixture fixtures[2] = {{servers[0], str8_lit("first"), str8_lit("A")},
+                                {servers[1], str8_lit("second"), str8_lit("B")}};
+  for(U64 idx = 0; idx < 2; idx += 1)
+  {
+    Thread thread = thread_launch(request_server_thread, &fixtures[idx]);
+    Check(thread.u64[0] != 0);
+    IPC_Response response = ipc_request(scratch.arena, endpoints[idx], fixtures[idx].request, now_time_us()+Million(3));
+    Check(response.status == IPC_Status_Success && str8_match(response.data, fixtures[idx].reply, 0));
+    Check(thread_join(thread, now_time_us()+Million(3)));
+    ipc_server_close(servers[idx]);
+  }
+  scratch_end(scratch);
+}
+
+internal void
 test_recycled_endpoint(void)
 {
   Temp scratch = scratch_begin(0, 0);
@@ -779,6 +809,7 @@ entry_point(CmdLine *cmdline)
   run_case(cmdline, "empty_request_reply", test_empty_request_reply);
   run_case(cmdline, "large_request_reply", test_large_request_reply);
   run_case(cmdline, "instances", test_instances);
+  run_case(cmdline, "random_instances", test_random_instances);
   run_case(cmdline, "concurrent_clients", test_concurrent_clients);
   run_case(cmdline, "recycled_endpoint", test_recycled_endpoint);
   run_case(cmdline, "client_rejections", test_client_rejections);

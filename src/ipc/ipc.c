@@ -1,6 +1,13 @@
 // Copyright (c) 2026 Robert Wittams
 // Licensed under the MIT license (https://opensource.org/license/mit/)
 
+#if OS_WINDOWS
+# include <bcrypt.h>
+# pragma comment(lib, "bcrypt")
+#elif OS_LINUX || OS_MAC
+# include <sys/random.h>
+#endif
+
 #define IPC_HEADER_SIZE 72
 #define IPC_PAYLOAD_LIMIT MB(64)
 #define IPC_PEER_LIMIT 64
@@ -38,6 +45,30 @@ ipc_u64_from_wire(U8 *bytes)
   U64 result = 0;
   for(U64 idx = 0; idx < 8; idx += 1) { result |= (U64)bytes[idx] << (idx*8); }
   return result;
+}
+
+internal B32
+ipc_random_bytes(U8 *bytes, U64 size)
+{
+  if(size > 256) { return 0; }
+#if OS_WINDOWS
+  return BCryptGenRandom(0, bytes, (ULONG)size, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0;
+#elif OS_LINUX
+  for(U64 pos = 0; pos < size;)
+  {
+    S64 count = getrandom(bytes+pos, size-pos, GRND_NONBLOCK);
+    if(count > 0) { pos += (U64)count; }
+    else if(count == -1 && errno == EINTR) { continue; }
+    else { return 0; }
+  }
+  return 1;
+#elif OS_MAC
+  int result;
+  do { result = getentropy(bytes, size); } while(result == -1 && errno == EINTR);
+  return result == 0;
+#else
+  return 0;
+#endif
 }
 
 internal void
@@ -208,6 +239,18 @@ ipc_consume(Arena *arena, IPC_Server *server, IPC_Message *out)
   input->header_pos = input->data_pos = input->tag_pos = input->id = 0;
   MemoryZeroStruct(&input->payload_auth);
   return 1;
+}
+
+internal IPC_Server *
+ipc_server_open_random(U16 port, SOCK_WakeupFunctionType *wakeup)
+{
+  U8 bytes[48];
+  if(!ipc_random_bytes(bytes, sizeof(bytes))) { return 0; }
+  U128 instance_id = {0};
+  U256 auth_key = {0};
+  MemoryCopy(instance_id.u8, bytes, sizeof(instance_id.u8));
+  MemoryCopy(auth_key.u8, bytes+sizeof(instance_id.u8), sizeof(auth_key.u8));
+  return ipc_server_open(port, instance_id, auth_key, wakeup);
 }
 
 internal IPC_Server *
