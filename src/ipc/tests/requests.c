@@ -12,6 +12,7 @@
 #include "ipc/ipc.c"
 #if OS_MAC
 #include <libproc.h>
+#include <membership.h>
 #endif
 
 #define Check(c) do { if(!(c)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); abort_self(1); } } while(0)
@@ -475,6 +476,47 @@ test_private_discovery(void)
   unchanged.id = 42;
   Check(!ipc_server_receive(scratch.arena, server, &unchanged, 0) && unchanged.id == 42);
   Check(unlink(record_cstr) == 0 && rename(alias_cstr, record_cstr) == 0);
+#endif
+#if OS_WINDOWS
+  PACL original_acl = 0;
+  PSECURITY_DESCRIPTOR original_descriptor = 0;
+  Check(GetNamedSecurityInfoW((WCHAR *)record16.str, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                             0, 0, &original_acl, 0, &original_descriptor) == ERROR_SUCCESS);
+  Check(SetNamedSecurityInfoW((WCHAR *)record16.str, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION,
+                             0, 0, (PACL)public_acl, 0) == ERROR_SUCCESS);
+#else
+  Check(chmod(record_cstr, 0644) == 0);
+#endif
+  rejected = ipc_request_local(scratch.arena, directory, get_process_info()->pid, str8_lit("public record"), now_time_us()+Million(1));
+  Check(rejected.status == IPC_Status_Unavailable && rejected.data.size == 0);
+  unchanged.id = 42;
+  Check(!ipc_server_receive(scratch.arena, server, &unchanged, 0) && unchanged.id == 42);
+#if OS_WINDOWS
+  Check(SetNamedSecurityInfoW((WCHAR *)record16.str, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION,
+                             0, 0, original_acl, 0) == ERROR_SUCCESS);
+  LocalFree(original_descriptor);
+#else
+  Check(chmod(record_cstr, 0600) == 0);
+#endif
+#if OS_MAC
+  uuid_t owner_uuid;
+  Check(mbr_uid_to_uuid(geteuid(), owner_uuid) == 0);
+  acl_t extra_acl = acl_init(1);
+  Check(extra_acl != 0);
+  acl_entry_t extra_entry;
+  Check(acl_create_entry(&extra_acl, &extra_entry) == 0);
+  Check(acl_set_tag_type(extra_entry, ACL_EXTENDED_ALLOW) == 0 && acl_set_qualifier(extra_entry, owner_uuid) == 0);
+  acl_permset_t permissions;
+  Check(acl_get_permset(extra_entry, &permissions) == 0 && acl_add_perm(permissions, ACL_READ_DATA) == 0);
+  Check(acl_set_file(record_cstr, ACL_TYPE_EXTENDED, extra_acl) == 0);
+  acl_free(extra_acl);
+  rejected = ipc_request_local(scratch.arena, directory, get_process_info()->pid, str8_lit("ACL record"), now_time_us()+Million(1));
+  Check(rejected.status == IPC_Status_Unavailable && rejected.data.size == 0);
+  unchanged.id = 42;
+  Check(!ipc_server_receive(scratch.arena, server, &unchanged, 0) && unchanged.id == 42);
+  acl_t empty_acl = acl_init(0);
+  Check(empty_acl != 0 && acl_set_file(record_cstr, ACL_TYPE_EXTENDED, empty_acl) == 0);
+  acl_free(empty_acl);
 #endif
   RequestFixture fixture = {server, str8_lit("private request"), str8_lit("authenticated reply")};
   Thread thread = thread_launch(request_server_thread, &fixture);
