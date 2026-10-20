@@ -821,6 +821,11 @@ entry_point(CmdLine *cmdline)
   sock_init();
 #if OS_WINDOWS
   warm_native_socket_runtime();
+  // Native BCrypt controls also retain process-wide initialization handles.
+  // Prime the production byte counts without creating any RAD server/client.
+  U8 entropy[48];
+  Check(BCryptGenRandom(0, entropy, sizeof(entropy), BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0);
+  Check(BCryptGenRandom(0, entropy, sizeof(U64), BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0);
 #endif
   U64 before = descriptor_count();
   run_case(cmdline, "native_wire", test_native_wire);
