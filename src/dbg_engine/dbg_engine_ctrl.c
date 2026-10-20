@@ -5603,6 +5603,8 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
               {
                 D_Breakpoint *user_bp = (D_Breakpoint *)trap->id;
                 hit_user_bp = 1;
+                // A preferred trap-net hit can omit the overlapping user breakpoint's identity.
+                if(event->user_data == 0) {event->user_data = trap->id;}
                 if(user_bp != 0 && !(trap->id & bit64) && user_bp->condition.size != 0)
                 {
                   str8_list_push(temp.arena, &conditions, user_bp->condition);
