@@ -139,6 +139,7 @@ fp_raster(Arena *arena, FP_Handle handle, F32 size, FP_RasterFlags flags, String
     //- rjf: fill result
     result.atlas_dim = dim;
     result.advance   = (F32)total_width;
+    result.baseline  = (F32)baseline;
     result.atlas     = atlas;
     scratch_end(scratch);
   }
