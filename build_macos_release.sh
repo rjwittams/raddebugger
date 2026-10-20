@@ -130,7 +130,9 @@ build_slice()
   local run_metagen=$2
   local target="${arch}-apple-macos${deployment_target}"
   local -a build_args=(raddbg release)
-  if [[ "$run_metagen" != "1" ]]; then
+  if [[ "$run_metagen" == "1" ]]; then
+    build_args+=(meta)
+  else
     build_args+=(no_meta)
   fi
 
