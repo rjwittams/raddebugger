@@ -614,6 +614,11 @@ thread_launch(ThreadEntryPointFunctionType *f, void *p)
   entity->thread.func = f;
   entity->thread.ptr = p;
   entity->thread.handle = CreateThread(0, 0, w32_thread_entry_point, entity, 0, &entity->thread.tid);
+  if(entity->thread.handle == 0)
+  {
+    w32_entity_release(entity);
+    entity = 0;
+  }
   Thread result = {IntFromPtr(entity)};
   ProfEnd();
   return result;
