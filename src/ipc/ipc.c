@@ -13,6 +13,7 @@
 #define IPC_PEER_LIMIT 64
 
 typedef struct IPC_Input IPC_Input;
+typedef struct IPC_Registration IPC_Registration;
 struct IPC_Input
 {
   SOCK_Peer peer;
@@ -31,6 +32,7 @@ struct IPC_Server
   SOCK_Session socket;
   U128 instance_id;
   U256 auth_key;
+  IPC_Registration *registration;
   IPC_Input inputs[IPC_PEER_LIMIT];
   U64 buffered_bytes;
   Arena *receive_arena;
@@ -241,6 +243,8 @@ ipc_consume(Arena *arena, IPC_Server *server, IPC_Message *out)
   return 1;
 }
 
+#include "ipc_local.c"
+
 internal IPC_Server *
 ipc_server_open_random(U16 port, SOCK_WakeupFunctionType *wakeup)
 {
@@ -288,6 +292,7 @@ ipc_server_close(IPC_Server *server)
 {
   if(server != 0)
   {
+    ipc_registration_close(server->registration);
     sock_session_close(server->socket);
     for(U64 idx = 0; idx < ArrayCount(server->inputs); idx += 1) { free(server->inputs[idx].data.str); }
     arena_release(server->receive_arena);

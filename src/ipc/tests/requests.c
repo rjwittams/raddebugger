@@ -396,6 +396,38 @@ test_instances(void)
 }
 
 internal void
+test_private_discovery(void)
+{
+  Temp scratch = scratch_begin(0, 0);
+  String8 root = {0};
+#if OS_WINDOWS
+  WCHAR temp_path[MAX_PATH], temp_file[MAX_PATH];
+  DWORD size = GetTempPathW(ArrayCount(temp_path), temp_path);
+  Check(size != 0 && size < ArrayCount(temp_path));
+  Check(GetTempFileNameW(temp_path, L"rad", 0, temp_file) != 0);
+  Check(DeleteFileW(temp_file) && CreateDirectoryW(temp_file, 0));
+  root = str8_from_16(scratch.arena, str16_cstring((U16 *)temp_file));
+#else
+  U8 *path = push_cstr(scratch.arena, str8_lit("build/ipc-private.XXXXXX")).str;
+  Check(mkdtemp((char *)path) != 0);
+  root = str8_cstring((char *)path);
+#endif
+  String8 directory = str8f(scratch.arena, "%S/endpoint", root);
+  IPC_Server *server = ipc_server_open_local(directory, 0);
+  Check(server != 0);
+  RequestFixture fixture = {server, str8_lit("private request"), str8_lit("authenticated reply")};
+  Thread thread = thread_launch(request_server_thread, &fixture);
+  Check(thread.u64[0] != 0);
+  IPC_Response response = ipc_request_local(scratch.arena, directory, get_process_info()->pid, fixture.request, now_time_us()+Million(3));
+  Check(response.status == IPC_Status_Success && str8_match(response.data, fixture.reply, 0));
+  Check(thread_join(thread, now_time_us()+Million(3)));
+  ipc_server_close(server);
+  response = ipc_request_local(scratch.arena, directory, get_process_info()->pid, fixture.request, now_time_us()+Million(1));
+  Check(response.status == IPC_Status_Unavailable && response.data.size == 0);
+  scratch_end(scratch);
+}
+
+internal void
 test_transaction_ids(void)
 {
   Temp scratch = scratch_begin(0, 0);
@@ -841,6 +873,7 @@ entry_point(CmdLine *cmdline)
   run_case(cmdline, "large_request_reply", test_large_request_reply);
   run_case(cmdline, "instances", test_instances);
   run_case(cmdline, "random_instances", test_random_instances);
+  run_case(cmdline, "private_discovery", test_private_discovery);
   run_case(cmdline, "transaction_ids", test_transaction_ids);
   run_case(cmdline, "concurrent_clients", test_concurrent_clients);
   run_case(cmdline, "recycled_endpoint", test_recycled_endpoint);
