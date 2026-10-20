@@ -38,6 +38,7 @@ struct FP_RasterResult
   Vec2S16 atlas_dim;
   void *atlas;
   F32 advance;
+  F32 baseline; // Raster pixels down from the top of the bitmap.
 };
 
 ////////////////////////////////
