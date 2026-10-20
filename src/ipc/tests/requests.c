@@ -330,6 +330,7 @@ struct RequestFixture
   String8 request;
   String8 reply;
   U64 timeout_us;
+  U64 request_id;
 };
 
 internal void
@@ -340,6 +341,7 @@ request_server_thread(void *ptr)
   U64 endt_us = now_time_us()+(fixture->timeout_us != 0 ? fixture->timeout_us : Million(3));
   IPC_Message request = {0};
   Check(ipc_server_receive(scratch.arena, fixture->server, &request, endt_us));
+  fixture->request_id = request.id;
   Check(str8_match(request.data, fixture->request, 0));
   Check(ipc_server_reply(fixture->server, request, fixture->reply, endt_us));
   scratch_end(scratch);
@@ -390,6 +392,28 @@ test_instances(void)
   }
   ipc_server_close(a);
   ipc_server_close(b);
+  scratch_end(scratch);
+}
+
+internal void
+test_transaction_ids(void)
+{
+  Temp scratch = scratch_begin(0, 0);
+  IPC_Server *server = ipc_server_open(0, instance_id, auth_key, 0);
+  Check(server != 0);
+  U64 ids[2] = {0};
+  for(U64 idx = 0; idx < 2; idx += 1)
+  {
+    RequestFixture fixture = {server, str8_lit("request"), str8_lit("reply")};
+    Thread thread = thread_launch(request_server_thread, &fixture);
+    Check(thread.u64[0] != 0);
+    IPC_Response response = ipc_request(scratch.arena, ipc_server_endpoint(server), fixture.request, now_time_us()+Million(3));
+    Check(response.status == IPC_Status_Success && str8_match(response.data, fixture.reply, 0));
+    Check(thread_join(thread, now_time_us()+Million(3)));
+    ids[idx] = fixture.request_id;
+  }
+  Check(ids[0] != 0 && ids[1] != 0 && ids[0] != ids[1]);
+  ipc_server_close(server);
   scratch_end(scratch);
 }
 
@@ -530,7 +554,8 @@ struct NativeServer
 {
   NativeSocket listener;
   IPC_Endpoint endpoint;
-  String8 reply;
+  U64 reply_size;
+  U64 variant;
   U32 delay_ms;
 };
 
@@ -544,17 +569,33 @@ native_server_thread(void *ptr)
   U8 request[sizeof(wire_request)], expected[sizeof(wire_request)];
   native_read(peer, request, sizeof(request));
   MemoryCopy(expected, wire_request, sizeof(expected));
-  MemoryZero(expected+8, 8);
-  expected[8] = 1;
+  U8 id_bits = 0;
+  for(U64 idx = 8; idx < 16; idx += 1) { id_bits |= request[idx]; }
+  Check(id_bits != 0);
+  MemoryCopy(expected+8, request+8, 8);
   test_sign_frame(expected, sizeof(expected));
   Check(MemoryMatch(request, expected, sizeof(request)));
-  native_write(peer, server->reply);
+  U8 reply[sizeof(wire_reply)];
+  MemoryCopy(reply, wire_reply, sizeof(reply));
+  MemoryCopy(reply+8, request+8, 8);
+  switch(server->variant)
+  {
+    case 0: reply[8] ^= 1; break;
+    case 1: reply[24] ^= 128; break;
+    case 2: reply[16] = 1; reply[19] = 4; break;
+    case 3: reply[5] = 1; break;
+  }
+  test_sign_frame(reply, sizeof(reply));
+  if(server->variant == 7) { reply[40] ^= 1; }
+  if(server->variant == 8) { reply[72] ^= 1; }
+  if(server->variant == 9) { reply[sizeof(reply)-1] ^= 1; }
+  native_write(peer, str8(reply, server->reply_size));
   if(server->delay_ms != 0) { sleep_ms(server->delay_ms); }
   native_close(peer);
 }
 
 internal NativeServer
-native_server_open(String8 reply, U32 delay_ms)
+native_server_open(U64 reply_size, U32 delay_ms)
 {
   NativeServer server = {0};
   server.listener = socket(AF_INET, SOCK_STREAM, 0);
@@ -576,7 +617,8 @@ native_server_open(String8 reply, U32 delay_ms)
   server.endpoint.address.port = ntohs(addr.sin_port);
   server.endpoint.instance_id = instance_id;
   server.endpoint.auth_key = auth_key;
-  server.reply = reply;
+  server.reply_size = reply_size;
+  server.variant = max_U64;
   server.delay_ms = delay_ms;
   return server;
 }
@@ -587,27 +629,16 @@ test_reply_failures(void)
   Temp scratch = scratch_begin(0, 0);
   for(U64 variant = 0; variant < 10; variant += 1)
   {
-    U8 bytes[sizeof(wire_reply)];
-    MemoryCopy(bytes, wire_reply, sizeof(bytes));
-    MemoryZero(bytes+8, 8);
-    bytes[8] = 1;
-    U64 size = sizeof(bytes);
+    U64 size = sizeof(wire_reply);
     IPC_Status expected = IPC_Status_InvalidReply;
     switch(variant)
     {
-      case 0: bytes[8] = 2; break;
-      case 1: bytes[24] ^= 128; break;
-      case 2: bytes[16] = 1; bytes[19] = 4; break;
-      case 3: bytes[5] = 1; break;
       case 4: size = 7; expected = IPC_Status_Disconnected; break;
       case 5: size = 74; expected = IPC_Status_Disconnected; break;
-      case 6: size = sizeof(bytes)-1; expected = IPC_Status_Disconnected; break;
+      case 6: size = sizeof(wire_reply)-1; expected = IPC_Status_Disconnected; break;
     }
-    test_sign_frame(bytes, sizeof(bytes));
-    if(variant == 7) { bytes[40] ^= 1; }
-    if(variant == 8) { bytes[72] ^= 1; }
-    if(variant == 9) { bytes[sizeof(bytes)-1] ^= 1; }
-    NativeServer server = native_server_open(str8(bytes, size), 0);
+    NativeServer server = native_server_open(size, 0);
+    server.variant = variant;
     Thread thread = thread_launch(native_server_thread, &server);
     Check(thread.u64[0] != 0);
     IPC_Response response = ipc_request(scratch.arena, server.endpoint, str8(wire_request+72, 4), now_time_us()+Million(3));
@@ -622,12 +653,7 @@ internal void
 test_reply_deadline(void)
 {
   Temp scratch = scratch_begin(0, 0);
-  U8 bytes[sizeof(wire_reply)];
-  MemoryCopy(bytes, wire_reply, sizeof(bytes));
-  MemoryZero(bytes+8, 8);
-  bytes[8] = 1;
-  test_sign_frame(bytes, sizeof(bytes));
-  NativeServer server = native_server_open(str8(bytes, 74), 500);
+  NativeServer server = native_server_open(74, 500);
   Thread thread = thread_launch(native_server_thread, &server);
   Check(thread.u64[0] != 0);
   U64 begin_us = now_time_us();
@@ -810,6 +836,7 @@ entry_point(CmdLine *cmdline)
   run_case(cmdline, "large_request_reply", test_large_request_reply);
   run_case(cmdline, "instances", test_instances);
   run_case(cmdline, "random_instances", test_random_instances);
+  run_case(cmdline, "transaction_ids", test_transaction_ids);
   run_case(cmdline, "concurrent_clients", test_concurrent_clients);
   run_case(cmdline, "recycled_endpoint", test_recycled_endpoint);
   run_case(cmdline, "client_rejections", test_client_rejections);

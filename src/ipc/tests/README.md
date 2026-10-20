@@ -10,11 +10,12 @@ Tests cross the public server/request interface and native TCP sockets.
 Literal wire bytes check the format independently of the encoder. Cases cover
 fragmented/coalesced input, a 103-frame empty burst, malformed/wrong-instance
 peer isolation, truncated input/replies, mismatched reply ids, deadlines,
-simultaneous instances, native-random instance/key creation, stale instance tags after endpoint reuse and explicit
-client-side rejection. Wrong-key and payload-tamper cases require rejection
+simultaneous instances, native-random instance/key creation, fresh transaction
+ids, stale instance tags after endpoint reuse and explicit client-side rejection.
+Wrong-key and payload-tamper cases require rejection
 without exposing a command, then a healthy peer. Forged header/payload tags
-and modified replies return no bytes. A 20 MiB request and 24 MiB reply cross the underlying
-16 MiB queue budgets. Resource counts must return to exact equality; Windows
+and modified replies return no bytes. A 20 MiB request and 24 MiB reply cross
+the underlying 16 MiB queue budgets. Resource counts must return to exact equality; Windows
 uses the socket fixture's native-only Winsock warm-up before counting.
 
 ## Construction contract
@@ -31,8 +32,8 @@ printing their keys. It checks usable, distinct identities, not RNG quality.
 Entropy-source failure is not injected by this suite.
 The id travels on the wire; the key does not. Private endpoint publication/
 discovery and application/CLI integration remain activation gates.
-This authenticates messages, not encrypted
-transport; it does not protect against a process that can read the secret.
+This authenticates messages, not encrypted transport; it does not protect
+against a process that can read the secret.
 
 The public header prefix is 40 bytes: `RDIP`, version 2, kind 1 (request) or 2 (reply),
 two reserved zero bytes, little-endian 64-bit nonzero request id, little-endian
@@ -59,7 +60,9 @@ claimed. Nonblocking receives use deadline zero; partial data never becomes
 a command and false receives leave output arguments unchanged.
 
 `ipc_request` owns one connection per transaction, sharing a single absolute
-deadline across send and receive. It returns complete bytes only on success;
+deadline across send and receive. It generates a fresh native-random nonzero
+64-bit request id, requiring that same id in the authenticated reply. Entropy
+failure returns unavailable before opening a connection. It returns complete bytes only on success;
 errors distinguish timeout, disconnect, invalid reply, oversize and unavailable
 transport. A failed call never returns a partial reply. Zero deadline is an
 immediate timeout for a transaction, not an asynchronous request handle.
