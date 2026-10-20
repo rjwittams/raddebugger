@@ -47,6 +47,15 @@ static inline void sha224_finish(sha224_ctx* ctx, uint8_t digest[SHA224_DIGEST_S
 #   pragma warning (disable : 4127)
 #endif
 
+#if defined(_MSC_VER)
+#   include <intrin.h>
+#   define SHA256_CACHE_LOAD(p) _InterlockedCompareExchange((p), 0, 0)
+#   define SHA256_CACHE_STORE(p, v) _InterlockedExchange((p), (v))
+#else
+#   define SHA256_CACHE_LOAD(p) __atomic_load_n((p), __ATOMIC_RELAXED)
+#   define SHA256_CACHE_STORE(p, v) __atomic_store_n((p), (v), __ATOMIC_RELAXED)
+#endif
+
 #if defined(__clang__)
 #   define SHA256_ROR32(x,n) __builtin_rotateright32(x, n)
 #elif defined(_MSC_VER)
@@ -133,9 +142,9 @@ static const uint32_t SHA256_K[64] =
 
 static inline int sha256_cpuid(void)
 {
-    static int cpuid;
+    static long cpuid;
 
-    int result = cpuid;
+    int result = (int)SHA256_CACHE_LOAD(&cpuid);
     if (result == 0)
     {
         int info[4];
@@ -152,7 +161,7 @@ static inline int sha256_cpuid(void)
             result |= SHA256_CPUID_SHANI;
         }
 
-        cpuid = result;
+        SHA256_CACHE_STORE(&cpuid, result);
     }
 
 #if defined(SHA256_CPUID_MASK)
@@ -300,9 +309,9 @@ static inline int sha256_cpuid(void)
 #if defined(__ARM_FEATURE_CRYPTO) || defined(__ARM_FEATURE_SHA2)
     int result = SHA256_CPUID_ARM64;
 #else
-    static int cpuid;
+    static long cpuid;
 
-    int result = cpuid;
+    int result = (int)SHA256_CACHE_LOAD(&cpuid);
     if (result == 0)
     {
 #if defined(_WIN32)
@@ -323,7 +332,7 @@ static inline int sha256_cpuid(void)
             result |= SHA256_CPUID_ARM64;
         }
 
-        cpuid = result;
+        SHA256_CACHE_STORE(&cpuid, result);
     }
 #endif
 
