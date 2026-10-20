@@ -535,6 +535,27 @@ di_push_all_loaded_keys(Arena *arena)
   return array;
 }
 
+internal DI_LoadStatus
+di_load_status_from_key(DI_Key key)
+{
+  DI_LoadStatus result = DI_LoadStatus_None;
+  U64 slot_idx = u64_hash_from_str8(str8_struct(&key))%di_shared->slots_count;
+  Stripe *stripe = stripe_from_slot_idx(&di_shared->stripes, slot_idx);
+  RWMutexScope(stripe->rw_mutex, 0)
+  {
+    for(DI_Node *n = di_shared->slots[slot_idx].first; n != 0; n = n->next)
+    {
+      if(di_key_match(n->key, key) && ins_atomic_u64_eval(&n->refcount) > 0)
+      {
+        if(n->completion_count == 0) {result = DI_LoadStatus_Pending;}
+        else {result = n->rdi.raw_data_size ? DI_LoadStatus_Ready : DI_LoadStatus_Unavailable;}
+        break;
+      }
+    }
+  }
+  return result;
+}
+
 internal RDI_Parsed *
 di_rdi_from_key(Access *access, DI_Key key, B32 high_priority, U64 endt_us)
 {
@@ -1693,6 +1714,8 @@ di_match_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_out,
   B32 allow_other_dbgis = 0;
   String8 name = {0};
   DI_Key preferred_key = {0};
+  B32 scoped = 0;
+  DI_KeyArray dbgi_keys = {0};
   {
     U64 key_read_off = 0;
     key_read_off += str8_deserial_read_struct(key, key_read_off, &index);
@@ -1702,6 +1725,13 @@ di_match_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_out,
     key_read_off += str8_deserial_read_struct(key, key_read_off, &name.size);
     name.str = push_array_no_zero(scratch.arena, U8, name.size);
     key_read_off += str8_deserial_read(key, key_read_off, name.str, name.size, 1);
+    key_read_off += str8_deserial_read_struct(key, key_read_off, &scoped);
+    if(scoped)
+    {
+      key_read_off += str8_deserial_read_struct(key, key_read_off, &dbgi_keys.count);
+      dbgi_keys.v = push_array_no_zero(scratch.arena, DI_Key, dbgi_keys.count);
+      key_read_off += str8_deserial_read(key, key_read_off, dbgi_keys.v, sizeof(DI_Key)*dbgi_keys.count, 1);
+    }
   }
   
   //- rjf: find split point between container part of name & "leaf"
@@ -1775,8 +1805,8 @@ di_match_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_out,
     fully_qualified_name = str8_list_join(scratch.arena, &parts, &join);
   }
   
-  //- rjf: get all loaded keys
-  DI_KeyArray dbgi_keys = di_push_all_loaded_keys(scratch.arena);
+  // Unscoped callers search all loaded debug info; scoped callers supply the candidates.
+  if(!scoped) {dbgi_keys = di_push_all_loaded_keys(scratch.arena);}
   
   //- rjf: take cancellation signal
   B32 cancelled = 0;
@@ -1835,6 +1865,31 @@ di_match_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_out,
             RDI_NameMapNode *map_node = rdi_name_map_lookup(rdi, &parsed_name_map, leaf_part_of_name.str, leaf_part_of_name.size);
             U32 matches_count = 0;
             U32 *matches = rdi_matches_from_map_node(rdi, map_node, &matches_count);
+
+            // Some producers put the qualification in the symbol's own name
+            // rather than in namespace DIEs. Search that key as well, then use
+            // the same qualification and unit filters for both representations.
+            if(container_part_of_name.size != 0)
+            {
+              RDI_NameMapNode *full_node = rdi_name_map_lookup(rdi, &parsed_name_map, fully_qualified_name.str, fully_qualified_name.size);
+              U32 full_count = 0;
+              U32 *full_matches = rdi_matches_from_map_node(rdi, full_node, &full_count);
+              if(full_count != 0)
+              {
+                U32 *combined = push_array(scratch.arena, U32, matches_count+full_count);
+                MemoryCopy(combined, matches, sizeof(U32)*matches_count);
+                for EachIndex(full_idx, full_count)
+                {
+                  B32 duplicate = 0;
+                  for EachIndex(match_idx, matches_count)
+                  {
+                    if(combined[match_idx] == full_matches[full_idx]) { duplicate = 1; break; }
+                  }
+                  if(!duplicate) { combined[matches_count++] = full_matches[full_idx]; }
+                }
+                matches = combined;
+              }
+            }
             
             // rjf: do we have a container? -> filter matches according to container string also
             U32 *filtered_matches = matches;
@@ -1971,7 +2026,7 @@ di_match_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_out,
 }
 
 internal DI_Match
-di_match_from_string(String8 string, U32 match_index, U32 unit_idx, B32 allow_other_dbgis, DI_Key preferred_dbgi_key, U64 endt_us)
+di_match_from_string(String8 string, U32 match_index, U32 unit_idx, B32 allow_other_dbgis, DI_Key preferred_dbgi_key, U64 endt_us, DI_KeyArray *scope)
 {
   DI_Match result = {0};
   Access *access = access_open();
@@ -1984,10 +2039,17 @@ di_match_from_string(String8 string, U32 match_index, U32 unit_idx, B32 allow_ot
     str8_list_push(scratch.arena, &key_parts, str8_struct(&preferred_dbgi_key));
     str8_list_push(scratch.arena, &key_parts, str8_struct(&string.size));
     str8_list_push(scratch.arena, &key_parts, string);
+    B32 scoped = (scope != 0);
+    str8_list_push(scratch.arena, &key_parts, str8_struct(&scoped));
+    if(scoped)
+    {
+      str8_list_push(scratch.arena, &key_parts, str8_struct(&scope->count));
+      str8_list_push(scratch.arena, &key_parts, str8((U8 *)scope->v, sizeof(DI_Key)*scope->count));
+    }
     String8 key = str8_list_join(scratch.arena, &key_parts, 0);
-    U64 dbgi_count = di_load_count();
+    U64 dbgi_count = scoped ? scope->count : di_load_count();
     B32 wide = (dbgi_count > 256 && allow_other_dbgis);
-    AC_Artifact artifact = ac_artifact_from_key(access, key, di_match_artifact_create, 0, endt_us, .flags = wide ? AC_Flag_Wide : 0, .gen = di_load_gen(), .evict_threshold_us = wide ? 20000000 : 10000000);
+    AC_Artifact artifact = ac_artifact_from_key(access, key, di_match_artifact_create, 0, endt_us, .flags = wide ? AC_Flag_Wide : 0, .gen = di_load_gen(), .evict_threshold_us = wide ? 20000000 : 10000000, .stale_out = &result.stale);
     result.key.u64[0]   = artifact.u64[0];
     result.key.u64[1]   = artifact.u64[1];
     result.section_kind = artifact.u64[2];

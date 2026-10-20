@@ -630,6 +630,7 @@ d_serialized_string_from_event(Arena *arena, D_Event *event, U64 max)
     str8_serial_push_struct(scratch.arena, &srl, &event->stack_base);
     str8_serial_push_struct(scratch.arena, &srl, &event->tls_root);
     str8_serial_push_struct(scratch.arena, &srl, &event->timestamp);
+    str8_serial_push_struct(scratch.arena, &srl, &event->dbg_info_key);
     str8_serial_push_struct(scratch.arena, &srl, &event->exception_code);
     str8_serial_push_struct(scratch.arena, &srl, &event->rgba);
     str8_serial_push_struct(scratch.arena, &srl, &event->bp_flags);
@@ -666,6 +667,7 @@ d_event_from_serialized_string(Arena *arena, String8 string)
     read_off += str8_deserial_read_struct(string, read_off, &event.stack_base);
     read_off += str8_deserial_read_struct(string, read_off, &event.tls_root);
     read_off += str8_deserial_read_struct(string, read_off, &event.timestamp);
+    read_off += str8_deserial_read_struct(string, read_off, &event.dbg_info_key);
     read_off += str8_deserial_read_struct(string, read_off, &event.exception_code);
     read_off += str8_deserial_read_struct(string, read_off, &event.rgba);
     read_off += str8_deserial_read_struct(string, read_off, &event.bp_flags);
@@ -810,10 +812,11 @@ d_module_from_process_vaddr(D_Entity *process, U64 vaddr)
       child != &d_entity_nil;
       child = child->next)
   {
-    if(child->kind == D_EntityKind_Module && contains_1u64(child->vaddr_range, vaddr))
+    if(child->kind == D_EntityKind_Module &&
+       contains_1u64(child->vaddr_range, vaddr) &&
+       (result == &d_entity_nil || result->vaddr_range.min < child->vaddr_range.min))
     {
       result = child;
-      break;
     }
   }
   return result;
@@ -830,7 +833,11 @@ d_dbgi_key_from_module(D_Entity *module)
 internal DI_Key
 d_dbgi_key_from_debug_info_path(D_Entity *dbg_path)
 {
-  DI_Key dbgi_key = di_key_from_path_timestamp(dbg_path->string, dbg_path->timestamp);
+  DI_Key dbgi_key = dbg_path->dbg_info_key;
+  if(di_key_match(dbgi_key, di_key_zero()))
+  {
+    dbgi_key = di_key_from_path_timestamp(dbg_path->string, dbg_path->timestamp);
+  }
   return dbgi_key;
 }
 
@@ -1307,7 +1314,17 @@ d_entity_store_apply_events(D_EntityCtxRWStore *store, D_EventList *list)
       case D_EventKind_NewProc:
       {
         D_Entity *machine = d_entity_from_handle(d_handle_from_dmn(event->entity.machine_id, dmn_handle_zero()));
-        if(machine != &d_entity_nil)
+        D_Entity *existing_process = &d_entity_nil;
+        D_EntityArray processes = d_entity_array_from_kind(D_EntityKind_Process);
+        for(U64 idx = 0; idx < processes.count; idx += 1)
+        {
+          if(processes.v[idx]->id == event->entity_id)
+          {
+            existing_process = processes.v[idx];
+            break;
+          }
+        }
+        if(machine != &d_entity_nil && existing_process == &d_entity_nil)
         {
           D_Entity *process = d_entity_alloc(store, machine, D_EntityKind_Process, event->arch, event->entity, (U64)event->entity_id);
           process->os = event->os;
@@ -1448,7 +1465,7 @@ d_entity_store_apply_events(D_EntityCtxRWStore *store, D_EventList *list)
         module->vaddr_range = event->vaddr_rng;
         module->os = process->os;
         D_Entity *first_module = d_entity_child_from_kind(process, D_EntityKind_Module);
-        if(first_module == module && process->string.size == 0)
+        if(first_module == module)
         {
           d_entity_equip_string(store, process, event->string);
         }
@@ -1470,6 +1487,7 @@ d_entity_store_apply_events(D_EntityCtxRWStore *store, D_EventList *list)
         }
         d_entity_equip_string(store, debug_info_path, path_normalized_from_string(scratch.arena, event->string));
         debug_info_path->timestamp = event->timestamp;
+        debug_info_path->dbg_info_key = event->dbg_info_key;
         scratch_end(scratch);
       }break;
       
@@ -1592,7 +1610,7 @@ d_thread_write_reg_block(D_Handle thread, void *block)
     {
       // TODO(rjf): @callstacks immediately reflect this in the call stack cache
       DMN_Handle handle_dmn = d_dmn_from_handle(thread);
-      B32 result = dmn_thread_write_reg_block(handle_dmn, block);
+      result = dmn_thread_write_reg_block(handle_dmn, block);
       if(result)
       {
         ins_atomic_u64_inc_eval(&d_ctrl_state->reg_gen);
@@ -2266,7 +2284,7 @@ d_call_stack_from_unwind(Arena *arena, D_Entity *process, D_Unwind *base_unwind)
       // rjf: unpack
       ARCH_Info *arch_info = arch_info_from_arch(arch);
       D_UnwindFrame *src = &base_unwind->frames.v[base_frame_idx];
-      U64 rip_vaddr = arch_ip_from_reg_block(arch_info, src->regs);
+      U64 rip_vaddr = src->lookup_vaddr;
       D_Entity *module = d_module_from_process_vaddr(process, rip_vaddr);
       U64 rip_voff = d_voff_from_vaddr(module, rip_vaddr);
       DI_Key dbgi_key = d_dbgi_key_from_module(module);
@@ -2277,9 +2295,9 @@ d_call_stack_from_unwind(Arena *arena, D_Entity *process, D_Unwind *base_unwind)
       FrameNode *first_inline_frame = 0;
       FrameNode *last_inline_frame = 0;
       U64 inline_frame_count = 0;
-      for(RDI_Scope *s = scope;
+      for(RDI_Scope *s = rdi_inline_scope_from_scope(rdi, scope);
           s->inline_site_idx != 0;
-          s = rdi_element_from_name_idx(rdi, Scopes, s->parent_scope_idx))
+          s = rdi_inline_scope_from_scope(rdi, rdi_parent_from_scope(rdi, s)))
       {
         FrameNode *dst_inline = push_array(scratch.arena, FrameNode, 1);
         if(first_inline_frame == 0)
@@ -2290,7 +2308,9 @@ d_call_stack_from_unwind(Arena *arena, D_Entity *process, D_Unwind *base_unwind)
         SLLQueuePush(first_frame, last_frame, dst_inline);
         dst_inline->v.unwind_count = base_frame_idx;
         dst_inline->v.regs         = src->regs;
+        dst_inline->v.reg_valid    = src->reg_valid;
         dst_inline->v.cfa          = src->cfa;
+        dst_inline->v.lookup_vaddr = src->lookup_vaddr;
         frame_count += 1;
         inline_frame_count += 1;
       }
@@ -2300,7 +2320,9 @@ d_call_stack_from_unwind(Arena *arena, D_Entity *process, D_Unwind *base_unwind)
       SLLQueuePush(first_frame, last_frame, dst_base);
       dst_base->v.unwind_count = base_frame_idx;
       dst_base->v.regs         = src->regs;
+      dst_base->v.reg_valid    = src->reg_valid;
       dst_base->v.cfa          = src->cfa;
+      dst_base->v.lookup_vaddr = src->lookup_vaddr;
       frame_count += 1;
       
       // rjf: hook up inline frames to point to concrete frame, and to account for inline depth
@@ -2676,7 +2698,7 @@ d_ctrl_thread__entry_point(void *p)
             if(module != &d_entity_nil)
             {
               D_Entity *debug_info_path = d_entity_child_from_kind(module, D_EntityKind_DebugInfoPath);
-              DI_Key old_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, debug_info_path->timestamp);
+              DI_Key old_dbgi_key = d_dbgi_key_from_debug_info_path(debug_info_path);
               di_close(old_dbgi_key, 0);
               MutexScopeW(d_ctrl_state->ctrl_thread_entity_ctx_rw_mutex)
               {
@@ -2685,6 +2707,7 @@ d_ctrl_thread__entry_point(void *p)
               U64 new_dbgi_timestamp = properties_from_file_path(path).modified;
               debug_info_path->timestamp = new_dbgi_timestamp;
               DI_Key new_dbgi_key = di_key_from_path_timestamp(debug_info_path->string, new_dbgi_timestamp);
+              debug_info_path->dbg_info_key = new_dbgi_key;
               di_open(new_dbgi_key);
               D_EventList evts = {0};
               D_Event *evt = d_event_list_push(scratch.arena, &evts);
@@ -2692,6 +2715,7 @@ d_ctrl_thread__entry_point(void *p)
               evt->entity     = msg->entity;
               evt->string     = path;
               evt->timestamp  = new_dbgi_timestamp;
+              evt->dbg_info_key = new_dbgi_key;
               d_c2u_push_events(&evts);
             }
           }break;
@@ -2766,47 +2790,26 @@ d_ctrl_thread__append_resolved_module_user_bp_traps(Arena *arena, D_EvalScope *e
       // rjf: unpack & normalize
       TxtPt pt = bp->pt;
       String8 filename = bp->file_path;
-      String8 filename_normalized = str8_copy(scratch.arena, filename);
-      for(U64 idx = 0; idx < filename_normalized.size; idx += 1)
-      {
-        filename_normalized.str[idx] = lower_from_char(filename_normalized.str[idx]);
-        filename_normalized.str[idx] = correct_slash_from_char(filename_normalized.str[idx]);
-      }
       
       // rjf: gather filename candidates - the path passed down by the frontend *may*
       // exactly match what the debug info stores, but it may be absolute whereas our
       // debug info stores relative paths. so we'll try both.
       String8 filename_candidates[] =
       {
-        filename_normalized,
-        path_relative_dst_from_absolute_dst_src(scratch.arena, filename_normalized, str8_chop_last_slash(dbgi_path)),
-        path_relative_dst_from_absolute_dst_src(scratch.arena, filename_normalized, str8_chop_last_slash(module_path)),
+        filename,
+        path_relative_dst_from_absolute_dst_src(scratch.arena, filename, str8_chop_last_slash(dbgi_path)),
+        path_relative_dst_from_absolute_dst_src(scratch.arena, filename, str8_chop_last_slash(module_path)),
       };
       
       // rjf: filename -> src_id
       U32 src_id = 0;
       {
-        RDI_NameMap *mapptr = rdi_element_from_name_idx(rdi, NameMaps, RDI_NameMapKind_NormalSourcePaths);
-        if(mapptr != 0)
+        for EachElement(idx, filename_candidates)
         {
-          RDI_ParsedNameMap map = {0};
-          rdi_parsed_from_name_map(rdi, mapptr, &map);
-          for EachElement(idx, filename_candidates)
+          src_id = rdi_source_file_idx_from_path(rdi, filename_candidates[idx]);
+          if(src_id != 0)
           {
-            RDI_NameMapNode *node = rdi_name_map_lookup(rdi, &map, filename_candidates[idx].str, filename_candidates[idx].size);
-            if(node != 0)
-            {
-              U32 id_count = 0;
-              U32 *ids = rdi_matches_from_map_node(rdi, node, &id_count);
-              if(id_count > 0)
-              {
-                src_id = ids[0];
-              }
-            }
-            if(src_id != 0)
-            {
-              break;
-            }
+            break;
           }
         }
       }
@@ -3483,6 +3486,7 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
       
       // rjf: open debug info
       DI_Key initial_dbgi_key = di_key_from_path_timestamp(initial_debug_info_path, debug_info_timestamp);
+      out_evt2->dbg_info_key = initial_dbgi_key;
       di_open(initial_dbgi_key);
       scratch_end(scratch2);
     }break;
@@ -3490,11 +3494,24 @@ d_ctrl_thread__next_dmn_event(Arena *arena, DMN_CtrlCtx *ctrl_ctx, D_Msg *msg, D
     //- rjf: exit process
     case DMN_EventKind_ExitProcess:
     {
+      D_Handle process_handle = d_handle_from_dmn(D_MachineID_Local, event->process);
+      D_Entity *process = d_entity_from_handle(process_handle);
+      for(D_Entity *module = process->first; module != &d_entity_nil; module = module->next)
+      {
+        if(module->kind == D_EntityKind_Module)
+        {
+          d_module_info_evict(module->handle);
+          di_close(d_dbgi_key_from_module(module), 0);
+        }
+      }
       D_Event *out_evt = d_event_list_push(scratch.arena, &evts);
       out_evt->kind       = D_EventKind_EndProc;
       out_evt->msg_id     = msg->msg_id;
-      out_evt->entity     = d_handle_from_dmn(D_MachineID_Local, event->process);
+      out_evt->entity     = process_handle;
       out_evt->u64_code   = event->code;
+      // Distinguish an observed exit from synthetic removal after detach.
+      out_evt->cause      = event->process_detached ? D_EventCause_Null : D_EventCause_Finished;
+      out_evt->entity_id  = process->id;
       d_ctrl_state->process_counter -= 1;
     }break;
     
@@ -3745,6 +3762,8 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
           
           //- rjf: try to obtain this module's RDI
           RDI_Parsed *rdi = di_rdi_from_key(scope->access, dbgi_key, 0, 0);
+          // Both queued and actively loading RDI need the required-info check.
+          B32 rdi_is_pending = (rdi == &rdi_parsed_nil || rdi == &di_rdi_parsed_nil_waiting);
           
           //- rjf: if this RDI is not yet ready => determine if we need to wait for it
           //
@@ -3755,7 +3774,7 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
           {
             rdi_is_necessary = 0;
           }
-          else if(rdi == &rdi_parsed_nil) ProfScope("determine if RDI is necessary")
+          else if(rdi_is_pending) ProfScope("determine if RDI is necessary")
           {
             // rjf: find cached result
             U64 hash = d_hash_from_handle(mod->handle);
@@ -3830,7 +3849,7 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
           }
           
           //- rjf: if this RDI is necessary, but we do not have it => wait for it forever
-          if(rdi == &rdi_parsed_nil && rdi_is_necessary) ProfScope("RDI is necessary -> wait")
+          if(rdi_is_pending && rdi_is_necessary) ProfScope("RDI is necessary -> wait")
           {
             rdi = di_rdi_from_key(scope->access, dbgi_key, 1, max_U64);
           }
@@ -3891,6 +3910,14 @@ d_ctrl_thread__eval_scope_begin(Arena *arena, D_BreakpointList *user_bps, D_Enti
     ctx->dbg_infos_count  = eval_dbg_infos_count;
     ctx->primary_dbg_info = eval_dbg_infos_primary;
     ctx->dbg_info_from_name_map = eval_dbg_info_from_name_map;
+    ctx->debug_info_match_endt_us = max_U64;
+    ctx->debug_info_match_scope = push_array(arena, DI_KeyArray, 1);
+    ctx->debug_info_match_scope->count = eval_dbg_infos_count;
+    ctx->debug_info_match_scope->v = push_array(arena, DI_Key, eval_dbg_infos_count);
+    for EachIndex(idx, eval_dbg_infos_count)
+    {
+      ctx->debug_info_match_scope->v[idx] = eval_dbg_infos[idx].dbgi_key;
+    }
     
     //- rjf: fill modules
     ctx->modules        = eval_modules;
@@ -4587,6 +4614,7 @@ d_ctrl_thread__open_crash_dump(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       evt->entity     = module_handle;
       evt->parent     = process;
       evt->timestamp  = debug_info_timestamp;
+      evt->dbg_info_key = initial_dbgi_key;
       evt->string     = initial_debug_info_path;
     }
   }
@@ -4662,7 +4690,7 @@ d_ctrl_thread__kill(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
               done = 1;
             }break;
             case DMN_EventKind_Error:{done = 1; cause = D_EventCause_Error;}break;
-            case DMN_EventKind_Halt: {done = 1; cause = D_EventCause_InterruptedByHalt;}break;
+            case DMN_EventKind_Halt: {}break;
           }
         }
       }
@@ -4794,7 +4822,8 @@ d_ctrl_thread__detach(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   //- rjf: detach
   B32 detach_worked = dmn_ctrl_detach(ctrl_ctx, process);
   
-  //- rjf: wait for process to be dead
+  //- consume synthetic process-removal events
+#if OS_MAC || OS_WINDOWS
   if(detach_worked)
   {
     DMN_RunCtrls run_ctrls = {0};
@@ -4809,16 +4838,27 @@ d_ctrl_thread__detach(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       {
         done = 1;
       }
-      if(event->kind == DMN_EventKind_Halt)
+      if(event->kind == DMN_EventKind_Halt || event->kind == DMN_EventKind_Error)
       {
         done = 1;
       }
     }
   }
-  
+#endif
+
   //- rjf: record stop
   {
     D_EventList evts = {0};
+#if OS_LINUX
+    if(detach_worked)
+    {
+      D_Event *end_event = d_event_list_push(scratch.arena, &evts);
+      end_event->kind   = D_EventKind_EndProc;
+      end_event->msg_id = msg->msg_id;
+      end_event->entity = msg->entity;
+      end_event->entity_id = d_entity_from_handle(msg->entity)->id;
+    }
+#endif
     D_Event *event = d_event_list_push(scratch.arena, &evts);
     event->kind       = D_EventKind_Stopped;
     event->cause      = D_EventCause_Finished;
@@ -4909,7 +4949,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
   // which may include features put on a trap net trap at the same address as
   // the user breakpoint.
   //
-  B32 target_thread_is_on_user_bp_and_trap_net_trap = 0;
+  U64 initial_target_overlap_vaddr = 0;
   if(stop_event == 0)
   {
     // rjf: gather stuck threads
@@ -4960,7 +5000,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
               
               if(is_on_user_bp && is_on_net_trap && dmn_handle_match(d_dmn_from_handle(thread->handle), target_thread_dmn))
               {
-                target_thread_is_on_user_bp_and_trap_net_trap = 1;
+                initial_target_overlap_vaddr = rip;
               }
             }
           }
@@ -5125,7 +5165,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       log_infof("get_next_event:\n{\n");
       DMN_Event *event = d_ctrl_thread__next_dmn_event(scratch.arena, ctrl_ctx, msg, &run_ctrls, run_spoof);
       log_infof("}\n\n");
-      
+
       //////////////////////////
       //- rjf: determine event handling
       //
@@ -5537,7 +5577,17 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
         
         // rjf: user breakpoints
         {
-          if(event->user_data != 0)
+          // Let the trap net handle the initial overlap once, including events
+          // carrying a user breakpoint ID. Later hits must remain user stops.
+          B32 step_past_initial_user_bp = (initial_target_overlap_vaddr != 0 &&
+                                          event->instruction_pointer == initial_target_overlap_vaddr &&
+                                          dmn_handle_match(event->thread, target_thread_dmn) &&
+                                          event->address == 0);
+          if(step_past_initial_user_bp)
+          {
+            initial_target_overlap_vaddr = 0;
+          }
+          if(event->user_data != 0 && !step_past_initial_user_bp)
           {
             hit_user_bp = 1;
           }
@@ -5549,10 +5599,12 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
             {
               if(dmn_handle_match(trap->process, event->process) &&
                  trap->vaddr == event->instruction_pointer &&
-                 (!dmn_handle_match(event->thread, d_dmn_from_handle(target_thread)) || !target_thread_is_on_user_bp_and_trap_net_trap))
+                 !step_past_initial_user_bp)
               {
                 D_Breakpoint *user_bp = (D_Breakpoint *)trap->id;
                 hit_user_bp = 1;
+                // A preferred trap-net hit can omit the overlapping user breakpoint's identity.
+                if(event->user_data == 0) {event->user_data = trap->id;}
                 if(user_bp != 0 && !(trap->id & bit64) && user_bp->condition.size != 0)
                 {
                   str8_list_push(temp.arena, &conditions, user_bp->condition);
@@ -5746,6 +5798,7 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       
       //- rjf: trap net logic: single step after hit
       B32 single_step_stop = 0;
+      D_TrapFlags post_step_trap_flags = 0;
       D_EventCause single_step_stop_cause = D_EventCause_Null;
       if(!hard_stop && use_trap_net_logic)
       {
@@ -5786,6 +5839,17 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
               }break;
             }
           }
+
+          if(!single_step_stop)
+          {
+            for(D_TrapNode *node = msg->traps.first; node != 0; node = node->next)
+            {
+              if(node->v.vaddr == thread_post_rip)
+              {
+                post_step_trap_flags |= node->v.flags;
+              }
+            }
+          }
         }
       }
       
@@ -5820,7 +5884,13 @@ d_ctrl_thread__run(DMN_CtrlCtx *ctrl_ctx, D_Msg *msg)
       B32 trap_net_stop = 0;
       if(!hard_stop && use_trap_net_logic)
       {
-        if(hit_trap_flags & D_TrapFlag_EndStepping) LogInfoNamedBlockF("trap_net__end_step")
+        // A newly reached trap may stop here, but its instruction actions have not run.
+        // Leave traps requiring those actions to the next iteration of the run loop.
+        B32 post_step_stop = ((post_step_trap_flags & D_TrapFlag_EndStepping) &&
+                             !(post_step_trap_flags & ~(D_TrapFlag_EndStepping|D_TrapFlag_IgnoreStackPointerCheck)) &&
+                             ((post_step_trap_flags & D_TrapFlag_IgnoreStackPointerCheck) ||
+                              d_sp_from_thread(target_thread) == sp_check_value));
+        if((hit_trap_flags & D_TrapFlag_EndStepping) || post_step_stop) LogInfoNamedBlockF("trap_net__end_step")
         {
           trap_net_stop = 1;
           use_trap_net_logic = 0;
@@ -6605,6 +6675,7 @@ d_call_stack_artifact_create(String8 key, B32 *cancel_signal, AC_Status *status_
               dst_e->vaddr_range      = src_e->vaddr_range;
               dst_e->stack_base       = src_e->stack_base;
               dst_e->timestamp        = src_e->timestamp;
+              dst_e->dbg_info_key     = src_e->dbg_info_key;
               dst_e->bp_flags         = src_e->bp_flags;
               dst_e->string           = str8_copy(scratch.arena, src_e->string);
               dst_e->os               = src_e->os;
@@ -6845,7 +6916,7 @@ d_call_stack_tree_artifact_create(String8 key, B32 *cancel_signal, AC_Status *st
       D_CallStackTreeNode *thread_node = tree->root;
       for EachIndex(frame_idx, call_stack.frames_count)
       {
-        U64 vaddr = arch_ip_from_reg_block(arch_info, call_stack.frames[frame_idx].regs);
+        U64 vaddr = call_stack.frames[frame_idx].lookup_vaddr;
         U64 depth = call_stack.frames[frame_idx].inline_depth;
         D_CallStackTreeNode *next_node = &d_call_stack_tree_node_nil;
         for(D_CallStackTreeNode *child = thread_node->first; child != &d_call_stack_tree_node_nil; child = child->next)
