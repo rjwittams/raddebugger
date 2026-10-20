@@ -19,7 +19,7 @@ fi
 
 # --- Mix Git Commit ID -------------------------------------------------------
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  auto_compile_flags="$auto_compile_flags -DBUILD_GIT_HASH=\"$(git describe --always --dirty)\" -DBUILD_GIT_HASH_FULL=$(git rev-parse HEAD)"
+  auto_compile_flags="$auto_compile_flags -DBUILD_GIT_HASH=\"$(git describe --always --dirty)\" -DBUILD_GIT_HASH_FULL=\"$(git rev-parse HEAD)\""
 fi
 
 # --- Compile/Link Line Definitions -------------------------------------------
