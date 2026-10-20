@@ -417,6 +417,57 @@ test_recycled_endpoint(void)
   scratch_end(scratch);
 }
 
+typedef struct ConcurrentClient ConcurrentClient;
+struct ConcurrentClient
+{
+  Barrier start;
+  IPC_Endpoint endpoint;
+  String8 request;
+  String8 reply;
+  B32 passed;
+};
+
+internal void
+concurrent_client_thread(void *ptr)
+{
+  ConcurrentClient *client = ptr;
+  Temp scratch = scratch_begin(0, 0);
+  barrier_wait(client->start);
+  IPC_Response response = ipc_request(scratch.arena, client->endpoint, client->request, now_time_us()+Million(3));
+  client->passed = response.status == IPC_Status_Success && str8_match(response.data, client->reply, 0);
+  scratch_end(scratch);
+}
+
+internal void
+test_concurrent_clients(void)
+{
+  IPC_Server *servers[2] = {ipc_server_open(0, instance_id, auth_key, 0),
+                            ipc_server_open(0, instance_id, auth_key, 0)};
+  Check(servers[0] != 0 && servers[1] != 0);
+  Barrier start = barrier_alloc(3);
+  Check(start.u64[0] != 0);
+  RequestFixture replies[2] = {{servers[0], str8_lit("first"), str8_lit("A")},
+                                {servers[1], str8_lit("second"), str8_lit("B")}};
+  ConcurrentClient clients[2] = {0};
+  Thread server_threads[2], client_threads[2];
+  for(U64 idx = 0; idx < 2; idx += 1)
+  {
+    clients[idx] = (ConcurrentClient){start, ipc_server_endpoint(servers[idx]), replies[idx].request, replies[idx].reply};
+    server_threads[idx] = thread_launch(request_server_thread, &replies[idx]);
+    client_threads[idx] = thread_launch(concurrent_client_thread, &clients[idx]);
+    Check(server_threads[idx].u64[0] != 0 && client_threads[idx].u64[0] != 0);
+  }
+  barrier_wait(start);
+  for(U64 idx = 0; idx < 2; idx += 1)
+  {
+    Check(thread_join(client_threads[idx], now_time_us()+Million(3)));
+    Check(thread_join(server_threads[idx], now_time_us()+Million(3)));
+    Check(clients[idx].passed);
+    ipc_server_close(servers[idx]);
+  }
+  barrier_release(start);
+}
+
 internal void
 test_client_rejections(void)
 {
@@ -728,6 +779,7 @@ entry_point(CmdLine *cmdline)
   run_case(cmdline, "empty_request_reply", test_empty_request_reply);
   run_case(cmdline, "large_request_reply", test_large_request_reply);
   run_case(cmdline, "instances", test_instances);
+  run_case(cmdline, "concurrent_clients", test_concurrent_clients);
   run_case(cmdline, "recycled_endpoint", test_recycled_endpoint);
   run_case(cmdline, "client_rejections", test_client_rejections);
   run_case(cmdline, "reply_failures", test_reply_failures);
