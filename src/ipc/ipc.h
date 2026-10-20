@@ -42,6 +42,8 @@ struct IPC_Response
 
 // Generate a fresh identity/key with native entropy; fail closed on failure.
 internal IPC_Server *ipc_server_open_random(U16 port, SOCK_WakeupFunctionType *wakeup);
+// Publish a fresh server for this PID in a private directory; close unpublishes it.
+internal IPC_Server *ipc_server_open_local(String8 directory, SOCK_WakeupFunctionType *wakeup);
 // Explicit configuration requires a nonzero instance id and secret key.
 // Private endpoint publication precedes app activation.
 // The owner serializes calls and closes only after those calls have finished.
@@ -54,5 +56,7 @@ internal B32 ipc_server_reply(IPC_Server *server, IPC_Message request, String8 d
 // One connection/transaction per call, with one deadline shared by send/receive.
 // Errors return no partial reply; successful bytes belong to the caller arena.
 internal IPC_Response ipc_request(Arena *arena, IPC_Endpoint endpoint, String8 data, U64 endt_us);
+// Discover an exact live PID through private local registration, without fallback.
+internal IPC_Response ipc_request_local(Arena *arena, String8 directory, U32 pid, String8 data, U64 endt_us);
 
 #endif // IPC_H
