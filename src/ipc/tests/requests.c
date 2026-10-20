@@ -858,6 +858,20 @@ entry_point(CmdLine *cmdline)
   U8 entropy[48];
   Check(BCryptGenRandom(0, entropy, sizeof(entropy), BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0);
   Check(BCryptGenRandom(0, entropy, sizeof(U64), BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0);
+  // A native-only GetSecurityInfo control retains its own initialization handles.
+  WCHAR executable[32768];
+  DWORD executable_size = GetModuleFileNameW(0, executable, ArrayCount(executable));
+  Check(executable_size != 0 && executable_size < ArrayCount(executable));
+  HANDLE security_file = CreateFileW(executable, READ_CONTROL, FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+                                    0, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, 0);
+  Check(security_file != INVALID_HANDLE_VALUE);
+  PSID owner = 0;
+  PACL acl = 0;
+  PSECURITY_DESCRIPTOR descriptor = 0;
+  Check(GetSecurityInfo(security_file, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION,
+                        &owner, 0, &acl, 0, &descriptor) == ERROR_SUCCESS);
+  LocalFree(descriptor);
+  Check(CloseHandle(security_file));
 #endif
   U64 before = descriptor_count();
   run_case(cmdline, "native_wire", test_native_wire);
