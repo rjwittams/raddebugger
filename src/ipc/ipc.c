@@ -363,10 +363,12 @@ ipc_request(Arena *arena, IPC_Endpoint endpoint, String8 data, U64 endt_us)
      endpoint.address.address_u8[0] != 127 || endpoint.address.address_u8[1] != 0 ||
      endpoint.address.address_u8[2] != 0 || endpoint.address.address_u8[3] != 1) { return response; }
   if(now_time_us() >= endt_us) { response.status = IPC_Status_Timeout; return response; }
+  U64 request_id = 0;
+  if(!ipc_random_bytes((U8 *)&request_id, sizeof(request_id)) || request_id == 0) { return response; }
   SOCK_Session socket = sock_session_open(0, 0);
   if(socket.u64[0] == 0) { return response; }
   U8 header[IPC_HEADER_SIZE];
-  ipc_header(header, 1, 1, data.size, endpoint.instance_id, endpoint.auth_key);
+  ipc_header(header, 1, request_id, data.size, endpoint.instance_id, endpoint.auth_key);
   U8 request_tag[SHA256_DIGEST_SIZE];
   sha256_ctx request_auth = {0};
   ipc_payload_auth_begin(&request_auth, endpoint.auth_key, header);
@@ -434,7 +436,7 @@ ipc_request(Arena *arena, IPC_Endpoint endpoint, String8 data, U64 endt_us)
       pos += size;
       if(header_pos == sizeof(header))
       {
-        if(!ipc_header_valid(header, 2, endpoint.instance_id, endpoint.auth_key) || ipc_u64_from_wire(header+8) != 1)
+        if(!ipc_header_valid(header, 2, endpoint.instance_id, endpoint.auth_key) || ipc_u64_from_wire(header+8) != request_id)
         {
           response.status = IPC_Status_InvalidReply;
           scratch_end(scratch);
