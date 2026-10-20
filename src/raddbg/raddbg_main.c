@@ -853,9 +853,11 @@ entry_point(CmdLine *cmd_line)
       else
       {
         if(cmd_line->inputs.node_count == 0) { fprintf(stderr, "RAD --ipc requires a command or --ipc_stdin.\n"); abort_self(1); }
+        //- rjf: form message from command line inputs
         StringJoin join = {s(""), s(" "), s("")};
         msg = str8_list_join(scratch.arena, &cmd_line->inputs, &join);
       }
+      //- rjf: send to server, get outputs
       IPC_Response response = ipc_request_local(scratch.arena, ipc_directory, (U32)pid, msg, now_time_us()+10000000);
       if(response.status != IPC_Status_Success)
       {
@@ -872,6 +874,7 @@ entry_point(CmdLine *cmd_line)
         fprintf(stderr, "RAD IPC failed: %s.\n", reason);
         abort_self(1);
       }
+      //- rjf: write outputs to stdout
       if(binary)
       {
         if(response.data.size != 0 && fwrite(response.data.str, 1, response.data.size, stdout) != response.data.size) { abort_self(1); }
