@@ -460,6 +460,8 @@ the compiler-generated assert may stop as a trap or exception (x64 Clang emits
 stopped file without an explicit Find Thread command. Caller-frame selection
 and local evaluation are checked before restarting. Artifacts remain in the
 printed temporary directory; the owned debugger and target are closed.
+The fixture waits for both to exit before reporting success. Forced cleat
+cleanup is reserved for an owned session that has not exited normally.
 
 This catches lost asynchronous navigation retries that stack-only tests miss.
 It does not inspect rendered pixels or prove the visible cursor line, and it
