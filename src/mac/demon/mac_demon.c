@@ -3301,6 +3301,8 @@ dmn_ctrl_exclusive_access_end(void)
   MutexScope(mac_dmn_state->access_mutex)
   {
     mac_dmn_state->access_run_state = 0;
+    // A completed control batch must not leave a halt for the next resume.
+    mac_dmn_state->halt_requested = 0;
   }
 }
 
@@ -3511,23 +3513,26 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
     mac_dmn_push_detach_events(arena, &result);
   }
 
-  if(result.count == 0 && mac_dmn_state->halt_requested)
+  if(result.count == 0) MutexScope(mac_dmn_state->access_mutex)
   {
-    for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+    if(mac_dmn_state->halt_requested)
     {
-      if(entity->kind == MAC_DMN_EntityKind_Process)
+      for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
       {
-        MAC_DMN_Process *process = &entity->process;
-        if(process->is_running)
+        if(entity->kind == MAC_DMN_EntityKind_Process)
         {
-          mac_dmn_process_request_halt(process);
+          MAC_DMN_Process *process = &entity->process;
+          if(process->is_running)
+          {
+            mac_dmn_process_request_halt(process);
+          }
+          else
+          {
+            mac_dmn_push_event_halt(arena, &result);
+            mac_dmn_state->halt_requested = 0;
+          }
+          break;
         }
-        else
-        {
-          mac_dmn_push_event_halt(arena, &result);
-          mac_dmn_state->halt_requested = 0;
-        }
-        break;
       }
     }
   }
@@ -3794,6 +3799,19 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
             break;
           }
         }
+        MutexScope(mac_dmn_state->access_mutex)
+        {
+          if(mac_dmn_state->halt_requested)
+          {
+            for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+            {
+              if(entity->kind == MAC_DMN_EntityKind_Process)
+              {
+                mac_dmn_process_request_halt(&entity->process);
+              }
+            }
+          }
+        }
         do
         {
           wait_id = waitpid(-1, &status, WNOHANG|WUNTRACED);
@@ -3854,7 +3872,7 @@ dmn_ctrl_run(Arena *arena, DMN_CtrlCtx *ctx, DMN_RunCtrls *ctrls)
             if(process->halt_expected && signo == SIGSTOP)
             {
               process->halt_expected = 0;
-              if(mac_dmn_state->halt_requested)
+              MutexScope(mac_dmn_state->access_mutex) if(mac_dmn_state->halt_requested)
               {
                 mac_dmn_push_event_halt(arena, &result);
                 mac_dmn_state->halt_requested = 0;
@@ -4461,15 +4479,13 @@ dmn_tls_vaddr_from_thread(Arena *arena, DMN_CtrlCtx *ctx, DMN_Handle thread_hand
 internal void
 dmn_halt(U64 code, U64 user_data)
 {
-  mac_dmn_state->halt_requested = 1;
-  mac_dmn_state->halt_code = code;
-  mac_dmn_state->halt_user_data = user_data;
-  for(MAC_DMN_Entity *entity = mac_dmn_state->first_process_entity; entity != 0; entity = entity->next)
+  MutexScope(mac_dmn_state->access_mutex)
   {
-    if(entity->kind == MAC_DMN_EntityKind_Process)
+    if(mac_dmn_state->access_run_state)
     {
-      MAC_DMN_Process *process = &entity->process;
-      mac_dmn_process_request_halt(process);
+      mac_dmn_state->halt_code = code;
+      mac_dmn_state->halt_user_data = user_data;
+      mac_dmn_state->halt_requested = 1;
     }
   }
 }

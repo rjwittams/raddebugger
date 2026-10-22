@@ -168,7 +168,8 @@ struct MAC_DMN_State
   Mutex access_mutex;
   mach_port_t exception_port_set;
   B32 access_run_state;
-  volatile B32 halt_requested;
+  // Halt requests and their payload are protected by access_mutex.
+  B32 halt_requested;
   U64 halt_code;
   U64 halt_user_data;
   int process_monitor_kq;
