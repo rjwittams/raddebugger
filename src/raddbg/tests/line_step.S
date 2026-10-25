@@ -11,6 +11,7 @@
 .text
 .globl SYMBOL(main)
 SYMBOL(main):
+Lfixture_begin:
 .cfi_startproc
 #if defined(__aarch64__) || defined(__arm64__)
   stp x29, x30, [sp, #-16]!
@@ -107,6 +108,7 @@ Lhidden_branch:
   popq %rbp
   ret
 #endif
+Lmain_end:
 .cfi_endproc
 .globl SYMBOL(leaf)
 SYMBOL(leaf):
@@ -123,6 +125,8 @@ SYMBOL(leaf):
 .cfi_endproc
 Lfixture_end:
 // Assemblers emit line rows but do not consistently emit a compilation unit.
+// Keep sizes within each function: x64 Mach-O symbol differences require
+// relocations that Apple's dsymutil does not apply to these high_pc fields.
 #ifdef __APPLE__
 .section __DWARF,__debug_abbrev,regular,debug
 #else
@@ -154,12 +158,12 @@ Lunit_start:
   .asciz "line_step.S"
   .asciz "."
   .quad SYMBOL(main)
-  .quad Lfixture_end - SYMBOL(main)
+  .quad (Lmain_end - Lfixture_begin) + (Lfixture_end - SYMBOL(leaf))
   .long 0
   .byte 2
   .asciz "main"
   .quad SYMBOL(main)
-  .quad SYMBOL(leaf) - SYMBOL(main)
+  .quad Lmain_end - Lfixture_begin
   .byte 2
   .asciz "leaf"
   .quad SYMBOL(leaf)

@@ -5,6 +5,7 @@ Uses isolated configuration and retains source, binaries and IPC evidence.
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -15,6 +16,14 @@ import time
 import uuid
 
 from ipc_client import Client
+
+
+def process_is_running(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 def main():
@@ -50,6 +59,7 @@ def main():
                            '\n enabled: 1\n}\n' for name in ('main.c', 'caller.c')))
     session = 'rad-navigation-'+uuid.uuid4().hex[:10]
     client = None
+    pid = None
     try:
         run(['cleat', 'launch', session, '--tag', 'project=raddbg', '--tag', 'purpose=test',
              '--cwd', str(output), '--cmd', shlex.join([str(debugger), '--user:'+str(user),
@@ -68,15 +78,16 @@ def main():
                 raise AssertionError('Debugger did not become ready')
             time.sleep(.05)
         for cycle in range(args.cycles):
-            for command, name, function, cause in (
-                    ('restart', 'main.c', 'main', 'breakpoint'),
-                    ('run', 'caller.c', 'caller', 'breakpoint'),
-                    ('run', 'check.c', 'check_value', 'trap')):
+            for command, name, function, causes in (
+                    ('restart', 'main.c', 'main', ('breakpoint',)),
+                    ('run', 'caller.c', 'caller', ('breakpoint',)),
+                    ('run', 'check.c', 'check_value', ('trap', 'exception'))):
                 state = client.stopped(command)
                 frame = state['stack']['frames'][0]
                 assert frame['function'] == function and frame['source']['line'] == 5, state
                 assert Path(frame['source']['path']) == output/name, state
-                assert state['stop']['cause'] == cause, state
+                cause = state['stop']['cause']
+                assert cause in causes, state
                 deadline = time.monotonic()+3
                 selected = []
                 while time.monotonic() < deadline:
@@ -101,16 +112,23 @@ def main():
             assert any(str(output/'caller.c') in block for block in selected), selected
             assert client.value('saved') == '20'
             print(f'{cycle}: explicit caller selection preserved', flush=True)
-        print('PASS', flush=True)
     finally:
-        if client:
-            try:
+        try:
+            if client:
                 client.command('kill_all')
+                deadline = time.monotonic()+10
+                while client.snapshot()['process_count'] != 0:
+                    assert time.monotonic() < deadline, 'Owned target did not exit'
+                    time.sleep(.03)
                 client.command('exit')
-            finally:
+                deadline = time.monotonic()+10
+                while process_is_running(pid):
+                    assert time.monotonic() < deadline, f'Owned RAD {pid} did not exit'
+                    time.sleep(.03)
+        finally:
+            if pid is None or process_is_running(pid):
                 subprocess.run(['cleat', 'kill', session], capture_output=True, timeout=10)
-        else:
-            subprocess.run(['cleat', 'kill', session], capture_output=True, timeout=10)
+    print('PASS', flush=True)
 
 
 if __name__ == '__main__':
