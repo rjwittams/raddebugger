@@ -5040,10 +5040,11 @@ rd_view_ui(Rng2F32 rect)
                             }
                           }
                           
-                          // rjf: can't edit, but has thread? -> select
-                          else if(cell_info.entity->kind == D_EntityKind_Thread)
+                          // Process/thread entity cells select the corresponding debug context.
+                          else if(cell_info.entity->kind == D_EntityKind_Process ||
+                                  cell_info.entity->kind == D_EntityKind_Thread)
                           {
-                            rd_cmd(RD_CmdKind_SelectThread, .thread = cell_info.entity->handle);
+                            rd_cmd(RD_CmdKind_SelectEntity, .ctrl_entity = cell_info.entity->handle);
                           }
                           
                           // rjf: other cases, but this watch window is floating, and this has a cfg/entity? -> push query
@@ -11654,8 +11655,11 @@ rd_init(CmdLine *cmdln)
       {
         String8 arg = str8_cstring(cmdln->argv[idx]);
         B32 is_flag = (str8_match(str8_prefix(arg, 1), str8_lit("-"), 0) ||
-                       str8_match(str8_prefix(arg, 1), str8_lit("--"), 0) ||
-                       str8_match(str8_prefix(arg, 1), str8_lit("/"), 0));
+                       str8_match(str8_prefix(arg, 1), str8_lit("--"), 0)
+#if OS_WINDOWS
+                       || str8_match(str8_prefix(arg, 1), str8_lit("/"), 0)
+#endif
+                       );
         B32 is_cfg = 0;
         B32 is_dmp = 0;
         if(!is_flag && !after_first_non_flag)
@@ -11749,9 +11753,11 @@ rd_init(CmdLine *cmdln)
       CFG_Node *exe    = cfg_node_new(rd_state->cfg, target, str8_lit("executable"));
       CFG_Node *args   = cfg_node_new(rd_state->cfg, target, str8_lit("arguments"));
       CFG_Node *wdir   = cfg_node_new(rd_state->cfg, target, str8_lit("working_directory"));
+      CFG_Node *enabled = cfg_node_new(rd_state->cfg, target, str8_lit("enabled"));
       cfg_node_new(rd_state->cfg, exe, executable_name_string);
       cfg_node_new(rd_state->cfg, args, arguments_string);
       cfg_node_new(rd_state->cfg, wdir, working_directory_string);
+      cfg_node_new(rd_state->cfg, enabled, str8_lit("1"));
       rd_cmd(RD_CmdKind_SelectTarget, .cfg = target->id);
     }
     scratch_end(scratch2);
@@ -17248,7 +17254,7 @@ rd_frame(void)
           }break;
           case RD_CmdKind_AddAddressBreakpoint:
           {
-            rd_cmd(RD_CmdKind_AddBreakpoint, .file_path = str8_zero(), .do_lister = 1);
+            rd_cmd(RD_CmdKind_AddBreakpoint, .file_path = str8_zero(), .expr = rd_regs()->expr, .vaddr = rd_regs()->vaddr, .do_lister = 1);
           }break;
           case RD_CmdKind_AddFunctionBreakpoint:
           {
@@ -17664,7 +17670,29 @@ rd_frame(void)
           //- rjf: debug control context management operations
           case RD_CmdKind_SelectEntity:
           {
-            rd_cmd(RD_CmdKind_SelectThread, .thread = rd_regs()->ctrl_entity);
+            D_Entity *entity = d_entity_from_handle(rd_regs()->ctrl_entity);
+            if(entity->kind == D_EntityKind_Thread)
+            {
+              rd_cmd(RD_CmdKind_SelectThread, .thread = entity->handle);
+            }
+            else if(entity->kind == D_EntityKind_Process)
+            {
+              D_Entity *thread = d_entity_child_from_kind(entity, D_EntityKind_Thread);
+              if(thread != &d_entity_nil)
+              {
+                rd_cmd(RD_CmdKind_SelectThread, .thread = thread->handle);
+              }
+              else
+              {
+                D_Entity *machine = d_entity_ancestor_from_kind(entity, D_EntityKind_Machine);
+                rd_state->base_regs.v.unwind_count = 0;
+                rd_state->base_regs.v.inline_depth = 0;
+                rd_state->base_regs.v.thread  = d_handle_zero();
+                rd_state->base_regs.v.module  = d_handle_zero();
+                rd_state->base_regs.v.process = entity->handle;
+                rd_state->base_regs.v.machine = machine->handle;
+              }
+            }
           }break;
           case RD_CmdKind_SelectThread:
           {
