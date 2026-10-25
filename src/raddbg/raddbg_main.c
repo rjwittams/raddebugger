@@ -420,6 +420,11 @@
 #include "window_manager/window_manager_inc.h"
 #include "shell/shell_inc.h"
 #include "socket/socket_inc.h"
+#include "ipc/ipc.h"
+#if OS_WINDOWS
+# include <io.h>
+# include <fcntl.h>
+#endif
 #include "http/http_inc.h"
 #include "symbol_server/symbol_server_inc.h"
 #include "config/config_inc.h"
@@ -487,6 +492,7 @@
 #include "window_manager/window_manager_inc.c"
 #include "shell/shell_inc.c"
 #include "socket/socket_inc.c"
+#include "ipc/ipc.c"
 #include "http/http_inc.c"
 #include "symbol_server/symbol_server_inc.c"
 #include "config/config_inc.c"
@@ -594,7 +600,8 @@ entry_point(CmdLine *cmd_line)
   U64 jit_pid = 0;
   U64 jit_code = 0;
   U64 jit_addr = 0;
-  U64 ipc_port = 7423;
+  String8 ipc_directory = cmd_line_string(cmd_line, s("ipc_dir"));
+  if(ipc_directory.size == 0) { ipc_directory = ipc_default_directory(scratch.arena); }
   {
     if(cmd_line_has_flag(cmd_line, s("ipc")))
     {
@@ -617,11 +624,10 @@ entry_point(CmdLine *cmd_line)
     try_u64_from_str8_c_rules(jit_pid_string, &jit_pid);
     try_u64_from_str8_c_rules(jit_code_string, &jit_code);
     try_u64_from_str8_c_rules(jit_addr_string, &jit_addr);
-    String8 ipc_port_string = cmd_line_string(cmd_line, s("ipc_port"));
-    U64 ipc_port_try = 0;
-    if(try_u64_from_str8_c_rules(ipc_port_string, &ipc_port_try))
+    if(cmd_line_has_flag(cmd_line, s("ipc_port")) || cmd_line_has_flag(cmd_line, s("ipc_addr")))
     {
-      ipc_port = ipc_port_try;
+      fprintf(stderr, "RAD IPC uses private PID discovery, not --ipc_port or --ipc_addr.\n");
+      abort_self(1);
     }
     jit_attach = (jit_addr != 0);
   }
@@ -690,23 +696,28 @@ entry_point(CmdLine *cmd_line)
         d_set_wakeup_hook(wakeup_hook_ctrl);
       }
       
-      //- rjf: set up socket session for ICP
-      SOCK_Session icp_sock_session = sock_session_open((U16)ipc_port, wakeup_hook_ctrl);
+      // Publish only a fresh, authenticated local endpoint. Failure leaves IPC disabled.
+      IPC_Server *ipc_server = ipc_server_open_local(ipc_directory, wakeup_hook_ctrl);
+      if(ipc_server == 0) { log_user_error(s("Private IPC registration is unavailable; IPC is disabled.")); }
       
       //- rjf: main application loop
       {
         for(B32 quit = 0; !quit;)
         {
-          //- rjf: receive socket data, run as IPC messages
+          // Receive complete authenticated messages, not raw TCP chunks.
           B32 ipc_command_frame = 0;
-          SOCK_Protocol ipc_protocol = SOCK_Protocol_TCP;
-          SOCK_Peer ipc_peer = {0};
+          IPC_Message ipc_message = {0};
           {
             Temp scratch = scratch_begin(0, 0);
-            String8 msg = {0};
-            if(sock_recv(scratch.arena, icp_sock_session, &ipc_protocol, &ipc_peer, &msg, 0))
+            if(ipc_server_receive(scratch.arena, ipc_server, &ipc_message, 0))
             {
-              String8List cmd_parts_of_msg = str8_split(scratch.arena, msg, (U8 *)";", 1, 0);
+              String8 msg = ipc_message.data;
+              String8 command_text = str8_skip_chop_whitespace(msg);
+              U64 command_name_size = 0;
+              for(; command_name_size < command_text.size && !char_is_space(command_text.str[command_name_size]); command_name_size += 1) {}
+              B32 is_debug_eval = str8_match(str8_prefix(command_text, command_name_size), str8_lit("debug_eval"), 0);
+              String8List cmd_parts_of_msg = {0};
+              if(!is_debug_eval) {cmd_parts_of_msg = str8_split(scratch.arena, msg, (U8 *)";", 1, 0);}
               RD_WindowState *dst_ws = rd_state->first_window_state;
               for(RD_WindowState *ws = dst_ws; ws != &rd_nil_window_state; ws = ws->order_next)
               {
@@ -731,7 +742,12 @@ entry_point(CmdLine *cmd_line)
                     rd_regs()->view   = panel_tree.focused->selected_tab->id;
                     scratch_end(scratch);
                   }
-                  for EachNode(n, String8Node, cmd_parts_of_msg.first)
+                  // The structured evaluation request is one payload, not CLI options or a command batch.
+                  if(is_debug_eval)
+                  {
+                    rd_cmd(RD_CmdKind_DebugEval, .expr = str8_skip(command_text, command_name_size), .disable_addresses = 1);
+                  }
+                  else for EachNode(n, String8Node, cmd_parts_of_msg.first)
                   {
                     String8 cmd_string = str8_skip_chop_whitespace(n->string);
                     if(cmd_string.size != 0)
@@ -744,6 +760,7 @@ entry_point(CmdLine *cmd_line)
                 }
               }
             }
+            ipc_message.data = str8_zero();
             scratch_end(scratch);
           }
           
@@ -774,16 +791,19 @@ entry_point(CmdLine *cmd_line)
           //- rjf: gather command outputs & send them back back to sender
           if(ipc_command_frame)
           {
+            Temp reply_scratch = scratch_begin(0, 0);
             StringJoin join = {s(""), s("\0"), s("")};
-            String8 msg = str8_list_join(scratch.arena, &rd_state->cmd_outputs, &join);
+            String8 msg = str8_list_join(reply_scratch.arena, &rd_state->cmd_outputs, &join);
             if(msg.size == 0)
             {
               msg = s("done");
             }
-            sock_send_peer(icp_sock_session, ipc_protocol, ipc_peer, msg, now_time_us()+5000000);
+            ipc_server_reply(ipc_server, ipc_message, msg, now_time_us()+5000000);
+            scratch_end(reply_scratch);
           }
         }
       }
+      ipc_server_close(ipc_server);
       
     }break;
     
@@ -792,53 +812,83 @@ entry_point(CmdLine *cmd_line)
     {
       Temp scratch = scratch_begin(0, 0);
       
-      //- rjf: create socket session
-      SOCK_Session ipc_sock_session = sock_session_open(0, 0);
-      
-      //- rjf: form target raddbg endpoint address
-      SOCK_Endpoint endpoint = {0};
+      U64 pid = 0;
+      if(!try_u64_from_str8_c_rules(cmd_line_string(cmd_line, s("pid")), &pid) || pid == 0 || pid > max_U32)
       {
-        endpoint.address_u8[0] = 127;
-        endpoint.address_u8[3] = 1;
-        endpoint.port = (U16)ipc_port;
-        String8 explicit_ipc_addr_arg = cmd_line_string(cmd_line, s("ipc_addr"));
-        if(explicit_ipc_addr_arg.size != 0)
-        {
-          endpoint = sock_endpoint_from_string(explicit_ipc_addr_arg);
-        }
+        fprintf(stderr, "RAD --ipc requires an explicit nonzero --pid.\n");
+        abort_self(1);
       }
-      
-      //- rjf: form message from command line inputs
-      String8List parts = {0};
+      B32 binary = cmd_line_has_flag(cmd_line, s("ipc_stdin"));
+#if OS_WINDOWS
+      if(_setmode(_fileno(stdout), _O_BINARY) == -1 || (binary && _setmode(_fileno(stdin), _O_BINARY) == -1))
       {
-        for EachIndex(idx, cmd_line->argc-1)
-        {
-          str8_list_push(scratch.arena, &parts, str8_cstring(cmd_line->argv[idx+1]));
-        }
+        fprintf(stderr, "RAD IPC could not open binary standard streams.\n");
+        abort_self(1);
       }
-      StringJoin join = {str8_lit(""), str8_lit(" "), str8_lit("")};
-      String8 msg = str8_list_join(scratch.arena, &parts, &join);
-      
+#endif
+      String8 msg = {0};
+      if(binary)
+      {
+        if(cmd_line->inputs.node_count != 0)
+        {
+          fprintf(stderr, "RAD --ipc_stdin does not also accept command arguments.\n");
+          abort_self(1);
+        }
+        String8List parts = {0};
+        U8 buffer[KB(64)];
+        for(;;)
+        {
+          U64 size = fread(buffer, 1, sizeof(buffer), stdin);
+          if(size == 0) { break; }
+          if(size > MB(64)-parts.total_size)
+          {
+            fprintf(stderr, "RAD IPC input exceeds 64 MiB.\n");
+            abort_self(1);
+          }
+          str8_list_push(scratch.arena, &parts, str8_copy(scratch.arena, str8(buffer, size)));
+        }
+        if(ferror(stdin)) { fprintf(stderr, "RAD IPC could not read stdin.\n"); abort_self(1); }
+        msg = str8_list_join(scratch.arena, &parts, 0);
+      }
+      else
+      {
+        if(cmd_line->inputs.node_count == 0) { fprintf(stderr, "RAD --ipc requires a command or --ipc_stdin.\n"); abort_self(1); }
+        //- rjf: form message from command line inputs
+        StringJoin join = {s(""), s(" "), s("")};
+        msg = str8_list_join(scratch.arena, &cmd_line->inputs, &join);
+      }
       //- rjf: send to server, get outputs
-      String8List outputs = {0};
-      if(sock_send(ipc_sock_session, SOCK_Protocol_TCP, endpoint, msg, now_time_us()+10000000))
+      IPC_Response response = ipc_request_local(scratch.arena, ipc_directory, (U32)pid, msg, now_time_us()+10000000);
+      if(response.status != IPC_Status_Success)
       {
-        SOCK_Protocol outputs_protocol = SOCK_Protocol_TCP;
-        SOCK_Peer outputs_peer = {0};
-        String8 output_data = {0};
-        if(sock_recv(scratch.arena, ipc_sock_session, &outputs_protocol, &outputs_peer, &output_data, now_time_us()+10000000))
+        char *reason = "unknown error";
+        switch(response.status)
         {
-          U8 split_char = 0;
-          outputs = str8_split(scratch.arena, output_data, &split_char, 1, 0);
+          default: {}break;
+          case IPC_Status_Unavailable:  reason = "endpoint or native entropy unavailable"; break;
+          case IPC_Status_Timeout:      reason = "deadline expired"; break;
+          case IPC_Status_Disconnected:reason = "peer disconnected"; break;
+          case IPC_Status_InvalidReply:reason = "invalid or unauthenticated reply"; break;
+          case IPC_Status_TooLarge:     reason = "payload too large"; break;
+        }
+        fprintf(stderr, "RAD IPC failed: %s.\n", reason);
+        abort_self(1);
+      }
+      //- rjf: write outputs to stdout
+      if(binary)
+      {
+        if(response.data.size != 0 && fwrite(response.data.str, 1, response.data.size, stdout) != response.data.size) { abort_self(1); }
+      }
+      else
+      {
+        U8 split_char = 0;
+        String8List outputs = str8_split(scratch.arena, response.data, &split_char, 1, 0);
+        for(String8Node *n = outputs.first; n != 0; n = n->next)
+        {
+          if(fwrite(n->string.str, 1, n->string.size, stdout) != n->string.size) { abort_self(1); }
         }
       }
-      
-      //- rjf: write outputs to stdout
-      for(String8Node *n = outputs.first; n != 0; n = n->next)
-      {
-        fwrite(n->string.str, 1, n->string.size, stdout);
-      }
-      fflush(stdout);
+      if(fflush(stdout) != 0) { abort_self(1); }
       
       scratch_end(scratch);
     }break;
@@ -866,8 +916,12 @@ entry_point(CmdLine *cmd_line)
                           "This will run all active targets after the debugger initially starts.\n\n"
                           "--quit_after_success (or -q)\n"
                           "This will close the debugger automatically after all processes exit, if they all exited successfully (with code 0), and ran with no interruptions.\n\n"
-                          "--ipc <command>\n"
-                          "This will launch the debugger in the non-graphical IPC mode, which is used to communicate with another running instance of the debugger. The debugger instance will launch, send the specified command, then immediately terminate. This may be used by editors or other programs to control the debugger.\n\n"
+                          "--ipc --pid:<pid> <command>\n"
+                          "Send a command to an exact running debugger process using private local discovery. Use -- before command arguments that begin with a dash.\n\n"
+                          "--ipc_stdin\n"
+                          "With --ipc, send stdin bytes as one payload and write the complete reply bytes to stdout. Do not also supply command arguments.\n\n"
+                          "--ipc_dir:<path>\n"
+                          "Override the private endpoint directory for both the running debugger and sender. Unsafe existing directories are rejected, not repaired.\n\n"
                           "--gen_crash_dump\n"
                           "Generate mini dump on crash.\n\n"
                           "--logs:<path>\n"

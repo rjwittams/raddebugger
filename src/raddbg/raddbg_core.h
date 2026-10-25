@@ -423,6 +423,12 @@ struct RD_State
   S32 frame_depth;
   U64 frame_eval_memread_endt_us;
   
+  // Last process removal observed by IPC; the sequence survives new launches.
+  U64 ipc_process_end_sequence;
+  U64 ipc_process_end_id;
+  U64 ipc_process_end_code;
+  B32 ipc_process_end_has_exit_code;
+
   // rjf: installation setting state
   B32 installed;
   
