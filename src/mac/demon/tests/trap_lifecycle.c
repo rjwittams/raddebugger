@@ -39,6 +39,9 @@ entry_point(CmdLine *cmdline)
   B32 detach_moved_pc = mode != 0 && strcmp(mode, "detach-moved-pc") == 0;
   B32 detach = detach_init || detach_healthy || detach_trap || detach_moved_pc;
   B32 fault_address = mode != 0 && strcmp(mode, "fault-address") == 0;
+  B32 halt_expired = mode != 0 && strcmp(mode, "halt-expired") == 0;
+  B32 halt_active = mode != 0 && strcmp(mode, "halt-active") == 0;
+  B32 halt_lifetime = halt_expired || halt_active;
   if(target_path == 0 || mode == 0 || (detach && marker_path == 0))
   {
     fprintf(stderr, "Run through run_trap_lifecycle.sh.\n");
@@ -67,6 +70,10 @@ entry_point(CmdLine *cmdline)
   }
   launch.path = get_process_info()->initial_path;
   launch.inherit_env = 1;
+  if(halt_lifetime)
+  {
+    dmn_ctrl_exclusive_access_begin();
+  }
   test_pid = dmn_ctrl_launch(ctx, &launch);
   if(test_pid == 0)
   {
@@ -79,6 +86,8 @@ entry_point(CmdLine *cmdline)
   DMN_RunCtrls controls = {0};
   controls.ignore_previous_exception = 1;
   B32 saw_trap = 0;
+  B32 requested_halt = 0;
+  B32 saw_halt = 0;
   B32 passed = 0;
   B32 done = 0;
   for(U64 iteration = 0; iteration < 64 && !done; iteration += 1)
@@ -87,7 +96,28 @@ entry_point(CmdLine *cmdline)
     for(DMN_EventNode *n = events.first; n != 0 && !done; n = n->next)
     {
       DMN_Event *event = &n->v;
-      if((detach_init && event->kind == DMN_EventKind_HandshakeComplete) ||
+      if(halt_lifetime && event->kind == DMN_EventKind_HandshakeComplete)
+      {
+        dmn_halt(0x1357, 0x1122334455667788ULL);
+        requested_halt = 1;
+        if(halt_expired)
+        {
+          // The stopped target resumes in a different control batch.
+          dmn_ctrl_exclusive_access_end();
+          dmn_ctrl_exclusive_access_begin();
+        }
+      }
+      else if(halt_lifetime && event->kind == DMN_EventKind_Halt)
+      {
+        if(!halt_active || !requested_halt || saw_halt ||
+           event->code != 0x1357 || event->user_data != 0x1122334455667788ULL)
+        {
+          fprintf(stderr, "FAIL: Unexpected halt or incorrect halt payload.\n");
+          done = 1;
+        }
+        saw_halt = 1;
+      }
+      else if((detach_init && event->kind == DMN_EventKind_HandshakeComplete) ||
          (detach_healthy && event->kind == DMN_EventKind_Exception && event->code == SIGSTOP) ||
          ((detach_trap || detach_moved_pc) && event->kind == DMN_EventKind_Trap))
       {
@@ -179,7 +209,9 @@ entry_point(CmdLine *cmdline)
       }
       else if(event->kind == DMN_EventKind_ExitProcess)
       {
-        passed = !detach && saw_trap && event->code == 23;
+        passed = event->code == 23 && (halt_lifetime ?
+                                     requested_halt && (!halt_active || saw_halt) :
+                                     !detach && saw_trap);
         test_pid = 0;
         done = 1;
       }
@@ -189,6 +221,10 @@ entry_point(CmdLine *cmdline)
         done = 1;
       }
     }
+  }
+  if(halt_lifetime)
+  {
+    dmn_ctrl_exclusive_access_end();
   }
   if(test_pid > 0 && (!passed || fault_address))
   {
