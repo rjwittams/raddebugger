@@ -21,6 +21,7 @@ if [[ "$(uname -m)" == arm64 ]]; then
   clang -g -O0 src/mac/demon/tests/trap_target.c -o "$test_dir/target"
 fi
 clang -g -O0 src/mac/demon/tests/fault_target.c -o "$test_dir/fault-target"
+clang -g -O0 src/mac/demon/tests/halt_target.c -o "$test_dir/halt-target"
 clang -x objective-c -Isrc -Ilocal -g -O0 -D_GNU_SOURCE \
   -Wno-initializer-overrides -Wno-unused-value -Wno-deprecated-declarations \
   -Wno-incompatible-pointer-types-discards-qualifiers \
@@ -29,14 +30,14 @@ clang -x objective-c -Isrc -Ilocal -g -O0 -D_GNU_SOURCE \
 codesign --force --sign - --entitlements src/mac/raddbg_debug.entitlements "$test_dir/test"
 modes=("$@")
 if [[ ${#modes[@]} -eq 0 ]]; then
-  modes=(fault-address)
+  modes=(fault-address halt-expired halt-active)
   if [[ "$(uname -m)" == arm64 ]]; then
     modes+=(continue call detach-init detach-healthy detach-moved-pc detach-trap)
   fi
 fi
 for mode in "${modes[@]}"; do
   case "$mode" in
-    fault-address) ;;
+    fault-address|halt-expired|halt-active) ;;
     continue|call|detach-init|detach-healthy|detach-moved-pc|detach-trap)
       if [[ "$(uname -m)" != arm64 ]]; then
         echo "Mode $mode requires an ARM64 macOS host." >&2
@@ -48,6 +49,8 @@ for mode in "${modes[@]}"; do
   target="$test_dir/target"
   if [[ "$mode" == fault-address ]]; then
     target="$test_dir/fault-target"
+  elif [[ "$mode" == halt-expired || "$mode" == halt-active ]]; then
+    target="$test_dir/halt-target"
   fi
   for ((iteration = 0; iteration < repeats; iteration += 1)); do
     RAD_TRAP_TEST_TARGET="$target" RAD_TRAP_TEST_MODE="$mode" \

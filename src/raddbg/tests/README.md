@@ -271,6 +271,8 @@ parameter-location result, despite LLDB and the raw x0 register showing 20.
 The Windows/MSVC runner reports these two cases as skipped. Continuing
 after this noreturn builtin is not valid target behavior; use `line_step.S`
 and `line_step_ipc.py --case over` to check resumption after a returning trap.
+Retain the assembly object when linking, then run `dsymutil`; a combined Clang
+compile/link command deletes the temporary object before `dsymutil` can read it.
 
 Fresh `c-assert` runs also exercise cold debug-info loading: on Linux, the
 locals cache previously retained an empty map built while RDI was pending.
@@ -462,6 +464,14 @@ and local evaluation are checked before restarting. Artifacts remain in the
 printed temporary directory; the owned debugger and target are closed.
 The fixture waits for both to exit before reporting success. Forced cleat
 cleanup is reserved for an owned session that has not exited normally.
+
+On either Mac architecture, `bash src/mac/demon/tests/run_trap_lifecycle.sh
+halt-expired halt-active` checks halt-request lifetime through the native control
+API. A request left unconsumed at batch end must not stop the target's next
+resume. Within the same batch, its halt event must retain the supplied code
+and 64-bit payload. Both cases require the real target to exit with code 23;
+they use no timing delays or private-state assertions. The separate
+`line_step_ipc.py --case halt` case checks interruption during a running step.
 
 This catches lost asynchronous navigation retries that stack-only tests miss.
 It does not inspect rendered pixels or prove the visible cursor line, and it
