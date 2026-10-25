@@ -40,6 +40,18 @@ struct SOCK_Endpoint
 };
 
 ////////////////////////////////
+//~ Connection References
+
+typedef struct SOCK_Peer SOCK_Peer;
+struct SOCK_Peer
+{
+  SOCK_Endpoint endpoint;
+  U64 id;
+};
+// Preserve this reference when replying. A zero id has no live connection;
+// references belong to the session that returned them, not just the address.
+
+////////////////////////////////
 //~ rjf: Session Handle
 
 typedef struct SOCK_Session SOCK_Session;
@@ -81,10 +93,15 @@ internal SOCK_Endpoint sock_session_listener_endpoint(SOCK_Session session);
 //~ rjf: @per_os_impl Sends
 
 internal B32 sock_send(SOCK_Session session, SOCK_Protocol protocol, SOCK_Endpoint endpoint, String8 data, U64 endt_us);
+// Unlike address-based sends, this never opens a replacement connection.
+internal B32 sock_send_peer(SOCK_Session session, SOCK_Protocol protocol, SOCK_Peer peer, String8 data, U64 endt_us);
+// Queue an abort, discarding unsent peer output. Control capacity is separate
+// from data capacity; success is acceptance, not a synchronous close barrier.
+internal B32 sock_peer_abort(SOCK_Session session, SOCK_Peer peer, U64 endt_us);
 
 ////////////////////////////////
 //~ rjf: @per_os_impl Receives
 
-internal B32 sock_recv(Arena *arena, SOCK_Session session, SOCK_Protocol *protocol_out, SOCK_Endpoint *endpoint_out, String8 *data_out, U64 endt_us);
+internal B32 sock_recv(Arena *arena, SOCK_Session session, SOCK_Protocol *protocol_out, SOCK_Peer *peer_out, String8 *data_out, U64 endt_us);
 
 #endif // SOCKET_H
